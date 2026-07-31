@@ -139,6 +139,10 @@ import kotlin.uuid.Uuid
 private const val TAG = "RouteActivity"
 
 class RouteActivity : ComponentActivity() {
+    companion object {
+        const val EXTRA_OPEN_IMAGE_GENERATION = "open_image_generation"
+    }
+
     private val highlighter by inject<Highlighter>()
     private val okHttpClient by inject<OkHttpClient>()
     private val settingsStore by inject<SettingsStore>()
@@ -230,6 +234,15 @@ class RouteActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_OPEN_IMAGE_GENERATION, false)) {
+            navStack?.let { stack ->
+                if (stack.lastOrNull() !is Screen.ImageGen) {
+                    stack.add(Screen.ImageGen)
+                }
+                intent.removeExtra(EXTRA_OPEN_IMAGE_GENERATION)
+            }
+        }
         // Navigate to the chat screen if a conversation ID is provided
         intent.getStringExtra("conversationId")?.let { text ->
             navStack?.add(Screen.Chat(text))
@@ -257,16 +270,21 @@ class RouteActivity : ComponentActivity() {
         }
         val migrationState by DatabaseMigrationTracker.state.collectAsStateWithLifecycle()
 
-        val startScreen = Screen.Chat(
-            id = if (readBooleanPreference("create_new_conversation_on_start", true)) {
-                Uuid.random().toString()
-            } else {
-                readStringPreference(
-                    "lastConversationId",
+        val startScreen: Screen = if (intent.getBooleanExtra(EXTRA_OPEN_IMAGE_GENERATION, false)) {
+            intent.removeExtra(EXTRA_OPEN_IMAGE_GENERATION)
+            Screen.ImageGen
+        } else {
+            Screen.Chat(
+                id = if (readBooleanPreference("create_new_conversation_on_start", true)) {
                     Uuid.random().toString()
-                ) ?: Uuid.random().toString()
-            }
-        )
+                } else {
+                    readStringPreference(
+                        "lastConversationId",
+                        Uuid.random().toString()
+                    ) ?: Uuid.random().toString()
+                }
+            )
+        }
 
         val backStack = rememberNavBackStack(startScreen)
         SideEffect { this@RouteActivity.navStack = backStack }

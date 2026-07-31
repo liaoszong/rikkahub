@@ -1,6 +1,6 @@
 package me.rerere.rikkahub.ui.pages.imggen
 
-import androidx.activity.compose.BackHandler
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -33,7 +33,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularWavyProgressIndicator
@@ -50,7 +49,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SheetState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
@@ -60,6 +58,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -82,6 +81,7 @@ import coil3.compose.AsyncImage
 import com.dokar.sonner.ToastType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.rerere.ai.provider.ModelType
@@ -101,11 +101,17 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.files.FileUtils
 import me.rerere.rikkahub.data.files.FilesManager
+import me.rerere.rikkahub.data.imggen.GeneratedImage
+import me.rerere.rikkahub.data.imggen.ImageGenerationPhase
+import me.rerere.rikkahub.data.imggen.ImageGenerationTask
 import me.rerere.rikkahub.ui.components.ai.ModelSelector
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.FormItem
 import me.rerere.rikkahub.ui.components.ui.ImagePreviewDialog
 import me.rerere.rikkahub.ui.components.ui.OutlinedNumberInput
+import me.rerere.rikkahub.ui.components.ui.permission.PermissionManager
+import me.rerere.rikkahub.ui.components.ui.permission.PermissionNotification
+import me.rerere.rikkahub.ui.components.ui.permission.rememberPermissionState
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.utils.ImageUtils
 import org.koin.androidx.compose.koinViewModel
@@ -120,21 +126,6 @@ fun ImageGenPage(
 ) {
     val pagerState = rememberPagerState { 2 }
     val scope = rememberCoroutineScope()
-
-    val isGenerating by vm.isGenerating.collectAsStateWithLifecycle()
-    var showCancelDialog by remember { mutableStateOf(false) }
-    BackHandler(isGenerating) {
-        showCancelDialog = true
-    }
-    if (showCancelDialog) {
-        CancelDialog(
-            onDismiss = { showCancelDialog = false },
-            onConfirm = {
-                showCancelDialog = false
-                vm.cancelGeneration()
-            }
-        )
-    }
 
     Scaffold(
         topBar = {
@@ -171,28 +162,6 @@ fun ImageGenPage(
             }
         }
     }
-}
-
-@Composable
-private fun CancelDialog(
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.imggen_page_cancel_generation_title)) },
-        text = { Text(stringResource(R.string.imggen_page_cancel_generation_message)) },
-        confirmButton = {
-            TextButton(onClick = onConfirm) {
-                Text(stringResource(R.string.imggen_page_confirm))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.imggen_page_cancel))
-            }
-        }
-    )
 }
 
 @Composable
@@ -241,6 +210,7 @@ private fun ImageGenScreen(
     val numberOfImages by vm.numberOfImages.collectAsStateWithLifecycle()
     val size by vm.size.collectAsStateWithLifecycle()
     val isGenerating by vm.isGenerating.collectAsStateWithLifecycle()
+    val task by vm.task.collectAsStateWithLifecycle()
     val currentGeneratedImages by vm.currentGeneratedImages.collectAsStateWithLifecycle()
     val referenceImages by vm.referenceImages.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
@@ -299,8 +269,9 @@ private fun ImageGenScreen(
                 }
             }
             if (isGenerating) {
-                ContainedLoadingIndicator(
-                    modifier = Modifier.align(Alignment.Center)
+                GenerationProgress(
+                    task = task,
+                    modifier = Modifier.align(Alignment.Center),
                 )
             }
         }
@@ -328,6 +299,49 @@ private fun ImageGenScreen(
 }
 
 @Composable
+private fun GenerationProgress(
+    task: ImageGenerationTask,
+    modifier: Modifier = Modifier,
+) {
+    val now by produceState(
+        initialValue = System.currentTimeMillis(),
+        task.taskId,
+        task.phase,
+    ) {
+        while (task.isActive) {
+            value = System.currentTimeMillis()
+            delay(1_000)
+        }
+    }
+    val elapsedSeconds = (now - task.startedAt).coerceAtLeast(0) / 1_000
+    val status = if (task.phase == ImageGenerationPhase.PREVIEW_AVAILABLE) {
+        "Preview received · waiting for final image"
+    } else {
+        "Generating in background"
+    }
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        ContainedLoadingIndicator()
+        Text(
+            text = status,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+        )
+        Text(
+            text = "Elapsed %d:%02d · You can safely switch screens".format(
+                elapsedSeconds / 60,
+                elapsedSeconds % 60,
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
 private fun InputBar(
     prompt: String,
     vm: ImgGenVM,
@@ -339,6 +353,31 @@ private fun InputBar(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val notificationPermission = rememberPermissionState(
+        permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            setOf(PermissionNotification)
+        } else {
+            emptySet()
+        },
+    )
+    PermissionManager(permissionState = notificationPermission)
+    var submitAfterPermission by remember { mutableStateOf(false) }
+
+    fun submit() {
+        if (referenceImages.isEmpty()) {
+            vm.generateImage()
+        } else {
+            vm.editImage()
+        }
+    }
+
+    LaunchedEffect(notificationPermission.allRequiredPermissionsGranted) {
+        if (submitAfterPermission && notificationPermission.allRequiredPermissionsGranted) {
+            submitAfterPermission = false
+            submit()
+        }
+    }
+
     val imagePickerLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { selectedUris ->
             if (selectedUris.isNotEmpty()) {
@@ -425,10 +464,11 @@ private fun InputBar(
             Surface(
                 onClick = {
                     if (!isGenerating) {
-                        if (referenceImages.isEmpty()) {
-                            vm.generateImage()
+                        if (notificationPermission.allRequiredPermissionsGranted) {
+                            submit()
                         } else {
-                            vm.editImage()
+                            submitAfterPermission = true
+                            notificationPermission.requestPermissions()
                         }
                     } else {
                         vm.cancelGeneration()

@@ -7,7 +7,16 @@ import kotlinx.serialization.json.Json
 import me.rerere.highlight.Highlighter
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.ai.tools.local.LocalTools
+import me.rerere.rikkahub.data.imggen.ImageGenerationForegroundController
+import me.rerere.rikkahub.data.imggen.ImageGenerationGateway
+import me.rerere.rikkahub.data.imggen.ImageGenerationResultStore
+import me.rerere.rikkahub.data.imggen.ImageGenerationTaskManager
+import me.rerere.rikkahub.data.imggen.ImageGenerationTaskStore
+import me.rerere.rikkahub.data.imggen.LocalImageGenerationResultStore
+import me.rerere.rikkahub.data.imggen.ProviderImageGenerationGateway
+import me.rerere.rikkahub.data.imggen.SharedPreferencesImageGenerationTaskStore
 import me.rerere.rikkahub.data.event.AppEventBus
+import me.rerere.rikkahub.service.AndroidImageGenerationForegroundController
 import me.rerere.rikkahub.service.ChatNotificationManager
 import me.rerere.rikkahub.service.ChatService
 import me.rerere.rikkahub.utils.EmojiData
@@ -40,6 +49,36 @@ val appModule = module {
 
     single {
         AppScope()
+    }
+
+    single<ImageGenerationTaskStore> {
+        SharedPreferencesImageGenerationTaskStore(context = get(), json = get())
+    }
+
+    single<ImageGenerationGateway> {
+        ProviderImageGenerationGateway(settingsStore = get(), providerManager = get())
+    }
+
+    single<ImageGenerationResultStore> {
+        LocalImageGenerationResultStore(
+            context = get(),
+            filesManager = get(),
+            genMediaRepository = get(),
+        )
+    }
+
+    single<ImageGenerationForegroundController> {
+        AndroidImageGenerationForegroundController(context = get())
+    }
+
+    single(createdAtStart = true) {
+        ImageGenerationTaskManager(
+            scope = get<AppScope>(),
+            gateway = get(),
+            resultStore = get(),
+            taskStore = get(),
+            foregroundController = get(),
+        )
     }
 
     single<EmojiData> {
