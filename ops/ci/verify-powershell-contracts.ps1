@@ -48,6 +48,10 @@ $releaseText = Get-Content -Raw -LiteralPath (Join-Path $repoRoot 'ops/release/r
 $dryRunGuard = $releaseText.IndexOf('if ($DryRun)', [StringComparison]::Ordinal)
 Assert-Contract ($dryRunGuard -ge 0) 'release.ps1 must expose a DryRun guard.'
 Assert-Contract ($releaseText.Contains("'verifyForkRelease'")) 'release.ps1 must use the repository verification gate.'
+Assert-Contract ($releaseText.Contains('[switch]$ConfirmRelease')) `
+    'release.ps1 must expose an explicit non-interactive confirmation switch.'
+Assert-Contract ($releaseText.Contains('if (-not $ConfirmRelease)')) `
+    'release.ps1 must keep interactive confirmation unless explicitly bypassed.'
 Assert-Contract ($releaseText.Contains("'--configuration-cache'")) `
     'release.ps1 must reuse the cache-safe repository verification graph.'
 foreach ($mutation in @('git add --', 'git commit -m', 'git tag -a', 'git push')) {

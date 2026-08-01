@@ -5,6 +5,7 @@ param(
     [string]$DeployTarget = 'rikkahub-deploy@updates.paleink.cc',
     [string]$GitRemote = 'origin',
     [switch]$SkipSymbolsUpload,
+    [switch]$ConfirmRelease,
     [switch]$DryRun
 )
 
@@ -147,8 +148,12 @@ if ($DryRun) {
     return
 }
 
-$confirmation = Read-Host "Type RELEASE $tag to continue"
-if ($confirmation -ne "RELEASE $tag") { throw 'Release cancelled.' }
+if (-not $ConfirmRelease) {
+    $confirmation = Read-Host "Type RELEASE $tag to continue"
+    if ($confirmation -ne "RELEASE $tag") { throw 'Release cancelled.' }
+} else {
+    Write-Host "Release explicitly confirmed by -ConfirmRelease: $tag" -ForegroundColor Yellow
+}
 
 $newBuildText = [regex]::Replace($buildText, 'versionCode\s*=\s*\d+', "versionCode = $nextCode", 1)
 $newBuildText = [regex]::Replace($newBuildText, 'versionName\s*=\s*"[^"]+"', "versionName = `"$nextVersion`"", 1)
