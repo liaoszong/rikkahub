@@ -22,6 +22,14 @@ The certificate fingerprint is public and intentionally documented here. The
 private key and passwords must remain outside the repository and be backed up
 separately in encrypted storage.
 
+On the primary Windows release workstation, the permanent keystore is kept at
+`%USERPROFILE%\.paleink\signing\rikkahub\paleink-rikkahub-release.p12`.
+Gradle reads its path, alias, and passwords from the repository root
+`local.properties`, which is intentionally Git-ignored. If either file is
+missing, stop the release: locate the existing signing identity instead of
+generating a replacement key. The expected certificate SHA-256 above is the
+authority for confirming that the correct key was recovered.
+
 The current server keeps SSH public-key authentication disabled. Run the script
 without `-IdentityFile` to enter the server password interactively. A restricted
 deployment account/key can be provisioned later before CI-based publishing.
