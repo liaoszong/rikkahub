@@ -26,6 +26,13 @@ reliability improvements and carefully scoped product enhancements.
 
 Changes currently maintained by this fork include:
 
+- Chat-native image generation: reasoning models can call the configured image model without
+  leaving the conversation.
+- Reference-image editing from chat attachments and earlier generated images.
+- Progressive multi-image galleries with a large preview, switchable thumbnails, pending slots,
+  partial-failure handling, grouped collapse, and full-screen zoom.
+- Compact galleries for multiple user attachments while preserving the existing single-image
+  message layout.
 - Lifecycle-safe image generation that continues when navigating to another screen.
 - Foreground-service notifications for long-running image requests, including explicit cancellation
   and Android 13+ notification permission handling.
@@ -34,15 +41,21 @@ Changes currently maintained by this fork include:
 - Safer result persistence to local image storage and Room, with generated files retained when a
   database write fails.
 - Clear generation phases and elapsed-time feedback instead of an indefinite loading indicator.
+- A built-in Palenik provider catalog, automatic image-model selection, and reliable background
+  title-model fallback for provider-only setups.
+- A clearer collapsible sidebar for creative tools and chats, plus resumable in-app updates and an
+  automated release workflow.
+- Isolated debug telemetry: debug APKs build without production Firebase and never pollute release
+  analytics or crash reports.
 
 Upstream copyright notices and the AGPL-3.0 license remain in effect. Changes specific to this fork
 are tracked in its Git history.
 
 ## 🚀 Download
 
-🔗 [Download from Website](https://rikka-ai.com/download) (Recommended)
+🔗 [Download the PaleInk fork](https://updates.paleink.cc/) (Recommended)
 
-🔗 [Download from Google Play](https://play.google.com/store/apps/details?id=me.rerere.rikkahub)
+🔗 [Upstream RikkaHub website](https://rikka-ai.com/download)
 
 > [!WARNING]
 > There are many forked versions of RikkaHub. Issues with forks are unrelated to RikkaHub, so please use forks with caution to avoid privacy leaks or excessive permission requests.
@@ -53,6 +66,7 @@ are tracked in its Git history.
 - 📦 Workspace: a proot-based Linux agent environment
 - 🔄 Multiple AI Provider Support: custom API / URL / models (all OpenAI, Google, Anthropic compatible api)
 - 🖼️ Multimodal input support (Image, Text Documentation, PDF, Docx)
+- 🎨 Generate and edit images directly inside chats, including multi-image progressive galleries
 - 🖥️ Web access for multi-platform use
 - 🛠️ MCP support
 - 📝 Markdown Rendering (with code highlighting, Latex formulas, tables, Mermaid)
@@ -86,7 +100,8 @@ Technology stack documentation:
 - [kotlinx.serialization](https://github.com/Kotlin/kotlinx.serialization) (JSON serialization)
 
 > [!TIP]
-> You need a `google-services.json` file at `app` folder to build the app.
+> Debug builds work without Firebase. Release builds keep using `app/google-services.json` for
+> production Analytics and Crashlytics.
 
 > [!IMPORTANT]  
 > The following PRs will be rejected:

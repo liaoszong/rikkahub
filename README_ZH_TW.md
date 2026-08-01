@@ -15,10 +15,28 @@
   <img src="docs/img/desktop.png" alt="Models Picker" width="450" />
 </div>
 
+## 關於這個 Fork
+
+本倉庫是 [RikkaHub](https://github.com/rikkahub/rikkahub) 的長期維護 Fork，在盡量跟進上游的同時，重點改善穩定性與完整的產品體驗。
+
+目前維護的主要增強包括：
+
+- 在一般聊天中由推理模型呼叫已設定的圖像模型，無需離開對話即可生成圖片。
+- 支援把本輪上傳圖片或對話中的歷史生成圖作為參考圖繼續創作。
+- 漸進式多圖畫廊：主圖、可切換縮圖、生成中佔位、部分失敗保留、整組收合與全螢幕縮放。
+- 多張使用者附件使用緊湊畫廊展示，同時保持原有單圖訊息尺寸。
+- 生圖任務支援背景執行、跨頁面觀察、明確取消、狀態持久化與中斷復原，避免自動重試造成重複計費。
+- 內建 Palenik 供應商模型目錄，自動選擇可用的較新圖像模型，並為標題摘要選擇可靠的背景文字模型。
+- 更清晰且可收合的「創作工具／聊天」側邊欄，以及可恢復下載的應用程式內更新體驗。
+- 自動化建置、GitHub Release 與更新站發佈流程；Debug 建置不接入正式 Firebase，不污染正式統計。
+
+上游版權聲明及 AGPL-3.0 授權條款繼續有效，本 Fork 的改動均記錄在 Git 歷史中。
+
 ## 🚀 下載
 
-🔗 [前往官網下載](https://rikka-ai.com/download)（推薦）
-🔗 [前往 Google Play 下載](https://play.google.com/store/apps/details?id=me.rerere.rikkahub)
+🔗 [下載 PaleInk Fork](https://updates.paleink.cc/)（推薦）
+
+🔗 [前往上游 RikkaHub 官網](https://rikka-ai.com/download)
 
 > [!WARNING]
 > RikkaHub 存在許多 fork 版本，fork 版本出現問題與 RikkaHub 無關，請謹慎使用 fork 版本，避免隱私洩露或者過度索要權限問題。
@@ -38,6 +56,7 @@
 - 🛠️ MCP 支持
 - 🔄 多種類型的供應商支持，自定義 API / URL / 模型（目前支持 OpenAI、Google、Anthropic）
 - 🖼️ 多模態輸入支持
+- 🎨 在一般聊天中直接生成、參考編輯並漸進展示多張圖片
 - 📝 Markdown 渲染（支持代碼高亮、數學公式、表格、Mermaid）
 - 🔍 搜尋功能（Exa、Tavily、Zhipu、LinkUp、Brave、Perplexity、..）
 - 🧩 Prompt 變量（模型名稱、時間等）
@@ -66,7 +85,7 @@
 - [kotlinx.serialization](https://github.com/Kotlin/kotlinx.serialization) (Json序列化)
 
 > [!TIP]
-> 你需要在 `app` 資料夾下添加 `google-services.json` 檔案才能構建應用。
+> Debug 建置無需 Firebase；Release 建置繼續使用 `app/google-services.json` 提供正式環境的 Analytics 與 Crashlytics。
 
 > [!IMPORTANT]  
 > 以下PR將被拒絕：
