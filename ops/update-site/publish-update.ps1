@@ -45,11 +45,16 @@ $apkAnalyzer = Join-Path $androidSdkRoot 'cmdline-tools\latest\bin\apkanalyzer.b
 if (-not (Test-Path -LiteralPath $apkSigner -PathType Leaf)) { throw "apksigner not found: $apkSigner" }
 if (-not (Test-Path -LiteralPath $apkAnalyzer -PathType Leaf)) { throw "apkanalyzer not found: $apkAnalyzer" }
 
-$signatureReport = & $apkSigner verify --print-certs $resolvedApk 2>&1
-if ($LASTEXITCODE -ne 0) { throw "APK signature verification failed.`n$signatureReport" }
-$signerMatch = [regex]::Match(($signatureReport -join "`n"), 'certificate SHA-256 digest:\s*([0-9a-fA-F]+)')
-if (-not $signerMatch.Success -or $signerMatch.Groups[1].Value.ToLowerInvariant() -ne $expectedSignerSha256) {
-    throw 'APK is not signed with the permanent PaleInk RikkaHub release certificate.'
+function Get-JavaMajorVersion {
+    param(
+        [Parameter(Mandatory)]
+        [string]$JavaExecutable
+    )
+
+    $versionOutput = (& $JavaExecutable -version 2>&1) -join "`n"
+    $match = [regex]::Match($versionOutput, 'version "(?<major>\d+)')
+    if (-not $match.Success) { return 0 }
+    return [int]$match.Groups['major'].Value
 }
 
 function Get-ApkAnalyzerValue {
@@ -73,13 +78,41 @@ function Get-ApkAnalyzerValue {
     return $values[0]
 }
 
-$actualApplicationId = Get-ApkAnalyzerValue -Property 'application-id'
-$actualVersion = Get-ApkAnalyzerValue -Property 'version-name'
-$actualVersionCodeText = Get-ApkAnalyzerValue -Property 'version-code'
-if ($actualVersionCodeText -notmatch '^\d+$') {
-    throw "apkanalyzer returned an invalid version code: $actualVersionCodeText"
+$javaCandidates = @()
+if ($env:JAVA_HOME) { $javaCandidates += (Join-Path $env:JAVA_HOME 'bin\java.exe') }
+$pathJava = Get-Command java.exe -ErrorAction SilentlyContinue
+if ($pathJava) { $javaCandidates += $pathJava.Source }
+$javaExecutable = $javaCandidates |
+    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+    Select-Object -Unique |
+    Where-Object { (Get-JavaMajorVersion -JavaExecutable $_) -ge 17 } |
+    Select-Object -First 1
+if (-not $javaExecutable) {
+    throw 'Java 17 or newer is required. Set JAVA_HOME or place a compatible java.exe on PATH.'
 }
-$actualVersionCode = [int]$actualVersionCodeText
+
+$originalJavaHome = $env:JAVA_HOME
+try {
+    $env:JAVA_HOME = Split-Path -Parent (Split-Path -Parent $javaExecutable)
+
+    $signatureReport = & $apkSigner verify --print-certs $resolvedApk 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "APK signature verification failed.`n$signatureReport" }
+    $signerMatch = [regex]::Match(($signatureReport -join "`n"), 'certificate SHA-256 digest:\s*([0-9a-fA-F]+)')
+    if (-not $signerMatch.Success -or $signerMatch.Groups[1].Value.ToLowerInvariant() -ne $expectedSignerSha256) {
+        throw 'APK is not signed with the permanent PaleInk RikkaHub release certificate.'
+    }
+
+    $actualApplicationId = Get-ApkAnalyzerValue -Property 'application-id'
+    $actualVersion = Get-ApkAnalyzerValue -Property 'version-name'
+    $actualVersionCodeText = Get-ApkAnalyzerValue -Property 'version-code'
+    if ($actualVersionCodeText -notmatch '^\d+$') {
+        throw "apkanalyzer returned an invalid version code: $actualVersionCodeText"
+    }
+    $actualVersionCode = [int]$actualVersionCodeText
+}
+finally {
+    $env:JAVA_HOME = $originalJavaHome
+}
 if ($actualApplicationId -ne $expectedApplicationId) {
     throw "Unexpected application ID: $actualApplicationId"
 }
