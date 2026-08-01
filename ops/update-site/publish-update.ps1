@@ -27,8 +27,41 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$expectedApplicationId = 'me.rerere.rikkahub'
+$expectedSignerSha256 = 'df8c1f92039b19cfbdd72491e0058eb4682ff75f99cbbe32450fe9ea4d408520'
 $resolvedApk = (Resolve-Path -LiteralPath $ApkPath).Path
 $resolvedIdentity = if ($IdentityFile) { (Resolve-Path -LiteralPath $IdentityFile).Path } else { $null }
+
+$androidSdkRoot = if ($env:ANDROID_SDK_ROOT) { $env:ANDROID_SDK_ROOT } else { $env:ANDROID_HOME }
+if (-not $androidSdkRoot -or -not (Test-Path -LiteralPath $androidSdkRoot -PathType Container)) {
+    throw 'ANDROID_SDK_ROOT or ANDROID_HOME must point to an installed Android SDK.'
+}
+$buildTools = Get-ChildItem -LiteralPath (Join-Path $androidSdkRoot 'build-tools') -Directory |
+    Sort-Object { [version]$_.Name } -Descending |
+    Select-Object -First 1
+if (-not $buildTools) { throw 'Android SDK Build Tools are required to verify the APK signature.' }
+$apkSigner = Join-Path $buildTools.FullName 'apksigner.bat'
+$apkAnalyzer = Join-Path $androidSdkRoot 'cmdline-tools\latest\bin\apkanalyzer.bat'
+if (-not (Test-Path -LiteralPath $apkSigner -PathType Leaf)) { throw "apksigner not found: $apkSigner" }
+if (-not (Test-Path -LiteralPath $apkAnalyzer -PathType Leaf)) { throw "apkanalyzer not found: $apkAnalyzer" }
+
+$signatureReport = & $apkSigner verify --print-certs $resolvedApk 2>&1
+if ($LASTEXITCODE -ne 0) { throw "APK signature verification failed.`n$signatureReport" }
+$signerMatch = [regex]::Match(($signatureReport -join "`n"), 'certificate SHA-256 digest:\s*([0-9a-fA-F]+)')
+if (-not $signerMatch.Success -or $signerMatch.Groups[1].Value.ToLowerInvariant() -ne $expectedSignerSha256) {
+    throw 'APK is not signed with the permanent PaleInk RikkaHub release certificate.'
+}
+
+$actualApplicationId = (& $apkAnalyzer manifest application-id $resolvedApk).Trim()
+$actualVersion = (& $apkAnalyzer manifest version-name $resolvedApk).Trim()
+$actualVersionCode = [int](& $apkAnalyzer manifest version-code $resolvedApk).Trim()
+if ($actualApplicationId -ne $expectedApplicationId) {
+    throw "Unexpected application ID: $actualApplicationId"
+}
+if ($actualVersion -ne $Version -or $actualVersionCode -ne $VersionCode) {
+    throw "APK version is $actualVersion ($actualVersionCode), not $Version ($VersionCode)."
+}
+
 $fileName = "rikkahub-$Version-$Abi.apk"
 $sha256 = (Get-FileHash -LiteralPath $resolvedApk -Algorithm SHA256).Hash.ToLowerInvariant()
 $sizeBytes = (Get-Item -LiteralPath $resolvedApk).Length
@@ -65,6 +98,7 @@ try {
     $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM
 
     Write-Host "APK: $fileName"
+    Write-Host "Signer SHA-256: $expectedSignerSha256"
     Write-Host "SHA-256: $sha256"
     Write-Host "Size: $size"
 

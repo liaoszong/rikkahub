@@ -8,9 +8,19 @@ published APK entry must use HTTPS and include its SHA-256 digest. Never place
 signing keys, Firebase files, or server credentials in this directory.
 
 Use `publish-update.ps1` after producing a permanently signed release APK. The
-script validates the version arguments, computes SHA-256, uploads into a staging
-directory, verifies the remote digest, then replaces the stable manifest last.
-Use `-WhatIf` to inspect a release without changing the server.
+script verifies the application ID, embedded version, and permanent signing
+certificate before it computes SHA-256, uploads into a staging directory,
+verifies the remote digest, then replaces the stable manifest last. Use
+`-WhatIf` to inspect a release without changing the server.
+
+The stable direct-download signing identity is:
+
+- Alias: `paleink-rikkahub-release`
+- Certificate SHA-256: `DF:8C:1F:92:03:9B:19:CF:BD:D7:24:91:E0:05:8E:B4:68:2F:F7:5F:99:CB:BE:32:45:0F:E9:EA:4D:40:85:20`
+
+The certificate fingerprint is public and intentionally documented here. The
+private key and passwords must remain outside the repository and be backed up
+separately in encrypted storage.
 
 The current server keeps SSH public-key authentication disabled. Run the script
 without `-IdentityFile` to enter the server password interactively. A restricted

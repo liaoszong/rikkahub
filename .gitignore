@@ -11,3 +11,7 @@ local.properties
 .cursor
 .history
 .kotlin
+*.jks
+*.keystore
+*.p12
+signing.properties
