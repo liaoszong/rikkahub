@@ -51,6 +51,14 @@ Changes currently maintained by this fork include:
 Upstream copyright notices and the AGPL-3.0 license remain in effect. Changes specific to this fork
 are tracked in its Git history.
 
+### Latest PaleInk release: 2.4.5-pale.3
+
+- 🖼️ Chat-native reference-image generation and compact progressive multi-image galleries.
+- 🧰 A clearer, persistent collapsible sidebar for creative tools and conversations.
+- ⬇️ Resumable, signed in-app updates with APK identity checks and a clearer first-install guide.
+- 🛡️ Stronger backup, media persistence, provider readiness, Web access, Debug privacy, and
+  cross-platform release gates.
+
 ## 🚀 Download
 
 🔗 [Download the PaleInk fork](https://updates.paleink.cc/) (Recommended)
