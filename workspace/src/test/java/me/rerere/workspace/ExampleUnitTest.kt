@@ -142,11 +142,16 @@ class ExampleUnitTest {
 
         val result = manager.executeCommand(
             root,
-            "awk 'BEGIN { for (i = 0; i < 300000; i++) printf \"a\" }'",
+            "chunk=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; " +
+                "i=0; while [ \$i -lt 5000 ]; do printf \"\$chunk\"; i=\$((i+1)); done",
         )
 
         assertEquals(0, result.exitCode)
-        assertTrue(result.truncated)
+        assertTrue(
+            "expected truncated output: exit=${result.exitCode}, stdout=${result.stdout.length}, " +
+                "stderr=${result.stderr.take(200)}",
+            result.truncated,
+        )
         assertEquals(MAX_OUTPUT_CHARS, result.stdout.length)
     }
 

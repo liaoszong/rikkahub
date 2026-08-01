@@ -4,8 +4,11 @@ The production site is served by Caddy from `/srv/rikkahub-updates/public` at
 `https://updates.paleink.cc`.
 
 Publish an APK before atomically replacing `public/api/v1/stable.json`. Every
-published APK entry must use HTTPS and include its SHA-256 digest. Never place
-signing keys, Firebase files, or server credentials in this directory.
+published APK entry must use HTTPS and include its SHA-256 digest. The feed is
+also a signed envelope: current clients verify `signedPayload` with the public
+key embedded in the App before trusting any version, URL, or digest. Top-level
+fields mirror that payload only for old clients and the public website. Never
+place signing keys, Firebase files, or server credentials in this directory.
 
 Use `publish-update.ps1` after producing a permanently signed release APK. The
 script verifies the application ID, embedded version, and permanent signing
@@ -22,6 +25,18 @@ The stable direct-download signing identity is:
 The certificate fingerprint is public and intentionally documented here. The
 private key and passwords must remain outside the repository and be backed up
 separately in encrypted storage.
+
+The update-feed signing identity is independent from both APK signing and SSH
+deployment:
+
+- Key ID: `paleink-update-feed-rsa-2026-01`
+- Algorithm: RSA-3072 with SHA-256
+- Public-key DER SHA-256: `9B:09:03:29:78:1A:FB:63:C9:97:8E:5D:EB:6B:0C:FE:6E:1D:00:7B:ED:B1:6E:9A:18:41:F4:F4:D2:4C:01:19`
+- Private key: `%USERPROFILE%\.paleink\signing\rikkahub\update-feed-rsa-3072.pem`
+
+Back up that private key in encrypted storage. Losing it requires an App update
+signed by the existing Android certificate to rotate the embedded feed public
+key; replacing it only on the server will be rejected by installed clients.
 
 On the primary Windows release workstation, the permanent keystore is kept at
 `%USERPROFILE%\.paleink\signing\rikkahub\paleink-rikkahub-release.p12`.
@@ -45,9 +60,12 @@ One-time workstation/server setup:
 
 1. Keep the permanent Android signing configuration in `local.properties` as
    described above.
-2. Sign in once with `gh auth login`; GitHub CLI stores the token in Windows
+2. Confirm that the update-feed private key above exists and that its public
+   DER SHA-256 matches the documented fingerprint. The publisher refuses a
+   mismatched key before uploading anything.
+3. Sign in once with `gh auth login`; GitHub CLI stores the token in Windows
    Credential Manager.
-3. Run `pwsh ops/release/setup-release-access.ps1`. Enter the server root
+4. Run `pwsh ops/release/setup-release-access.ps1`. Enter the server root
    password only for this bootstrap. The script creates a dedicated
    `rikkahub-deploy` account, installs a restricted SSH key, grants access only
    to the update-site tree, reloads SSH after `sshd -t`, and verifies key login.

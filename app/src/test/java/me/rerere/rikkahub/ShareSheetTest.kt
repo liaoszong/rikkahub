@@ -5,9 +5,11 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.rikkahub.ui.components.ui.decodeProviderSetting
 import me.rerere.rikkahub.ui.components.ui.encodeForShare
+import me.rerere.rikkahub.utils.JsonInstant
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.io.encoding.Base64
 import kotlin.uuid.Uuid
 
 class ShareSheetTest {
@@ -41,6 +43,30 @@ class ShareSheetTest {
         assertEquals("sk-test-key", decodedOpenAI.apiKey)
         assertEquals("https://api.openai.com/v1", decodedOpenAI.baseUrl)
         assertTrue(decodedOpenAI.models.isEmpty())
+    }
+
+    @Test
+    fun `sharing and importing strips managed provider identity`() {
+        val managed = ProviderSetting.OpenAI(
+            name = "Managed provider",
+            managedBy = "paleink:rikkahub-default",
+        )
+
+        val decoded = decodeProviderSetting(managed.encodeForShare()) as ProviderSetting.OpenAI
+
+        assertEquals(null, decoded.managedBy)
+        assertEquals(false, decoded.builtIn)
+    }
+
+    @Test
+    fun `import strips managed identity even from externally crafted payload`() {
+        val managed: ProviderSetting = ProviderSetting.OpenAI(managedBy = "foreign-managed-marker")
+        val encodedJson = JsonInstant.encodeToString(managed).encodeToByteArray()
+
+        val decoded = decodeProviderSetting("ai-provider:v1:${Base64.encode(encodedJson)}")
+            as ProviderSetting.OpenAI
+
+        assertEquals(null, decoded.managedBy)
     }
 
     @Test

@@ -8,7 +8,14 @@ data class GeneratedImage(
     val prompt: String,
     val filePath: String,
     val timestamp: Long,
+    /** Legacy display field retained so persisted task JSON from older builds still decodes. */
     val model: String,
+    /** Stable configured model identity; old records fall back to the legacy [model] value. */
+    val modelId: String = model,
+    /** User-facing model label; old records fall back to the legacy [model] value. */
+    val modelDisplayName: String = model,
+    /** Stable configured provider identity when available; absent in legacy records. */
+    val providerId: String? = null,
     val isPreview: Boolean = false,
 )
 
@@ -42,11 +49,16 @@ data class ImageGenerationTask(
     val prompt: String,
     val modelId: String,
     val modelName: String,
+    val providerId: String? = null,
     val size: String,
     val numberOfImages: Int,
     val startedAt: Long,
     val finishedAt: Long? = null,
     val phase: ImageGenerationPhase,
+    /** Stable identity for the paid provider request represented by this task. */
+    val requestId: String = taskId,
+    /** A retry must create a new attempt instead of silently replaying attempt 1. */
+    val attempt: Int = 1,
     val errorKind: ImageGenerationFailureKind? = null,
     val errorMessage: String? = null,
     val images: List<GeneratedImage> = emptyList(),
@@ -76,6 +88,7 @@ data class ImageGenerationRequest(
     val prompt: String,
     val modelId: String,
     val modelName: String,
+    val providerId: String? = null,
     val size: String,
     val numberOfImages: Int,
     val referenceImages: List<String> = emptyList(),

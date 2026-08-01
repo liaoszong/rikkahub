@@ -142,6 +142,18 @@ class ImageGenerationTaskManagerTest {
     }
 
     @Test
+    fun `persisted task carries stable request identity and first attempt`() {
+        val fixture = Fixture()
+
+        fixture.manager.start(request())
+        val running = fixture.manager.task.value
+
+        assertEquals(running.taskId, running.requestId)
+        assertEquals(1, running.attempt)
+        assertEquals(running.requestId, fixture.taskStore.load()?.requestId)
+    }
+
+    @Test
     fun `completed image remains readable from gallery data source`() = runBlocking {
         val fixture = Fixture()
         fixture.manager.start(request())
@@ -153,14 +165,43 @@ class ImageGenerationTaskManagerTest {
         assertFalse(galleryReload.single().isPreview)
     }
 
+    @Test
+    fun `provider request waits for foreground service readiness`() = runBlocking {
+        val controller = FakeForegroundController(readyImmediately = false)
+        val fixture = Fixture(foregroundController = controller)
+
+        fixture.manager.start(request())
+        assertEquals(0, fixture.gateway.calls)
+
+        controller.markReady()
+        assertEquals(1, fixture.gateway.calls)
+
+        fixture.gateway.complete()
+        fixture.awaitPhase(ImageGenerationPhase.COMPLETED)
+        Unit
+    }
+
+    @Test
+    fun `foreground service readiness failure prevents paid provider request`() = runBlocking {
+        val controller = FakeForegroundController(readyImmediately = false)
+        val fixture = Fixture(foregroundController = controller)
+
+        fixture.manager.start(request())
+        controller.fail(IllegalStateException("notifications unavailable"))
+
+        val failed = fixture.awaitPhase(ImageGenerationPhase.FAILED)
+        assertEquals(0, fixture.gateway.calls)
+        assertEquals(ImageGenerationFailureKind.CONFIGURATION, failed.errorKind)
+    }
+
     private class Fixture(
         val gateway: DelayedGateway = DelayedGateway(),
         val taskStore: InMemoryTaskStore = InMemoryTaskStore(),
+        val foregroundController: FakeForegroundController = FakeForegroundController(),
     ) {
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         private var currentTime = 0L
         val resultStore = FakeResultStore()
-        val foregroundController = FakeForegroundController()
         val manager = ImageGenerationTaskManager(
             scope = scope,
             gateway = gateway,
@@ -243,14 +284,34 @@ class ImageGenerationTaskManagerTest {
         override fun clear() {
             task = null
         }
+
     }
 
-    private class FakeForegroundController : ImageGenerationForegroundController {
+    private class FakeForegroundController(
+        readyImmediately: Boolean = true,
+    ) : ImageGenerationForegroundController {
+        private val ready = if (readyImmediately) {
+            CompletableDeferred(Unit)
+        } else {
+            CompletableDeferred()
+        }
         var starts = 0
             private set
 
         override fun start(taskId: String) {
             starts++
+        }
+
+        override suspend fun awaitReady(taskId: String) {
+            ready.await()
+        }
+
+        fun markReady() {
+            ready.complete(Unit)
+        }
+
+        fun fail(error: Throwable) {
+            ready.completeExceptionally(error)
         }
     }
 

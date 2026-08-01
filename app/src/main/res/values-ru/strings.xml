@@ -1280,5 +1280,7 @@
   <string name="assistant_page_context_message_limit_count">Лимит сообщений контекста: %d</string>
   <string name="assistant_page_context_message_limit_unlimited">Неограниченные сообщения контекста</string>
   <string name="assistant_page_context_message_limit_warning">Ограничение контекста аннулирует кэш промпта каждый раз, когда контекст усекается. Больший лимит усекает реже; безлимитный не усекает никогда и сохраняет кэш полностью нетронутым.</string>
+  <string name="update_dialog_stale">Не удалось проверить последнюю версию. Показаны сохранённые данные об обновлении.</string>
+  <string name="update_dialog_stale_checked_at">Не удалось обновить сведения. Последняя успешная проверка: %1$s</string>
 </resources>
 

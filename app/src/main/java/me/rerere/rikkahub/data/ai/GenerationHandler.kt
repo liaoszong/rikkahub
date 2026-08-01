@@ -30,6 +30,7 @@ import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolApprovalState
+import me.rerere.ai.ui.ToolExecutionState
 import me.rerere.ai.ui.handleMessageChunk
 import me.rerere.ai.ui.limitContext
 import me.rerere.rikkahub.data.ai.transformers.InputMessageTransformer
@@ -94,7 +95,7 @@ class GenerationHandler(
             Log.i(TAG, "streamText: start step #$stepIndex (${model.id})")
 
             val toolsInternal = buildList {
-                Log.i(TAG, "generateInternal: build tools($assistant)")
+                Log.i(TAG, "generateInternal: build tools")
                 if (assistant?.enableMemory == true) {
                     val memoryAssistantId = if (assistant.useGlobalMemory) {
                         MemoryRepository.GLOBAL_MEMORY_ID
@@ -259,7 +260,9 @@ class GenerationHandler(
                                         }
                                     )
                                 )
-                            )
+                            ),
+                            executionState = ToolExecutionState.FAILED,
+                            requestId = tool.requestId.ifBlank { Uuid.random().toString() },
                         )
                     }
 
@@ -269,7 +272,9 @@ class GenerationHandler(
                         executedTools += tool.copy(
                             output = listOf(
                                 UIMessagePart.Text(answer)
-                            )
+                            ),
+                            executionState = ToolExecutionState.SUCCEEDED,
+                            requestId = tool.requestId.ifBlank { Uuid.random().toString() },
                         )
                     }
 
@@ -279,24 +284,40 @@ class GenerationHandler(
 
                     else -> {
                         // Auto or Approved - execute the tool
+                        val runningTool = tool.copy(
+                            executionState = ToolExecutionState.RUNNING,
+                            requestId = tool.requestId.ifBlank { Uuid.random().toString() },
+                        )
+                        val runningMessage = messages.last().copy(
+                            parts = messages.last().parts.map { part ->
+                                if (part is UIMessagePart.Tool && part.toolCallId == runningTool.toolCallId) {
+                                    runningTool
+                                } else {
+                                    part
+                                }
+                            },
+                        )
+                        messages = messages.dropLast(1) + runningMessage
+                        emit(GenerationChunk.Messages(messages))
+
                         runCatching {
-                            val toolDef = toolsInternal.find { toolDef -> toolDef.name == tool.toolName }
-                                ?: error("Tool ${tool.toolName} not found")
+                            val toolDef = toolsInternal.find { toolDef -> toolDef.name == runningTool.toolName }
+                                ?: error("Tool ${runningTool.toolName} not found")
                             val args = runCatching {
-                                json.parseToJsonElement(tool.input.ifBlank { "{}" })
+                                json.parseToJsonElement(runningTool.input.ifBlank { "{}" })
                             }.getOrElse {
-                                error("Invalid tool arguments JSON for ${tool.toolName}: ${it.message}")
+                                error("Invalid tool arguments JSON for ${runningTool.toolName}: ${it.message}")
                             }
-                            Log.i(TAG, "generateText: executing tool ${toolDef.name} with args: $args")
+                            Log.i(TAG, "generateText: executing tool ${toolDef.name} requestId=${runningTool.requestId}")
                             val result = toolDef.executeWithContext?.invoke(
                                 args,
                                 ToolExecutionContext(
-                                    toolCallId = tool.toolCallId,
+                                    toolCallId = runningTool.toolCallId,
                                     messages = messages,
                                     emitProgress = { progress ->
                                         val progressMessage = messages.last().copy(
                                             parts = messages.last().parts.map { part ->
-                                                if (part is UIMessagePart.Tool && part.toolCallId == tool.toolCallId) {
+                                                if (part is UIMessagePart.Tool && part.toolCallId == runningTool.toolCallId) {
                                                     part.copy(progress = progress)
                                                 } else {
                                                     part
@@ -309,15 +330,16 @@ class GenerationHandler(
                                 )
                             ) ?: toolDef.execute(args)
                             val hasShellAccess = toolsInternal.any { it.name == "workspace_shell" }
-                            executedTools += tool.copy(
-                                output = maybeTruncateToolOutput(tool.toolCallId, result, hasShellAccess),
+                            executedTools += runningTool.copy(
+                                output = maybeTruncateToolOutput(runningTool.toolCallId, result, hasShellAccess),
                                 progress = emptyList(),
+                                executionState = ToolExecutionState.SUCCEEDED,
                             )
                         }.onFailure {
                             // 取消必须向上传播，否则停止生成会被误报为工具执行错误
                             if (it is CancellationException) throw it
-                            it.printStackTrace()
-                            executedTools += tool.copy(
+                            Log.e(TAG, "generateText: tool ${runningTool.toolName} failed (${it.javaClass.simpleName})")
+                            executedTools += runningTool.copy(
                                 output = listOf(
                                     UIMessagePart.Text(
                                         json.encodeToString(
@@ -334,6 +356,7 @@ class GenerationHandler(
                                     )
                                 ),
                                 progress = emptyList(),
+                                executionState = ToolExecutionState.FAILED,
                             )
                         }
                     }

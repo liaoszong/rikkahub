@@ -25,6 +25,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.asUserOwnedCopy
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Share03
 import me.rerere.rikkahub.utils.JsonInstant
@@ -91,7 +92,7 @@ fun ProviderSetting.encodeForShare(): String {
         append("ai-provider:")
         append("v1:")
 
-        val value = JsonInstant.encodeToString(this@encodeForShare.copyProvider(models = emptyList()))
+        val value = JsonInstant.encodeToString(this@encodeForShare.asUserOwnedCopy(models = emptyList()))
         append(Base64.encode(value.encodeToByteArray()))
     }
 }
@@ -106,7 +107,7 @@ fun decodeProviderSetting(value: String): ProviderSetting {
     val jsonBytes = Base64.decode(base64Str)
     val jsonStr = jsonBytes.decodeToString()
 
-    return JsonInstant.decodeFromString<ProviderSetting>(jsonStr)
+    return JsonInstant.decodeFromString<ProviderSetting>(jsonStr).asUserOwnedCopy()
 }
 
 class ShareSheetState {

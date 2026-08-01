@@ -53,6 +53,7 @@ import me.rerere.search.SearchServiceOptions
 import me.rerere.tts.provider.TTSProviderSetting
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.get
+import java.net.URI
 import kotlin.uuid.Uuid
 
 private const val TAG = "PreferencesStore"
@@ -239,7 +240,7 @@ class SettingsStore(
                 webServerPort = preferences[WEB_SERVER_PORT] ?: 8080,
                 webServerJwtEnabled = preferences[WEB_SERVER_JWT_ENABLED] == true,
                 webServerAccessPassword = preferences[WEB_SERVER_ACCESS_PASSWORD] ?: "",
-                webServerLocalhostOnly = preferences[WEB_SERVER_LOCALHOST_ONLY] == true,
+                webServerLocalhostOnly = preferences[WEB_SERVER_LOCALHOST_ONLY] ?: true,
                 backupReminderConfig = preferences[BACKUP_REMINDER_CONFIG]?.let {
                     JsonInstant.decodeFromString(it)
                 } ?: BackupReminderConfig(),
@@ -248,33 +249,7 @@ class SettingsStore(
             )
         }
         .map {
-            var providers = it.providers.ifEmpty { DEFAULT_PROVIDERS }.toMutableList()
-            DEFAULT_PROVIDERS.forEach { defaultProvider ->
-                val existingIndex = providers.indexOfFirst { provider ->
-                    provider.id == defaultProvider.id ||
-                        provider.isEquivalentPalenikProvider(defaultProvider)
-                }
-                if (existingIndex < 0) {
-                    providers.add(defaultProvider.copyProvider())
-                } else if (defaultProvider.id == PALENIK_PROVIDER_ID) {
-                    providers[existingIndex] = mergePalenikProvider(
-                        existing = providers[existingIndex],
-                        defaults = defaultProvider,
-                    )
-                }
-            }
-            providers = providers.map { provider ->
-                val defaultProvider = DEFAULT_PROVIDERS.find { default ->
-                    default.id == provider.id || provider.isEquivalentPalenikProvider(default)
-                }
-                if (defaultProvider != null) {
-                    provider.copyProvider(
-                        builtIn = defaultProvider.builtIn,
-                        description = defaultProvider.description,
-                        shortDescription = defaultProvider.shortDescription,
-                    )
-                } else provider
-            }.toMutableList()
+            val providers = mergeDefaultProviders(it.providers)
             val assistants = it.assistants.ifEmpty { DEFAULT_ASSISTANTS }.toMutableList()
             DEFAULT_ASSISTANTS.forEach { defaultAssistant ->
                 if (assistants.none { it.id == defaultAssistant.id }) {
@@ -570,7 +545,7 @@ data class Settings(
     val webServerPort: Int = 8080,
     val webServerJwtEnabled: Boolean = false,
     val webServerAccessPassword: String = "",
-    val webServerLocalhostOnly: Boolean = false,
+    val webServerLocalhostOnly: Boolean = true,
     val backupReminderConfig: BackupReminderConfig = BackupReminderConfig(),
     val launchCount: Int = 0,
     val sponsorAlertDismissedAt: Int = 0,
@@ -696,17 +671,34 @@ fun Settings.resolveBackgroundTextModel(preferredId: Uuid?, fallbackId: Uuid?): 
         findModelById(fallbackId),
         getCurrentChatModel(),
     )
+    val anchorModel = explicitCandidates.firstOrNull { it.modelId != "auto" }
+    val anchorProvider = anchorModel?.findProvider(providers)
+    val eligibleProviders = when {
+        anchorProvider != null -> listOf(anchorProvider).filter { provider ->
+            provider.isReadyForRequests(anchorModel)
+        }
+        else -> providers.filter { provider ->
+            provider.models.any { model ->
+                model.type == ModelType.CHAT && model.modelId != "auto" && provider.isReadyForRequests(model)
+            }
+        }.takeIf { it.size == 1 }.orEmpty()
+    }
+    if (eligibleProviders.isEmpty()) return null
+
     explicitCandidates.firstOrNull { model ->
         model.type == ModelType.CHAT &&
             model.modelId != "auto" &&
-            model.findProvider(providers)?.isReadyForRequests() == true
+            model.findProvider(providers)?.let { provider ->
+                provider in eligibleProviders && provider.isReadyForRequests(model)
+            } == true
     }?.let { return it }
 
-    return providers.asSequence()
-        .filter { it.isReadyForRequests() }
-        .flatMap { it.models.asSequence() }
-        .filter { it.type == ModelType.CHAT && it.modelId != "auto" }
-        .sortedBy { model ->
+    return eligibleProviders.asSequence()
+        .flatMap { provider -> provider.models.asSequence().map { provider to it } }
+        .filter { (provider, model) ->
+            model.type == ModelType.CHAT && model.modelId != "auto" && provider.isReadyForRequests(model)
+        }
+        .sortedBy { (_, model) ->
             when {
                 model.modelId.contains("mini", ignoreCase = true) -> 0
                 model.modelId.contains("luna", ignoreCase = true) -> 1
@@ -714,21 +706,21 @@ fun Settings.resolveBackgroundTextModel(preferredId: Uuid?, fallbackId: Uuid?): 
                 else -> 3
             }
         }
+        .map { it.second }
         .firstOrNull()
-        ?: explicitCandidates.firstOrNull { it.type == ModelType.CHAT }
 }
 
 /** Keep an explicit valid choice; otherwise choose the newest available image model. */
 fun Settings.resolveImageGenerationModel(): Model? {
     findModelById(imageGenerationModelId)?.takeIf { model ->
         model.type == ModelType.IMAGE &&
-            model.findProvider(providers)?.isReadyForRequests() == true
+            model.findProvider(providers)?.isReadyForRequests(model) == true
     }?.let { return it }
 
     return providers.asSequence()
-        .filter { it.isReadyForRequests() }
-        .flatMap { it.models.asSequence() }
-        .filter { it.type == ModelType.IMAGE }
+        .flatMap { provider -> provider.models.asSequence().map { provider to it } }
+        .filter { (provider, model) -> model.type == ModelType.IMAGE && provider.isReadyForRequests(model) }
+        .map { it.second }
         .maxWithOrNull(
             compareBy<Model> { imageModelVersionScore(it.modelId) }
                 .thenBy { if (it.modelId.contains("mini", ignoreCase = true)) 0 else 1 }
@@ -778,11 +770,77 @@ private fun Model.findModelProviderFromList(providers: List<ProviderSetting>): P
     return null
 }
 
-private fun ProviderSetting.isReadyForRequests(): Boolean = enabled && when (this) {
-    is ProviderSetting.OpenAI -> apiKey.isNotBlank()
-    is ProviderSetting.Google -> apiKey.isNotBlank() ||
-        (useServiceAccount && privateKey.isNotBlank() && serviceAccountEmail.isNotBlank())
-    is ProviderSetting.Claude -> apiKey.isNotBlank()
+internal enum class ProviderCredentialSource {
+    API_KEY,
+    MODEL_HEADER,
+    SERVICE_ACCOUNT,
+    LOCAL_NO_AUTH,
+}
+
+internal enum class ProviderReadinessIssue {
+    DISABLED,
+    MISSING_CREDENTIALS,
+}
+
+internal data class ProviderReadiness(
+    val ready: Boolean,
+    val credentialSource: ProviderCredentialSource? = null,
+    val issue: ProviderReadinessIssue? = null,
+)
+
+internal fun ProviderSetting.requestReadiness(model: Model? = null): ProviderReadiness {
+    if (!enabled) return ProviderReadiness(ready = false, issue = ProviderReadinessIssue.DISABLED)
+    val supportedAuthHeaders = when (this) {
+        is ProviderSetting.OpenAI -> setOf("authorization", "x-api-key")
+        is ProviderSetting.Google -> setOf("authorization", "x-goog-api-key")
+        is ProviderSetting.Claude -> setOf("authorization", "x-api-key")
+    }
+    val hasModelHeader = (model?.customHeaders ?: models.flatMap(Model::customHeaders))
+        .any { it.value.isNotBlank() && it.name.trim().lowercase() in supportedAuthHeaders }
+    if (hasModelHeader) {
+        return ProviderReadiness(ready = true, credentialSource = ProviderCredentialSource.MODEL_HEADER)
+    }
+    return when (this) {
+        is ProviderSetting.OpenAI -> when {
+            apiKey.isNotBlank() -> ProviderReadiness(true, ProviderCredentialSource.API_KEY)
+            baseUrl.isLocalEndpoint() -> ProviderReadiness(true, ProviderCredentialSource.LOCAL_NO_AUTH)
+            else -> ProviderReadiness(false, issue = ProviderReadinessIssue.MISSING_CREDENTIALS)
+        }
+        is ProviderSetting.Google -> when {
+            vertexAI && useServiceAccount -> {
+                val complete = privateKey.isNotBlank() &&
+                    serviceAccountEmail.isNotBlank() &&
+                    projectId.isNotBlank() &&
+                    location.isNotBlank()
+                if (complete) {
+                    ProviderReadiness(true, ProviderCredentialSource.SERVICE_ACCOUNT)
+                } else {
+                    ProviderReadiness(false, issue = ProviderReadinessIssue.MISSING_CREDENTIALS)
+                }
+            }
+            apiKey.isNotBlank() -> ProviderReadiness(true, ProviderCredentialSource.API_KEY)
+            baseUrl.isLocalEndpoint() -> ProviderReadiness(true, ProviderCredentialSource.LOCAL_NO_AUTH)
+            else -> ProviderReadiness(false, issue = ProviderReadinessIssue.MISSING_CREDENTIALS)
+        }
+        is ProviderSetting.Claude -> when {
+            apiKey.isNotBlank() -> ProviderReadiness(true, ProviderCredentialSource.API_KEY)
+            baseUrl.isLocalEndpoint() -> ProviderReadiness(true, ProviderCredentialSource.LOCAL_NO_AUTH)
+            else -> ProviderReadiness(false, issue = ProviderReadinessIssue.MISSING_CREDENTIALS)
+        }
+    }
+}
+
+private fun ProviderSetting.isReadyForRequests(model: Model? = null): Boolean = requestReadiness(model).ready
+
+private fun String.isLocalEndpoint(): Boolean {
+    val endpoint = runCatching { URI(trim()) }.getOrNull() ?: return false
+    if (endpoint.scheme?.lowercase() !in setOf("http", "https")) return false
+    val host = endpoint.host?.lowercase() ?: return false
+    if (host == "localhost" || host == "::1" || host == "[::1]" || host == "0:0:0:0:0:0:0:1") return true
+    if (host == "10.0.2.2" || host == "10.0.3.2" || host.startsWith("127.")) return true
+    if (host.startsWith("10.") || host.startsWith("192.168.")) return true
+    val secondOctet = host.split('.').getOrNull(1)?.toIntOrNull()
+    return host.startsWith("172.") && secondOctet in 16..31
 }
 
 private fun imageModelVersionScore(modelId: String): Double {
@@ -796,13 +854,69 @@ private fun imageModelVersionScore(modelId: String): Double {
     return version - if (normalized.contains("mini")) 0.001 else 0.0
 }
 
-private fun ProviderSetting.isEquivalentPalenikProvider(defaultProvider: ProviderSetting): Boolean {
-    if (defaultProvider.id != PALENIK_PROVIDER_ID || this !is ProviderSetting.OpenAI) return false
-    val normalizedHost = baseUrl
-        .lowercase()
-        .removeSuffix("/")
-        .removeSuffix("/v1")
-    return normalizedHost == PALENIK_BASE_URL.removeSuffix("/v1")
+private fun ProviderSetting.isManagedPalenikProvider(defaultProvider: ProviderSetting): Boolean =
+    defaultProvider.id == PALENIK_PROVIDER_ID &&
+        this is ProviderSetting.OpenAI &&
+        managedBy == PALENIK_MANAGED_BY
+
+internal fun mergeDefaultProviders(storedProviders: List<ProviderSetting>): List<ProviderSetting> {
+    val initialProviders = storedProviders.ifEmpty { DEFAULT_PROVIDERS }
+    val palenikCandidates = initialProviders.filter { provider ->
+        provider.id == PALENIK_PROVIDER_ID ||
+            (provider is ProviderSetting.OpenAI && provider.managedBy == PALENIK_MANAGED_BY)
+    }
+    val consolidatedPalenik = palenikCandidates
+        .firstOrNull { it.id == PALENIK_PROVIDER_ID }
+        ?.let { canonical ->
+            palenikCandidates.filterNot { it === canonical }.fold(canonical, ::mergePalenikUserState)
+        }
+        ?: palenikCandidates.firstOrNull()?.let { first ->
+            palenikCandidates.drop(1).fold(first, ::mergePalenikUserState)
+        }
+    var emittedPalenik = false
+    val providers = initialProviders.mapNotNull { provider ->
+        if (provider !in palenikCandidates) return@mapNotNull provider
+        if (emittedPalenik) return@mapNotNull null
+        emittedPalenik = true
+        consolidatedPalenik
+    }.toMutableList()
+    DEFAULT_PROVIDERS.forEach { defaultProvider ->
+        val existingIndex = providers.indexOfFirst { provider ->
+            provider.id == defaultProvider.id || provider.isManagedPalenikProvider(defaultProvider)
+        }
+        if (existingIndex < 0) {
+            providers.add(defaultProvider.copyProvider())
+        } else if (defaultProvider.id == PALENIK_PROVIDER_ID) {
+            providers[existingIndex] = mergePalenikProvider(
+                existing = providers[existingIndex],
+                defaults = defaultProvider,
+            )
+        }
+    }
+    return providers.map { provider ->
+        val defaultProvider = DEFAULT_PROVIDERS.find { default ->
+            default.id == provider.id || provider.isManagedPalenikProvider(default)
+        }
+        if (defaultProvider == null) {
+            provider
+        } else {
+            provider.copyProvider(
+                builtIn = defaultProvider.builtIn,
+                description = defaultProvider.description,
+                shortDescription = defaultProvider.shortDescription,
+            )
+        }
+    }
+}
+
+private fun mergePalenikUserState(primary: ProviderSetting, duplicate: ProviderSetting): ProviderSetting {
+    if (primary !is ProviderSetting.OpenAI || duplicate !is ProviderSetting.OpenAI) return primary
+    val existingModelIds = primary.models.map { it.modelId.lowercase() }.toSet()
+    return primary.copy(
+        apiKey = primary.apiKey.ifBlank { duplicate.apiKey },
+        models = primary.models + duplicate.models.filter { it.modelId.lowercase() !in existingModelIds },
+        managedBy = PALENIK_MANAGED_BY,
+    )
 }
 
 private fun mergePalenikProvider(
@@ -828,6 +942,7 @@ private fun mergePalenikProvider(
     return existing.copy(
         name = defaults.name,
         models = mergedModels,
+        managedBy = PALENIK_MANAGED_BY,
         builtIn = true,
         description = defaults.description,
         shortDescription = defaults.shortDescription,

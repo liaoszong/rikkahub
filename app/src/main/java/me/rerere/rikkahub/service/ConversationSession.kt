@@ -70,11 +70,12 @@ class ConversationSession(
     }
 
     fun setJob(job: Job?) {
-        _generationJob.value?.cancel()
+        val previousJob = _generationJob.value
         _generationJob.value = job
+        previousJob?.cancel()
         job?.invokeOnCompletion {
-            _generationJob.value = null
-            if (refCount.get() <= 0) {
+            val releasedOwnership = _generationJob.compareAndSet(job, null)
+            if (releasedOwnership && refCount.get() <= 0) {
                 scheduleIdleCheck()
             }
         }

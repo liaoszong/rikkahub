@@ -9,12 +9,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.serialization.SerializationException
-import java.io.IOException
 import java.util.UUID
 
 interface ImageGenerationForegroundController {
     fun start(taskId: String)
+
+    /** Suspends until Android confirms that the task is protected by a foreground service. */
+    suspend fun awaitReady(taskId: String)
 }
 
 class ImageGenerationTaskManager(
@@ -27,6 +28,7 @@ class ImageGenerationTaskManager(
     private val clock: () -> Long = System::currentTimeMillis,
     private val idGenerator: () -> String = { UUID.randomUUID().toString() },
 ) {
+    private val taskExecutor = ImageGenerationTaskExecutor(gateway)
     private val initialTask = restoreInitialTask()
     private val _task = MutableStateFlow(initialTask)
     val task: StateFlow<ImageGenerationTask> = _task.asStateFlow()
@@ -46,6 +48,7 @@ class ImageGenerationTaskManager(
             prompt = request.prompt,
             modelId = request.modelId,
             modelName = request.modelName,
+            providerId = request.providerId,
             size = request.size,
             numberOfImages = request.numberOfImages,
             startedAt = clock(),
@@ -77,6 +80,25 @@ class ImageGenerationTaskManager(
             return ImageGenerationStartResult.FOREGROUND_SERVICE_UNAVAILABLE
         }
         activeJob = scope.launch(executionDispatcher) {
+            try {
+                foregroundController.awaitReady(newTask.taskId)
+            } catch (error: CancellationException) {
+                handleCancellation()
+                clearActiveJobOwnership()
+                return@launch
+            } catch (error: Throwable) {
+                updateTaskBestEffort(
+                    newTask.copy(
+                        phase = ImageGenerationPhase.FAILED,
+                        finishedAt = clock(),
+                        errorKind = ImageGenerationFailureKind.CONFIGURATION,
+                        errorMessage = error.message
+                            ?: "Unable to start the required background notification service",
+                    ),
+                )
+                clearActiveJobOwnership()
+                return@launch
+            }
             runTask(newTask, request)
         }
         return ImageGenerationStartResult.STARTED
@@ -109,120 +131,123 @@ class ImageGenerationTaskManager(
     ) {
         val previews = mutableMapOf<Int, GeneratedImage>()
         val finalImages = mutableListOf<GeneratedImage>()
-        var finalIndex = 0
         try {
-            gateway.generate(request).collect { item ->
-                if (item.partial) {
-                    val previewIndex = item.partialImageIndex ?: finalIndex
-                    previews.remove(previewIndex)?.let(resultStore::deletePreview)
-                    previews[previewIndex] = resultStore.savePreview(
-                        task = startingTask,
-                        item = item,
-                        index = previewIndex,
-                    )
-                    updateTask(
+            taskExecutor.execute(
+                execution = ImageGenerationExecution(
+                    requestId = startingTask.requestId,
+                    attempt = startingTask.attempt,
+                    request = request,
+                ),
+            ) { event ->
+                when (event) {
+                    is ImageGenerationExecutionEvent.Running -> Unit
+                    is ImageGenerationExecutionEvent.Preview -> {
+                        previews.remove(event.index)?.let(resultStore::deletePreview)
+                        previews[event.index] = resultStore.savePreview(
+                            task = startingTask,
+                            item = event.item,
+                            index = event.index,
+                        )
+                        updateTask(
+                            startingTask.copy(
+                                phase = ImageGenerationPhase.PREVIEW_AVAILABLE,
+                                images = finalImages + previews.toSortedMap().values,
+                            ),
+                        )
+                    }
+                    is ImageGenerationExecutionEvent.FinalImage -> {
+                        previews.remove(event.index)?.let(resultStore::deletePreview)
+                        val image = resultStore.saveFinal(
+                            task = startingTask,
+                            item = event.item,
+                            index = event.index,
+                            sourcePaths = request.referenceImages,
+                        )
+                        finalImages += image
+                        updateTask(
+                            startingTask.copy(
+                                phase = if (previews.isEmpty()) {
+                                    ImageGenerationPhase.RUNNING
+                                } else {
+                                    ImageGenerationPhase.PREVIEW_AVAILABLE
+                                },
+                                images = finalImages + previews.toSortedMap().values,
+                            ),
+                        )
+                    }
+                    is ImageGenerationExecutionEvent.Succeeded -> updateTask(
                         startingTask.copy(
-                            phase = ImageGenerationPhase.PREVIEW_AVAILABLE,
-                            images = finalImages + previews.toSortedMap().values,
+                            phase = ImageGenerationPhase.COMPLETED,
+                            finishedAt = clock(),
+                            images = finalImages.toList(),
                         ),
                     )
-                } else {
-                    previews.remove(finalIndex)?.let(resultStore::deletePreview)
-                    val image = resultStore.saveFinal(
-                        task = startingTask,
-                        item = item,
-                        index = finalIndex,
-                        sourcePaths = request.referenceImages,
-                    )
-                    finalImages += image
-                    finalIndex++
-                    updateTask(
-                        startingTask.copy(
-                            phase = if (previews.isEmpty()) {
-                                ImageGenerationPhase.RUNNING
-                            } else {
-                                ImageGenerationPhase.PREVIEW_AVAILABLE
-                            },
-                            images = finalImages + previews.toSortedMap().values,
-                        ),
-                    )
+                    is ImageGenerationExecutionEvent.Failed -> {
+                        previews.values.forEach(resultStore::deletePreview)
+                        previews.clear()
+                        val preservedImages = event.failure.recoveredImage?.let(finalImages::plus)
+                            ?: finalImages.toList()
+                        updateTaskBestEffort(
+                            _task.value.copy(
+                                phase = ImageGenerationPhase.FAILED,
+                                finishedAt = clock(),
+                                errorKind = event.failure.kind,
+                                errorMessage = event.failure.message,
+                                images = preservedImages,
+                            ),
+                        )
+                    }
+                    is ImageGenerationExecutionEvent.Cancelled -> Unit
                 }
             }
-            if (finalImages.isEmpty()) {
-                throw ImageGenerationException(
-                    ImageGenerationFailureKind.RESPONSE_PARSE,
-                    "The provider returned no generated images",
-                )
-            }
-            updateTask(
-                startingTask.copy(
-                    phase = ImageGenerationPhase.COMPLETED,
-                    finishedAt = clock(),
-                    images = finalImages.toList(),
-                ),
-            )
         } catch (error: CancellationException) {
             previews.values.forEach(resultStore::deletePreview)
-            val current = _task.value
-            updateTaskBestEffort(
-                current.copy(
-                    phase = if (userCancellationRequested) {
-                        ImageGenerationPhase.CANCELLED
-                    } else {
-                        ImageGenerationPhase.INTERRUPTED
-                    },
-                    finishedAt = clock(),
-                    errorKind = if (userCancellationRequested) {
-                        ImageGenerationFailureKind.USER_CANCELLED
-                    } else {
-                        ImageGenerationFailureKind.PROCESS_INTERRUPTED
-                    },
-                    errorMessage = if (userCancellationRequested) {
-                        "Image generation was cancelled"
-                    } else {
-                        "Image generation was interrupted and was not retried"
-                    },
-                    images = finalImages.toList(),
-                ),
-            )
+            handleCancellation(images = finalImages.toList())
         } catch (error: Throwable) {
             previews.values.forEach(resultStore::deletePreview)
-            val (kind, message) = classifyFailure(error)
-            val preservedImages = if (error is ImageGenerationException && error.recoveredImage != null) {
-                finalImages + error.recoveredImage
-            } else {
-                finalImages.toList()
-            }
             updateTaskBestEffort(
                 _task.value.copy(
                     phase = ImageGenerationPhase.FAILED,
                     finishedAt = clock(),
-                    errorKind = kind,
-                    errorMessage = message,
-                    images = preservedImages,
+                    errorKind = ImageGenerationFailureKind.UNKNOWN,
+                    errorMessage = error.message ?: "Image generation failed",
+                    images = finalImages.toList(),
                 ),
             )
         } finally {
-            synchronized(this) {
-                activeJob = null
-                userCancellationRequested = false
-            }
+            clearActiveJobOwnership()
         }
     }
 
-    private fun classifyFailure(error: Throwable): Pair<ImageGenerationFailureKind, String> {
-        if (error is ImageGenerationException) {
-            return error.kind to (error.message ?: "Image generation failed")
-        }
-        return when (error) {
-            is IOException -> ImageGenerationFailureKind.NETWORK to
-                "The network connection was interrupted: ${error.message ?: "unknown I/O error"}"
-            is SerializationException -> ImageGenerationFailureKind.RESPONSE_PARSE to
-                "The image response could not be parsed"
-            is IllegalStateException -> ImageGenerationFailureKind.SERVER to
-                (error.message ?: "The image provider returned an error")
-            else -> ImageGenerationFailureKind.UNKNOWN to
-                (error.message ?: "Image generation failed")
+    private fun handleCancellation(images: List<GeneratedImage> = emptyList()) {
+        val current = _task.value
+        updateTaskBestEffort(
+            current.copy(
+                phase = if (userCancellationRequested) {
+                    ImageGenerationPhase.CANCELLED
+                } else {
+                    ImageGenerationPhase.INTERRUPTED
+                },
+                finishedAt = clock(),
+                errorKind = if (userCancellationRequested) {
+                    ImageGenerationFailureKind.USER_CANCELLED
+                } else {
+                    ImageGenerationFailureKind.PROCESS_INTERRUPTED
+                },
+                errorMessage = if (userCancellationRequested) {
+                    "Image generation was cancelled"
+                } else {
+                    "Image generation was interrupted and was not retried"
+                },
+                images = images,
+            ),
+        )
+    }
+
+    private fun clearActiveJobOwnership() {
+        synchronized(this) {
+            activeJob = null
+            userCancellationRequested = false
         }
     }
 

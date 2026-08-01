@@ -1,6 +1,5 @@
 package me.rerere.rikkahub.data.repository
 
-import android.database.sqlite.SQLiteBlobTooBigException
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
@@ -37,6 +36,7 @@ class ConversationRepository(
     companion object {
         private const val PAGE_SIZE = 20
         private const val INITIAL_LOAD_SIZE = 40
+        private const val MESSAGE_CHUNK_SIZE = 256 * 1024
     }
 
     suspend fun getRecentConversations(assistantId: Uuid, limit: Int = 10): List<Conversation> {
@@ -433,37 +433,22 @@ class ConversationRepository(
             .toSet()
 
         return database.withTransaction {
-            val nodes = mutableListOf<MessageNode>()
-            var offset = 0
-            val pageSize = 64
-            while (true) {
-                val page = try {
-                    messageNodeDAO.getNodesOfConversationPaged(conversationId, pageSize, offset)
-                } catch (e: SQLiteBlobTooBigException) {
-                    e.printStackTrace()
-                    offset += pageSize
-                    continue
-                } catch (e: IllegalStateException) {
-                    e.printStackTrace()
-                    offset += pageSize
-                    continue
-                }
-                if (page.isEmpty()) break
-                page.forEach { entity ->
-                    val messages = JsonInstant.decodeFromString<List<UIMessage>>(entity.messages)
-                    val nodeId = Uuid.parse(entity.id)
-                    nodes.add(
-                        MessageNode(
-                            id = nodeId,
-                            messages = messages,
-                            selectIndex = entity.selectIndex,
-                            isFavorite = favoriteNodeIds.contains(nodeId)
-                        )
-                    )
-                }
-                offset += page.size
+            messageNodeDAO.getNodeHeadersOfConversation(conversationId).map { header ->
+                val serializedMessages = readChunkedText(MESSAGE_CHUNK_SIZE) { start, length ->
+                    messageNodeDAO.getMessagesChunk(header.id, start, length)
+                } ?: throw ConversationReadIntegrityException(
+                    conversationId = conversationId,
+                    nodeId = header.id,
+                )
+                val messages = JsonInstant.decodeFromString<List<UIMessage>>(serializedMessages)
+                val nodeId = Uuid.parse(header.id)
+                MessageNode(
+                    id = nodeId,
+                    messages = messages,
+                    selectIndex = header.selectIndex,
+                    isFavorite = favoriteNodeIds.contains(nodeId)
+                )
             }
-            nodes
         }
     }
 
@@ -478,6 +463,26 @@ class ConversationRepository(
             )
         }
         messageNodeDAO.insertAll(entities)
+    }
+}
+
+internal class ConversationReadIntegrityException(
+    conversationId: String,
+    nodeId: String,
+) : IllegalStateException("Message node $nodeId disappeared while reading conversation $conversationId")
+
+internal suspend fun readChunkedText(
+    chunkSize: Int,
+    loadChunk: suspend (start: Int, length: Int) -> String?,
+): String? {
+    require(chunkSize > 0)
+    val result = StringBuilder()
+    var start = 1 // SQLite substr() is one-based.
+    while (true) {
+        val chunk = loadChunk(start, chunkSize) ?: return null
+        result.append(chunk)
+        if (chunk.length < chunkSize) return result.toString()
+        start += chunk.length
     }
 }
 

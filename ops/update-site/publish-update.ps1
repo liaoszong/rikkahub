@@ -23,14 +23,23 @@ param(
     [int]$SshPort = 22,
 
     [ValidateScript({ -not $_ -or (Test-Path -LiteralPath $_ -PathType Leaf) })]
-    [string]$IdentityFile
+    [string]$IdentityFile,
+
+    [string]$FeedSigningPrivateKey = (Join-Path $env:USERPROFILE '.paleink\signing\rikkahub\update-feed-rsa-3072.pem')
 )
 
 $ErrorActionPreference = 'Stop'
 $expectedApplicationId = 'me.rerere.rikkahub'
 $expectedSignerSha256 = 'df8c1f92039b19cfbdd72491e0058eb4682ff75f99cbbe32450fe9ea4d408520'
+$feedSigningKeyId = 'paleink-update-feed-rsa-2026-01'
+$expectedFeedPublicKeySha256 = '9b090329781afb63c9978e5deb6b0cfe6e1d007bedb16e9a1841f4f4d24c0119'
 $resolvedApk = (Resolve-Path -LiteralPath $ApkPath).Path
 $resolvedIdentity = if ($IdentityFile) { (Resolve-Path -LiteralPath $IdentityFile).Path } else { $null }
+$resolvedFeedSigningKey = if (Test-Path -LiteralPath $FeedSigningPrivateKey -PathType Leaf) {
+    (Resolve-Path -LiteralPath $FeedSigningPrivateKey).Path
+} else {
+    throw "Update feed signing key not found: $FeedSigningPrivateKey"
+}
 $siteIndex = Join-Path $PSScriptRoot 'public\index.html'
 if (-not (Test-Path -LiteralPath $siteIndex -PathType Leaf)) {
     throw "Update site index not found: $siteIndex"
@@ -48,6 +57,8 @@ $apkSigner = Join-Path $buildTools.FullName 'apksigner.bat'
 $apkAnalyzer = Join-Path $androidSdkRoot 'cmdline-tools\latest\bin\apkanalyzer.bat'
 if (-not (Test-Path -LiteralPath $apkSigner -PathType Leaf)) { throw "apksigner not found: $apkSigner" }
 if (-not (Test-Path -LiteralPath $apkAnalyzer -PathType Leaf)) { throw "apkanalyzer not found: $apkAnalyzer" }
+$openSsl = (Get-Command openssl.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+if (-not $openSsl) { throw 'OpenSSL is required to sign the update feed.' }
 
 function Get-JavaMajorVersion {
     param(
@@ -133,8 +144,8 @@ $downloadUrl = "https://updates.paleink.cc/files/$fileName"
 $remoteRoot = '/srv/rikkahub-updates'
 $remoteStaging = "$remoteRoot/staging/$VersionCode"
 
-$manifest = [ordered]@{
-    schemaVersion = 1
+$payload = [ordered]@{
+    schemaVersion = 2
     source = 'paleink/rikkahub'
     channel = 'stable'
     version = $Version
@@ -156,14 +167,39 @@ $manifest = [ordered]@{
 
 $tempDirectory = Join-Path ([IO.Path]::GetTempPath()) "rikkahub-update-$VersionCode"
 $manifestPath = Join-Path $tempDirectory 'stable.json'
+$payloadPath = Join-Path $tempDirectory 'stable.payload.json'
+$signaturePath = Join-Path $tempDirectory 'stable.payload.sig'
+$publicKeyPath = Join-Path $tempDirectory 'stable.public.der'
 $stagedApkPath = Join-Path $tempDirectory $fileName
-New-Item -ItemType Directory -Path $tempDirectory -Force | Out-Null
+[IO.Directory]::CreateDirectory($tempDirectory) | Out-Null
 try {
-    $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM
-    Copy-Item -LiteralPath $resolvedApk -Destination $stagedApkPath -Force
+    $utf8NoBom = [Text.UTF8Encoding]::new($false)
+    $payloadJson = $payload | ConvertTo-Json -Depth 5
+    [IO.File]::WriteAllText($payloadPath, $payloadJson, $utf8NoBom)
+    & $openSsl pkey -in $resolvedFeedSigningKey -pubout -outform DER -out $publicKeyPath
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to derive the update feed public key.' }
+    $actualFeedPublicKeySha256 = (Get-FileHash -LiteralPath $publicKeyPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualFeedPublicKeySha256 -ne $expectedFeedPublicKeySha256) {
+        throw 'The update feed private key does not match the public key embedded in the App.'
+    }
+    & $openSsl dgst -sha256 -sign $resolvedFeedSigningKey -out $signaturePath $payloadPath
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to sign the update feed payload.' }
+    & $openSsl dgst -sha256 -verify $publicKeyPath -keyform DER -signature $signaturePath $payloadPath
+    if ($LASTEXITCODE -ne 0) { throw 'Generated update feed signature could not be verified.' }
+
+    # Keep the payload fields at the top level for old App versions and the public
+    # website. New clients trust only signedPayload after signature verification.
+    $manifest = [ordered]@{}
+    foreach ($entry in $payload.GetEnumerator()) { $manifest[$entry.Key] = $entry.Value }
+    $manifest['keyId'] = $feedSigningKeyId
+    $manifest['signedPayload'] = [Convert]::ToBase64String([IO.File]::ReadAllBytes($payloadPath))
+    $manifest['signature'] = [Convert]::ToBase64String([IO.File]::ReadAllBytes($signaturePath))
+    [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 5), $utf8NoBom)
+    [IO.File]::Copy($resolvedApk, $stagedApkPath, $true)
 
     Write-Host "APK: $fileName"
     Write-Host "Signer SHA-256: $expectedSignerSha256"
+    Write-Host "Feed signing key: $feedSigningKeyId ($actualFeedPublicKeySha256)"
     Write-Host "SHA-256: $sha256"
     Write-Host "Site index SHA-256: $siteIndexSha256"
     Write-Host "Size: $size"
@@ -201,13 +237,24 @@ mv '$remoteRoot/public/api/v1/stable.json.next' '$remoteRoot/public/api/v1/stabl
     if ($LASTEXITCODE -ne 0) { throw 'Remote verification or publication failed.' }
 
     $published = Invoke-RestMethod -Uri 'https://updates.paleink.cc/api/v1/stable.json' -Headers @{ 'Cache-Control' = 'no-cache' }
-    if ($published.versionCode -ne $VersionCode -or $published.downloads[0].sha256 -ne $sha256) {
+    $publishedPayload = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($published.signedPayload)) |
+        ConvertFrom-Json
+    if ($published.versionCode -ne $VersionCode -or
+        $published.downloads[0].sha256 -ne $sha256 -or
+        $published.keyId -ne $feedSigningKeyId -or
+        $publishedPayload.versionCode -ne $VersionCode -or
+        $publishedPayload.downloads[0].sha256 -ne $sha256) {
         throw 'Published manifest verification failed.'
     }
     Write-Host "Published and verified: https://updates.paleink.cc/api/v1/stable.json"
 }
 finally {
     if (Test-Path -LiteralPath $tempDirectory) {
-        Remove-Item -LiteralPath $tempDirectory -Recurse -Force
+        $resolvedTempDirectory = (Resolve-Path -LiteralPath $tempDirectory).Path
+        $expectedTempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+        if (-not $resolvedTempDirectory.StartsWith($expectedTempRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to remove unexpected staging path: $resolvedTempDirectory"
+        }
+        [IO.Directory]::Delete($resolvedTempDirectory, $true)
     }
 }

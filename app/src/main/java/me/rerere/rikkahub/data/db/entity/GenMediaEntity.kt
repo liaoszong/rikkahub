@@ -2,9 +2,10 @@ package me.rerere.rikkahub.data.db.entity
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity
+@Entity(indices = [Index(value = ["path"], unique = true)])
 data class GenMediaEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Int = 0,
@@ -12,6 +13,10 @@ data class GenMediaEntity(
     val path: String,
     @ColumnInfo("model_id")
     val modelId: String,
+    @ColumnInfo("model_display_name")
+    val modelDisplayName: String? = null,
+    @ColumnInfo("provider_id")
+    val providerId: String? = null,
     @ColumnInfo("prompt")
     val prompt: String,
     @ColumnInfo("create_at")

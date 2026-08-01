@@ -11,6 +11,8 @@ jobs:
   # 检查过去 24 小时内是否有新提交，没有则跳过构建，避免重复打包
   check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       should_build: ${{ steps.check.outputs.should_build }}
     steps:
@@ -31,26 +33,121 @@ jobs:
             echo "过去 24 小时无新提交，跳过构建"
           fi
 
-  build:
+  verify:
     needs: check
     if: needs.check.outputs.should_build == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
-      contents: write   # 发布 Release 需要写权限
+      actions: read
+      contents: read
+
+    steps:
+      # master push 已由 Quality Gate 验证时，schedule 直接复用同 SHA 的
+      # 成功结论；手动触发始终强制重验。API 查询失败时安全回退为重跑。
+      - name: Find successful quality gate for this commit
+        id: prior-quality
+        if: github.event_name != 'workflow_dispatch'
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.setOutput('reuse', 'false');
+            const response = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'quality-gate.yml',
+              head_sha: context.sha,
+              status: 'completed',
+              per_page: 100,
+            });
+            const run = response.data.workflow_runs.find(item => item.conclusion === 'success');
+            if (run) {
+              core.info(`Reusing successful quality gate: ${run.html_url}`);
+              core.setOutput('reuse', 'true');
+              core.setOutput('run_url', run.html_url);
+            } else {
+              core.info(`No successful quality gate found for ${context.sha}; verification will run.`);
+            }
+
+      - name: Reuse successful quality result
+        if: steps.prior-quality.outputs.reuse == 'true'
+        run: echo "Verified by ${{ steps.prior-quality.outputs.run_url }}"
+
+      - uses: actions/checkout@v4
+        if: github.event_name == 'workflow_dispatch' || steps.prior-quality.outputs.reuse != 'true'
+        with:
+          submodules: recursive # 拉取子模块
+
+      - name: Set up JDK
+        if: github.event_name == 'workflow_dispatch' || steps.prior-quality.outputs.reuse != 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: gradle
+
+      # web 模块的 preBuild 会执行 `pnpm run build` 构建前端，必须准备好 Node + pnpm
+      - name: Set up pnpm
+        if: github.event_name == 'workflow_dispatch' || steps.prior-quality.outputs.reuse != 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Set up Node
+        if: github.event_name == 'workflow_dispatch' || steps.prior-quality.outputs.reuse != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web-ui/pnpm-lock.yaml
+
+      # gradle 的 buildWebUi 任务只跑 build 不跑 install，需在此提前安装依赖
+      - name: Install web-ui dependencies
+        if: github.event_name == 'workflow_dispatch' || steps.prior-quality.outputs.reuse != 'true'
+        working-directory: web-ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Run repository verification gate
+        if: github.event_name == 'workflow_dispatch' || steps.prior-quality.outputs.reuse != 'true'
+        run: ./gradlew verifyForkRelease --stacktrace --no-daemon --configuration-cache
+
+      - name: Upload diagnostic reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-verification-reports
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            **/build/reports/**
+            **/build/test-results/**
+
+  publish:
+    needs: [check, verify]
+    if: >-
+      needs.check.outputs.should_build == 'true' &&
+      needs.verify.result == 'success' &&
+      github.ref == 'refs/heads/master' &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          submodules: recursive # 拉取子模块
+          submodules: recursive
 
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
+          cache: gradle
 
-      # web 模块的 preBuild 会执行 `pnpm run build` 构建前端，必须准备好 Node + pnpm
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -63,34 +160,34 @@ jobs:
           cache: pnpm
           cache-dependency-path: web-ui/pnpm-lock.yaml
 
-      # gradle 的 buildWebUi 任务只跑 build 不跑 install，需在此提前安装依赖
       - name: Install web-ui dependencies
         working-directory: web-ui
         run: pnpm install --frozen-lockfile
 
-      - name: Gradle cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-
       - name: Prepare build files
+        env:
+          KEY_BASE64: ${{ secrets.KEY_BASE64 }}
+          SIGNING_CONFIG: ${{ secrets.SIGNING_CONFIG }}
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: |
-          # 解码base64编码的keystore文件
-          echo "${{ secrets.KEY_BASE64 }}" | base64 -d > app/app.key
+          # Secrets 通过环境变量传入，避免被拼接到 shell 源码后二次解释。
+          printf '%s' "$KEY_BASE64" | base64 -d > app/app.key
 
-          # 写入签名配置到local.properties
-          echo "${{ secrets.SIGNING_CONFIG }}" > local.properties
+          # 原样写入签名配置与 Google Services JSON。
+          printf '%s' "$SIGNING_CONFIG" > local.properties
 
-          # 写入Google Services配置
-          echo '${{ secrets.GOOGLE_SERVICES_JSON }}' > app/google-services.json
+          printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
 
-      - name: Gradle Build
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleRelease
+      - name: Deterministic release build
+        run: ./gradlew :app:assembleRelease -PpaleinkUniversalOnly=true -x :app:uploadCrashlyticsMappingFileRelease --stacktrace --no-daemon
+
+      - name: Verify 16 KB APK alignment
+        shell: pwsh
+        run: ./ops/release/verify-android-16kb.ps1 -ApkPath app/build/outputs/apk/release/app-release.apk -SdkRoot $env:ANDROID_HOME
+
+      - name: Upload Crashlytics symbols
+        continue-on-error: true
+        run: ./gradlew :app:uploadCrashlyticsMappingFileRelease
 
       # 把 APK 直接发布为 Prerelease，用户点链接即可下载单个 apk，无需登录、无需解压
       - name: Publish nightly prerelease

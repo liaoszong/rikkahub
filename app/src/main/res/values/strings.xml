@@ -1336,12 +1336,14 @@
   <string name="update_dialog_retry">Retry</string>
   <string name="update_dialog_checking">Checking for updates…</string>
   <string name="update_dialog_up_to_date">You are up to date</string>
+  <string name="update_dialog_stale">Could not confirm the latest version. Cached update data is shown.</string>
+  <string name="update_dialog_stale_checked_at">Could not refresh updates. Last successful check: %1$s</string>
   <string name="update_dialog_downloading">Downloading update…</string>
   <string name="update_dialog_verifying">Verifying downloaded APK…</string>
   <string name="update_dialog_ready">Update downloaded and verified. Ready to install.</string>
-    <string name="update_dialog_entry">App update</string>
-    <string name="update_dialog_install_permission_title">Allow RikkaHub to install this update?</string>
-    <string name="update_dialog_install_permission_body">Android requires this one-time permission because RikkaHub updates outside an app store. The downloaded update has passed an integrity check; after allowing it once, future updates normally install without this warning.</string>
-    <string name="update_dialog_install_permission_continue">Continue to system settings</string>
-    <string name="update_dialog_install_permission_cancel">Not now</string>
+  <string name="update_dialog_entry">App update</string>
+  <string name="update_dialog_install_permission_title">Allow RikkaHub to install this update?</string>
+  <string name="update_dialog_install_permission_body">Android requires this one-time permission because RikkaHub updates outside an app store. The downloaded update has passed an integrity check; after allowing it once, future updates normally install without this warning.</string>
+  <string name="update_dialog_install_permission_continue">Continue to system settings</string>
+  <string name="update_dialog_install_permission_cancel">Not now</string>
 </resources>

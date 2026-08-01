@@ -51,11 +51,11 @@ data class McpOAuthState(
 
 @Serializable
 data class McpTool(
-    val enable: Boolean = true,
+    val enable: Boolean = false,
     val name: String = "",
     val description: String? = null,
     val inputSchema: InputSchema? = null,
-    val needsApproval: Boolean = false
+    val needsApproval: Boolean = true
 )
 
 @Serializable

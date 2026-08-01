@@ -29,7 +29,7 @@ data class WebServerState(
     val isLoading: Boolean = false,
     val port: Int = 8080,
     val serviceName: String = DEFAULT_SERVICE_NAME,
-    val localhostOnly: Boolean = false,
+    val localhostOnly: Boolean = true,
     val hostname: String? = null,
     val address: String? = null,
     val error: String? = null
@@ -53,7 +53,7 @@ class WebServerManager(
     fun start(
         port: Int = 8080,
         serviceName: String = DEFAULT_SERVICE_NAME,
-        localhostOnly: Boolean = false
+        localhostOnly: Boolean = true
     ) {
         if (server != null) {
             Log.w(TAG, "Server already running")
@@ -61,12 +61,22 @@ class WebServerManager(
         }
 
         appScope.launch {
-            // 仅本机模式绑定回环地址
-            val host = if (localhostOnly) HOST_LOOPBACK else HOST_ALL_INTERFACES
+            val settings = settingsStore.settingsFlow.value
+            val effectiveLocalhostOnly = shouldBindWebServerToLoopback(
+                requestedLocalhostOnly = localhostOnly,
+                jwtEnabled = settings.webServerJwtEnabled,
+                accessPassword = settings.webServerAccessPassword,
+            )
+            if (!localhostOnly && effectiveLocalhostOnly) {
+                Log.w(TAG, "LAN web access requested without authentication; forcing loopback binding")
+                settingsStore.update { current -> current.copy(webServerLocalhostOnly = true) }
+            }
+            // 仅经过认证的局域网模式才允许绑定所有接口。
+            val host = if (effectiveLocalhostOnly) HOST_LOOPBACK else HOST_ALL_INTERFACES
             val baseState = WebServerState(
                 port = port,
                 serviceName = serviceName,
-                localhostOnly = localhostOnly
+                localhostOnly = effectiveLocalhostOnly
             )
             try {
                 _state.value = _state.value.copy(isLoading = true)
@@ -82,7 +92,7 @@ class WebServerManager(
 
                 _state.value = baseState.copy(isRunning = true)
                 // 仅局域网模式注册 mDNS
-                if (!localhostOnly) {
+                if (!effectiveLocalhostOnly) {
                     runCatching {
                         nsdRegistrar.register(
                             port = port,
@@ -150,3 +160,9 @@ class WebServerManager(
         }
     }
 }
+
+internal fun shouldBindWebServerToLoopback(
+    requestedLocalhostOnly: Boolean,
+    jwtEnabled: Boolean,
+    accessPassword: String,
+): Boolean = requestedLocalhostOnly || !jwtEnabled || accessPassword.isBlank()

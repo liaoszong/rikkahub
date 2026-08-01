@@ -21,6 +21,7 @@ import kotlinx.coroutines.launch
 import me.rerere.ai.ui.ImageGenSize
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.findModelById
+import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.db.entity.GenMediaEntity
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.imggen.GeneratedImage
@@ -38,7 +39,10 @@ private fun GenMediaEntity.toGeneratedImage(filesManager: FilesManager): Generat
         prompt = prompt,
         filePath = fullPath,
         timestamp = createAt,
-        model = modelId,
+        model = modelDisplayName ?: modelId,
+        modelId = modelId,
+        modelDisplayName = modelDisplayName ?: modelId,
+        providerId = providerId,
     )
 }
 
@@ -177,6 +181,7 @@ class ImgGenVM(
                 prompt = requestPrompt,
                 modelId = model.id.toString(),
                 modelName = model.displayName,
+                providerId = model.findProvider(settings.providers)?.id?.toString(),
                 size = _size.value,
                 numberOfImages = _numberOfImages.value,
                 referenceImages = referenceImages,

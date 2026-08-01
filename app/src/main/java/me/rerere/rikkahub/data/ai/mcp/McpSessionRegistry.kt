@@ -318,7 +318,14 @@ internal class McpSessionRegistry(
             old.copy(
                 mcpServers = old.mcpServers.map { storedConfig ->
                     if (storedConfig.id != connectionConfig.id) return@map storedConfig
-                    val tools = mergeTools(storedConfig.commonOptions.tools, serverTools)
+                    val discoveredTools = serverTools.map { serverTool ->
+                        McpTool(
+                            name = serverTool.name,
+                            description = serverTool.description,
+                            inputSchema = serverTool.inputSchema.toSchema(),
+                        )
+                    }
+                    val tools = mergeMcpTools(storedConfig.commonOptions.tools, discoveredTools)
                     storedConfig.clone(commonOptions = storedConfig.commonOptions.copy(tools = tools))
                         .also { updatedConfig = it }
                 }
@@ -496,17 +503,17 @@ private fun McpServerConfig.resolvedHeaders(): List<Pair<String, String>> {
     }
 }
 
-private fun mergeTools(storedTools: List<McpTool>, serverTools: List<Tool>): List<McpTool> {
+internal fun mergeMcpTools(storedTools: List<McpTool>, discoveredTools: List<McpTool>): List<McpTool> {
     val toolsByName = storedTools.associateBy { it.name }
-    return serverTools.map { serverTool ->
-        toolsByName[serverTool.name]?.copy(
-            description = serverTool.description,
-            inputSchema = serverTool.inputSchema.toSchema(),
-        ) ?: McpTool(
-            name = serverTool.name,
-            description = serverTool.description,
-            enable = true,
-            inputSchema = serverTool.inputSchema.toSchema(),
+    return discoveredTools.map { discoveredTool ->
+        val storedTool = toolsByName[discoveredTool.name]
+            ?: return@map discoveredTool.copy(enable = false, needsApproval = true)
+        val schemaChanged = storedTool.inputSchema != discoveredTool.inputSchema
+        storedTool.copy(
+            description = discoveredTool.description,
+            inputSchema = discoveredTool.inputSchema,
+            enable = storedTool.enable && !schemaChanged,
+            needsApproval = storedTool.needsApproval || schemaChanged,
         )
     }
 }

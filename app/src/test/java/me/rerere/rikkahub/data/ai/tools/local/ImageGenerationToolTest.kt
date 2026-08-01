@@ -14,14 +14,28 @@ class ImageGenerationToolTest {
     @Test
     fun `chat image state round trips all slot states`() {
         val state = ChatImageGenerationState(
+            requestId = "tool-call-1",
+            attempt = 1,
             prompt = "cat",
             model = "gpt-image-2",
             size = "1024x1024",
             startedAtEpochMillis = 100,
             finishedAtEpochMillis = 200,
             slots = listOf(
-                ChatImageGenerationSlot(0, ChatImageSlotStatus.SUCCEEDED, "file:///one.png"),
-                ChatImageGenerationSlot(1, ChatImageSlotStatus.FAILED, error = "failed"),
+                ChatImageGenerationSlot(
+                    index = 0,
+                    status = ChatImageSlotStatus.SUCCEEDED,
+                    imageUrl = "file:///one.png",
+                    requestId = "tool-call-1:0",
+                    attempt = 1,
+                ),
+                ChatImageGenerationSlot(
+                    index = 1,
+                    status = ChatImageSlotStatus.FAILED,
+                    error = "failed",
+                    requestId = "tool-call-1:1",
+                    attempt = 1,
+                ),
             ),
         )
 

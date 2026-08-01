@@ -42,3 +42,8 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 
 target_link_libraries(termux
         log)
+
+# Keep repository-built native libraries compatible with Android devices that use
+# a 16 KB memory page size, even if the local NDK default changes.
+target_link_options(${CMAKE_PROJECT_NAME} PRIVATE "-Wl,-z,max-page-size=16384")
+target_link_options(termux PRIVATE "-Wl,-z,max-page-size=16384")

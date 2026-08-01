@@ -65,6 +65,8 @@ sealed class ProviderSetting {
         var chatCompletionsPath: String = "/chat/completions",
         var useResponseApi: Boolean = false,
         var includeHistoryReasoning: Boolean = true,
+        /** Stable owner marker for app-managed OpenAI-compatible providers. */
+        var managedBy: String? = null,
     ) : ProviderSetting() {
         override fun addModel(model: Model): ProviderSetting {
             return copy(models = models + model)
@@ -246,4 +248,19 @@ sealed class ProviderSetting {
             )
         }
     }
+}
+
+/** Creates a provider owned by the user, stripping app-managed identity and presentation metadata. */
+fun ProviderSetting.asUserOwnedCopy(
+    id: Uuid = this.id,
+    models: List<Model> = this.models,
+): ProviderSetting {
+    val userCopy = copyProvider(
+        id = id,
+        models = models,
+        builtIn = false,
+        description = {},
+        shortDescription = {},
+    )
+    return if (userCopy is ProviderSetting.OpenAI) userCopy.copy(managedBy = null) else userCopy
 }

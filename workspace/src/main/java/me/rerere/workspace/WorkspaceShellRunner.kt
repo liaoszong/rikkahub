@@ -31,8 +31,11 @@ class HostShellRunner : WorkspaceShellRunner {
         return process.readResult(context.timeoutMillis, context.stdin)
     }
 
-    private fun defaultShell(): String =
-        if (File("/system/bin/sh").exists()) "/system/bin/sh" else "/bin/sh"
+    private fun defaultShell(): String = when {
+        File("/system/bin/sh").isFile -> "/system/bin/sh"
+        File("/bin/sh").isFile -> "/bin/sh"
+        else -> "sh"
+    }
 }
 
 // 单个流保留的最大字符数, 防止命令疯狂输出导致 OOM 或撑爆 LLM 上下文
@@ -47,9 +50,9 @@ fun Process.readResult(timeoutMillis: Long, stdin: ByteArray? = null): Workspace
         if (!finished) {
             destroyForcibly()
         }
-        stdinWriter?.join(1_000)
-        stdout.join(1_000)
-        stderr.join(1_000)
+        stdinWriter?.join(STREAM_DRAIN_TIMEOUT_MILLIS)
+        stdout.join(STREAM_DRAIN_TIMEOUT_MILLIS)
+        stderr.join(STREAM_DRAIN_TIMEOUT_MILLIS)
         return WorkspaceCommandResult(
             exitCode = if (finished) exitValue() else -1,
             stdout = stdout.text(),
@@ -61,12 +64,14 @@ fun Process.readResult(timeoutMillis: Long, stdin: ByteArray? = null): Workspace
         // 调用方线程被中断（如协程取消时的 runInterruptible），杀掉进程避免命令继续执行
         destroyForcibly()
         // 进程被杀后 stdout/stderr 会关闭, 这里 join 回收两个采集线程, 避免每次取消泄漏一对线程
-        stdinWriter?.join(1_000)
-        stdout.join(1_000)
-        stderr.join(1_000)
+        stdinWriter?.join(STREAM_DRAIN_TIMEOUT_MILLIS)
+        stdout.join(STREAM_DRAIN_TIMEOUT_MILLIS)
+        stderr.join(STREAM_DRAIN_TIMEOUT_MILLIS)
         throw e
     }
 }
+
+private const val STREAM_DRAIN_TIMEOUT_MILLIS = 5_000L
 
 private class StreamWriter(
     private val stream: java.io.OutputStream,

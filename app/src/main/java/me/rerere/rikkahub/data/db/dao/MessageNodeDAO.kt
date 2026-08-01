@@ -1,6 +1,7 @@
 package me.rerere.rikkahub.data.db.dao
 
 import androidx.room.Dao
+import androidx.room.ColumnInfo
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
@@ -12,18 +13,14 @@ import me.rerere.rikkahub.data.db.entity.MessageNodeEntity
 
 @Dao
 interface MessageNodeDAO {
-    @Query("SELECT * FROM message_node WHERE conversation_id = :conversationId ORDER BY node_index ASC")
-    suspend fun getNodesOfConversation(conversationId: String): List<MessageNodeEntity>
-
     @Query(
-        "SELECT * FROM message_node WHERE conversation_id = :conversationId " +
-            "ORDER BY node_index ASC LIMIT :limit OFFSET :offset"
+        "SELECT id, select_index FROM message_node " +
+            "WHERE conversation_id = :conversationId ORDER BY node_index ASC"
     )
-    suspend fun getNodesOfConversationPaged(
-        conversationId: String,
-        limit: Int,
-        offset: Int
-    ): List<MessageNodeEntity>
+    suspend fun getNodeHeadersOfConversation(conversationId: String): List<MessageNodeHeader>
+
+    @Query("SELECT substr(messages, :start, :length) FROM message_node WHERE id = :nodeId")
+    suspend fun getMessagesChunk(nodeId: String, start: Int, length: Int): String?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(nodes: List<MessageNodeEntity>)
@@ -47,6 +44,12 @@ interface MessageNodeDAO {
     @RawQuery
     suspend fun getMessageCountPerDayRaw(query: SupportSQLiteQuery): List<MessageDayCount>
 }
+
+data class MessageNodeHeader(
+    val id: String,
+    @ColumnInfo(name = "select_index")
+    val selectIndex: Int,
+)
 
 data class MessageTokenStats(
     val totalMessages: Int = 0,

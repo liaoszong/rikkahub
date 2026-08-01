@@ -22,6 +22,26 @@ class MessageTest {
         assertTrue(running.copy(output = listOf(UIMessagePart.Text("done"))).isExecuted)
     }
 
+    @Test
+    fun `explicit tool state distinguishes running from successful empty output`() {
+        val pending = UIMessagePart.Tool(
+            toolCallId = "call-1",
+            toolName = "empty_tool",
+            input = "{}",
+        )
+        val running = pending.copy(
+            executionState = ToolExecutionState.RUNNING,
+            requestId = "request-1",
+        )
+        val succeeded = running.copy(executionState = ToolExecutionState.SUCCEEDED)
+
+        assertFalse(running.isExecuted)
+        assertFalse(running.canResumeExecution)
+        assertTrue(succeeded.isExecuted)
+        assertTrue(succeeded.output.isEmpty())
+        assertEquals("request-1", succeeded.requestId)
+    }
+
     // ==================== limitContext Tests ====================
 
     @Test

@@ -54,7 +54,6 @@ import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.removeElements
 import me.rerere.ai.util.stringSafe
-import me.rerere.ai.util.toHeaders
 import me.rerere.common.http.await
 import me.rerere.common.http.jsonPrimitiveOrNull
 import okhttp3.HttpUrl
@@ -68,10 +67,134 @@ import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
 import org.apache.commons.text.StringEscapeUtils
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
 private const val TAG = "GoogleProvider"
+
+internal enum class GoogleMediaKind(
+    val topLevelType: String,
+    val safeDefault: String,
+) {
+    AUDIO("audio", "audio/mpeg"),
+    VIDEO("video", "video/mp4"),
+}
+
+internal data class GoogleMediaMimeResolution(
+    val mimeType: String,
+    val diagnostic: String? = null,
+)
+
+internal fun resolveGoogleMediaMimeType(
+    url: String,
+    metadata: JsonObject?,
+    kind: GoogleMediaKind,
+    encodedBase64: String? = null,
+): GoogleMediaMimeResolution {
+    sniffGoogleMediaMimeType(encodedBase64, kind)?.let {
+        return GoogleMediaMimeResolution(it)
+    }
+
+    val metadataMime = listOf("mimeType", "mime", "contentType")
+        .firstNotNullOfOrNull { key -> (metadata?.get(key) as? JsonPrimitive)?.contentOrNull }
+        ?.normalizeMimeType(kind)
+    if (metadataMime != null) return GoogleMediaMimeResolution(metadataMime)
+
+    val dataUrlMime = url.takeIf { it.startsWith("data:", ignoreCase = true) }
+        ?.substringAfter(':')
+        ?.substringBefore(';')
+        ?.normalizeMimeType(kind)
+    if (dataUrlMime != null) return GoogleMediaMimeResolution(dataUrlMime)
+
+    val extension = url.substringBefore('?').substringBefore('#')
+        .substringAfterLast('.', missingDelimiterValue = "")
+        .lowercase()
+    val extensionMime = when (kind) {
+        GoogleMediaKind.AUDIO -> when (extension) {
+            "wav", "wave" -> "audio/wav"
+            "m4a", "mp4" -> "audio/mp4"
+            "mp3" -> "audio/mpeg"
+            "webm" -> "audio/webm"
+            "ogg", "oga" -> "audio/ogg"
+            "aac" -> "audio/aac"
+            "flac" -> "audio/flac"
+            else -> null
+        }
+
+        GoogleMediaKind.VIDEO -> when (extension) {
+            "mp4", "m4v" -> "video/mp4"
+            "webm" -> "video/webm"
+            "mov" -> "video/quicktime"
+            "avi" -> "video/x-msvideo"
+            "mkv" -> "video/x-matroska"
+            else -> null
+        }
+    }
+    if (extensionMime != null) return GoogleMediaMimeResolution(extensionMime)
+
+    return GoogleMediaMimeResolution(
+        mimeType = kind.safeDefault,
+        diagnostic = "Google media MIME unresolved; kind=${kind.name.lowercase()} " +
+            "extension=${extension.ifBlank { "none" }} fallback=${kind.safeDefault}",
+    )
+}
+
+@OptIn(ExperimentalEncodingApi::class)
+private fun sniffGoogleMediaMimeType(encodedBase64: String?, kind: GoogleMediaKind): String? {
+    if (encodedBase64.isNullOrEmpty()) return null
+    val compact = buildString(capacity = 256) {
+        for (character in encodedBase64) {
+            if (!character.isWhitespace()) append(character)
+            if (length == 256) break
+        }
+    }.takeIf(String::isNotEmpty) ?: return null
+    val prefixText = compact.take(256).let { it.take(it.length - (it.length % 4)) }
+    if (prefixText.isEmpty()) return null
+    val bytes = runCatching { Base64.decode(prefixText) }.getOrNull() ?: return null
+
+    fun ascii(offset: Int, length: Int): String? = bytes.takeIf { it.size >= offset + length }
+        ?.let { String(it, offset, length, Charsets.US_ASCII) }
+
+    return when (kind) {
+        GoogleMediaKind.AUDIO -> when {
+            ascii(0, 4) == "RIFF" && ascii(8, 4) == "WAVE" -> "audio/wav"
+            ascii(0, 4) == "fLaC" -> "audio/flac"
+            ascii(0, 4) == "OggS" -> "audio/ogg"
+            ascii(0, 3) == "ID3" -> "audio/mpeg"
+            bytes.size >= 2 && bytes[0] == 0xff.toByte() && (bytes[1].toInt() and 0xe0) == 0xe0 -> {
+                if ((bytes[1].toInt() and 0xf6) == 0xf0) "audio/aac" else "audio/mpeg"
+            }
+            ascii(4, 4) == "ftyp" -> "audio/mp4"
+            bytes.size >= 4 && bytes.copyOfRange(0, 4).contentEquals(
+                byteArrayOf(0x1a, 0x45, 0xdf.toByte(), 0xa3.toByte()),
+            ) -> "audio/webm"
+            else -> null
+        }
+
+        GoogleMediaKind.VIDEO -> when {
+            ascii(0, 4) == "RIFF" && ascii(8, 4) == "AVI " -> "video/x-msvideo"
+            ascii(0, 4) == "OggS" -> "video/ogg"
+            ascii(4, 4) == "ftyp" && ascii(8, 4)?.startsWith("qt") == true -> "video/quicktime"
+            ascii(4, 4) == "ftyp" -> "video/mp4"
+            bytes.size >= 4 && bytes.copyOfRange(0, 4).contentEquals(
+                byteArrayOf(0x1a, 0x45, 0xdf.toByte(), 0xa3.toByte()),
+            ) -> "video/webm"
+            else -> null
+        }
+    }
+}
+
+private fun String.normalizeMimeType(kind: GoogleMediaKind): String? =
+    substringBefore(';').trim().lowercase().takeIf { it.startsWith("${kind.topLevelType}/") }
+
+private fun dataUrlBase64(url: String): String? {
+    if (!url.startsWith("data:", ignoreCase = true)) return null
+    val header = url.substringBefore(',', missingDelimiterValue = "")
+    if (!header.contains(";base64", ignoreCase = true)) return null
+    return url.substringAfter(',', missingDelimiterValue = "").takeIf { it.isNotEmpty() }
+}
 
 class GoogleProvider(private val client: OkHttpClient, context: Context? = null) : Provider<ProviderSetting.Google> {
     private val keyRoulette = if (context != null) KeyRoulette.lru(context) else KeyRoulette.default()
@@ -89,10 +212,11 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
-    private suspend fun transformRequest(
+    internal suspend fun transformRequest(
         providerSetting: ProviderSetting.Google,
         request: Request
     ): Request {
+        if (request.header("Authorization") != null || request.header("x-goog-api-key") != null) return request
         return if (providerSetting.vertexAI && providerSetting.useServiceAccount) {
             val accessToken = serviceAccountTokenProvider.fetchAccessToken(
                 serviceAccountEmail = providerSetting.serviceAccountEmail.trim(),
@@ -102,6 +226,9 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 .addHeader("Authorization", "Bearer $accessToken")
                 .build()
         } else {
+            if (providerSetting.apiKey.isBlank()) {
+                return request
+            }
             val key = keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString())
             if (providerSetting.vertexAI) {
                 request.newBuilder()
@@ -128,7 +255,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             val response = client.newCall(request).await()
             if (response.isSuccessful) {
                 val body = response.body?.string() ?: error("empty body")
-                Log.d(TAG, "listModels: $body")
+                Log.d(TAG, "listModels: response received (${body.length} chars)")
                 val bodyObject = json.parseToJsonElement(body).jsonObject
                 val models = bodyObject["models"]?.jsonArray ?: return@withContext emptyList()
 
@@ -174,7 +301,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             providerSetting = providerSetting,
             request = Request.Builder()
                 .url(url)
-                .headers(params.customHeaders.toHeaders())
+                .headers(providerAuthHeaders(params.customHeaders))
                 .post(
                     json.encodeToString(requestBody).toRequestBody("application/json".toMediaType())
                 )
@@ -230,7 +357,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             providerSetting = providerSetting,
             request = Request.Builder()
                 .url(url)
-                .headers(params.customHeaders.toHeaders())
+                .headers(providerAuthHeaders(params.customHeaders))
                 .post(
                     json.encodeToString(requestBody).toRequestBody("application/json".toMediaType())
                 )
@@ -238,7 +365,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 .build()
         )
 
-        Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
+        Log.i(TAG, "streamText: model=${params.model.modelId} messages=${messages.size}")
 
         val listener = object : EventSourceListener() {
             override fun onEvent(
@@ -247,8 +374,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 type: String?,
                 data: String
             ) {
-                Log.i(TAG, "onEvent: $data")
-
                 try {
                     val jsonData = json.parseToJsonElement(data).jsonObject
                     val reason =
@@ -290,11 +415,10 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     )
 
                     trySend(messageChunk).onFailure { e ->
-                        Log.w(TAG, "onEvent: chunk dropped (${e?.message})")
+                        Log.w(TAG, "onEvent: chunk dropped (${e?.javaClass?.simpleName})")
                     }
                 } catch (e: Exception) {
-                    e.printStackTrace()
-                    println("[onEvent] 解析错误: $data")
+                    Log.w(TAG, "onEvent: parse failed (${e.javaClass.simpleName})")
                 }
             }
 
@@ -305,15 +429,13 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             ) {
                 var exception = t
 
-                t?.printStackTrace()
-                println("[onFailure] 发生错误: ${t?.message}")
+                Log.e(TAG, "onFailure: ${t?.javaClass?.simpleName ?: "HttpError"} status=${response?.code}")
 
                 try {
                     if (t == null && response != null) {
                         val bodyStr = response.body.stringSafe()
                         if (!bodyStr.isNullOrEmpty()) {
                             val bodyElement = json.parseToJsonElement(bodyStr)
-                            println(bodyElement)
                             if (bodyElement is JsonObject) {
                                 exception = Exception(
                                     bodyElement["error"]?.jsonObject?.get("message")?.jsonPrimitive?.content
@@ -325,7 +447,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                         }
                     }
                 } catch (e: Throwable) {
-                    e.printStackTrace()
+                    Log.w(TAG, "onFailure: error response parse failed (${e.javaClass.simpleName})")
                     exception = e
                 } finally {
                     close(exception ?: Exception("Stream failed"))
@@ -333,7 +455,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             }
 
             override fun onClosed(eventSource: EventSource) {
-                println("[onClosed] 连接已关闭")
                 close()
             }
         }
@@ -342,7 +463,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 .newEventSource(request, listener)
 
         awaitClose {
-            println("[awaitClose] 关闭eventSource")
             eventSource.cancel()
         }
         // trySend 在缓冲满时会静默丢弃 delta，导致回复中间缺字 (#1295)，因此缓冲必须无界
@@ -361,7 +481,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                         put(
                             "text",
                             systemMessage.parts.filterIsInstance<UIMessagePart.Text>()
-                                .joinToString { it.text })
+                                .joinToString(separator = "\n\n") { it.text })
                     })
                 }
             })
@@ -419,9 +539,10 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             buildContents(messages)
         )
 
-        // Tools
-        if (params.tools.isNotEmpty() && params.model.abilities.contains(ModelAbility.TOOL)) {
-            put("tools", buildJsonArray {
+        // Function declarations and provider built-ins share Gemini's single `tools` array.
+        // Building it once prevents a later built-in-tools write from silently replacing functions.
+        val tools = buildJsonArray {
+            if (params.tools.isNotEmpty() && params.model.abilities.contains(ModelAbility.TOOL)) {
                 add(buildJsonObject {
                     put("functionDeclarations", buildJsonArray {
                         params.tools.forEach { tool ->
@@ -446,30 +567,30 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                         }
                     })
                 })
-            })
-        }
-        // Model BuiltIn Tools
-        // 目前不能和工具调用兼容
-        if (params.model.tools.isNotEmpty()) {
-            put("tools", buildJsonArray {
-                params.model.tools.forEach { builtInTool ->
-                    when (builtInTool) {
-                        BuiltInTools.Search -> {
-                            add(buildJsonObject {
-                                put("googleSearch", buildJsonObject {})
-                            })
-                        }
-
-                        BuiltInTools.UrlContext -> {
-                            add(buildJsonObject {
-                                put("urlContext", buildJsonObject {})
-                            })
-                        }
-
-                        else -> {}
+            }
+            params.model.tools.forEach { builtInTool ->
+                when (builtInTool) {
+                    BuiltInTools.Search -> {
+                        add(buildJsonObject {
+                            put("googleSearch", buildJsonObject {})
+                        })
                     }
+
+                    BuiltInTools.UrlContext -> {
+                        add(buildJsonObject {
+                            put("urlContext", buildJsonObject {})
+                        })
+                    }
+
+                    BuiltInTools.ImageGeneration -> throw IllegalArgumentException(
+                        "Gemini generateContent does not support image_generation as a tool declaration; " +
+                            "use IMAGE output modality instead"
+                    )
                 }
-            })
+            }
+        }
+        if (tools.isNotEmpty()) {
+            put("tools", tools)
         }
 
         // Safety Settings
@@ -525,7 +646,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         } ?: emptyList()
 
         val groundingMetadata = message["groundingMetadata"]?.jsonObject
-        Log.i(TAG, "parseMessage: $groundingMetadata")
         val annotations = parseSearchGroundingMetadata(groundingMetadata)
 
         return UIMessage(
@@ -547,7 +667,6 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 url = uri
             )
         }
-        Log.i(TAG, "parseSearchGroundingMetadata: $chunks")
         return chunks
     }
 
@@ -686,10 +805,12 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
 
         is UIMessagePart.Video -> {
-            encodeBase64(false).getOrNull()?.let { base64Data ->
+            googleMediaBase64()?.let { base64Data ->
+                val mime = resolveGoogleMediaMimeType(url, metadata, GoogleMediaKind.VIDEO, base64Data)
+                mime.diagnostic?.let { Log.w(TAG, it) }
                 buildJsonObject {
                     put("inlineData", buildJsonObject {
-                        put("mimeType", "video/mp4")
+                        put("mimeType", mime.mimeType)
                         put("data", base64Data)
                     })
                 }
@@ -697,10 +818,12 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
 
         is UIMessagePart.Audio -> {
-            encodeBase64(false).getOrNull()?.let { base64Data ->
+            googleMediaBase64()?.let { base64Data ->
+                val mime = resolveGoogleMediaMimeType(url, metadata, GoogleMediaKind.AUDIO, base64Data)
+                mime.diagnostic?.let { Log.w(TAG, it) }
                 buildJsonObject {
                     put("inlineData", buildJsonObject {
-                        put("mimeType", "audio/mp3")
+                        put("mimeType", mime.mimeType)
                         put("data", base64Data)
                     })
                 }
@@ -709,6 +832,12 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
         else -> null
     }
+
+    private fun UIMessagePart.Video.googleMediaBase64(): String? =
+        dataUrlBase64(url) ?: encodeBase64(false).getOrNull()
+
+    private fun UIMessagePart.Audio.googleMediaBase64(): String? =
+        dataUrlBase64(url) ?: encodeBase64(false).getOrNull()
 
     private fun UIMessagePart.Tool.toFunctionCallPart() = buildJsonObject {
         put("functionCall", buildJsonObject {

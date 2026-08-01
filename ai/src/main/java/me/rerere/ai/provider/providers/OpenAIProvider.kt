@@ -31,11 +31,11 @@ import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
-import me.rerere.ai.util.toHeaders
 import me.rerere.common.http.await
 import me.rerere.common.http.getByKey
 import okhttp3.MultipartBody
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
@@ -58,10 +58,14 @@ class OpenAIProvider(
 
     override suspend fun listModels(providerSetting: ProviderSetting.OpenAI): List<Model> =
         withContext(Dispatchers.IO) {
-            val key = keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString())
             val request = Request.Builder()
                 .url("${providerSetting.baseUrl}/models")
-                .addHeader("Authorization", "Bearer $key")
+                .headers(
+                    providerAuthHeaders(
+                        emptyList(),
+                        "Authorization" to providerSetting.bearerToken(),
+                    )
+                )
                 .get()
                 .build()
 
@@ -86,7 +90,6 @@ class OpenAIProvider(
         }
 
     override suspend fun getBalance(providerSetting: ProviderSetting.OpenAI): String = withContext(Dispatchers.IO) {
-        val key = keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString())
         val url = if (providerSetting.balanceOption.apiPath.startsWith("http")) {
             providerSetting.balanceOption.apiPath
         } else {
@@ -94,7 +97,12 @@ class OpenAIProvider(
         }
         val request = Request.Builder()
             .url(url)
-            .addHeader("Authorization", "Bearer $key")
+            .headers(
+                providerAuthHeaders(
+                    emptyList(),
+                    "Authorization" to providerSetting.bearerToken(),
+                )
+            )
             .get()
             .build()
         val response = client.newCall(request).await()
@@ -155,7 +163,6 @@ class OpenAIProvider(
     ): EmbeddingGenerationResult = withContext(Dispatchers.IO) {
         require(params.input.isNotEmpty()) { "Embedding input cannot be empty" }
 
-        val key = keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString())
         val requestBody = json.encodeToString(
             buildJsonObject {
                 put("model", params.model.modelId)
@@ -172,8 +179,12 @@ class OpenAIProvider(
 
         val request = Request.Builder()
             .url("${providerSetting.baseUrl}/embeddings")
-            .headers(params.customHeaders.toHeaders())
-            .addHeader("Authorization", "Bearer $key")
+            .headers(
+                providerAuthHeaders(
+                    params.customHeaders,
+                    "Authorization" to providerSetting.bearerToken(),
+                )
+            )
             .addHeader("Content-Type", "application/json")
             .post(requestBody.toRequestBody("application/json".toMediaType()))
             .build()
@@ -208,8 +219,6 @@ class OpenAIProvider(
             "Expected OpenAI provider setting"
         }
 
-        val key = keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString())
-
         val requestBody = json.encodeToString(
             buildJsonObject {
                 put("model", params.model.modelId)
@@ -226,12 +235,16 @@ class OpenAIProvider(
                 .mergeCustomBody(params.customBody)
         )
 
-        Log.i(TAG, "generateImage: $requestBody")
+        Log.i(TAG, "generateImage: model=${params.model.modelId}")
 
         val request = Request.Builder()
             .url(providerSetting.imageApiUrl("/images/generations"))
-            .headers(params.customHeaders.toHeaders())
-            .addHeader("Authorization", "Bearer $key")
+            .headers(
+                providerAuthHeaders(
+                    params.customHeaders,
+                    "Authorization" to providerSetting.bearerToken(),
+                )
+            )
             .addHeader("Content-Type", "application/json")
             .post(requestBody.toRequestBody("application/json".toMediaType()))
             .configureReferHeaders(providerSetting.baseUrl)
@@ -242,7 +255,10 @@ class OpenAIProvider(
             if (!response.isSuccessful) {
                 error("Failed to generate image: ${response.code} ${response.body?.string()}")
             }
-            parseImageResponse(response.body.string())
+            parseImageResponse(
+                bodyStr = response.body.string(),
+                allowLocalDevelopment = GeneratedImageDownloadPolicy.isLocalDevelopmentBaseUrl(providerSetting.baseUrl),
+            )
         }
 
         items.forEach { emit(it) }
@@ -259,7 +275,6 @@ class OpenAIProvider(
             "At least one image is required"
         }
 
-        val key = keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString())
         val bodyBuilder = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
             .addFormDataPart("model", params.model.modelId)
@@ -295,8 +310,12 @@ class OpenAIProvider(
 
         val request = Request.Builder()
             .url(providerSetting.imageApiUrl("/images/edits"))
-            .headers(params.customHeaders.toHeaders())
-            .addHeader("Authorization", "Bearer $key")
+            .headers(
+                providerAuthHeaders(
+                    params.customHeaders,
+                    "Authorization" to providerSetting.bearerToken(),
+                )
+            )
             .post(bodyBuilder.build())
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
@@ -306,13 +325,19 @@ class OpenAIProvider(
             if (!response.isSuccessful) {
                 error("Failed to edit image: ${response.code} ${response.body?.string()}")
             }
-            parseImageResponse(response.body.string())
+            parseImageResponse(
+                bodyStr = response.body.string(),
+                allowLocalDevelopment = GeneratedImageDownloadPolicy.isLocalDevelopmentBaseUrl(providerSetting.baseUrl),
+            )
         }
 
         items.forEach { emit(it) }
     }
 
-    private suspend fun parseImageResponse(bodyStr: String): List<ImageGenerationItem> {
+    private suspend fun parseImageResponse(
+        bodyStr: String,
+        allowLocalDevelopment: Boolean,
+    ): List<ImageGenerationItem> {
         val body = json.parseToJsonElement(bodyStr).jsonObject
         val defaultFormat = body["output_format"]?.jsonPrimitive?.contentOrNull ?: "png"
         val data = body["data"]?.jsonArray ?: error("No data in image response")
@@ -328,10 +353,14 @@ class OpenAIProvider(
             } else {
                 val url = obj["url"]?.jsonPrimitive?.contentOrNull
                     ?: error("No b64_json or url in image response")
-                downloadImageAsBase64(url)
+                downloadImageAsBase64(url, allowLocalDevelopment)
             }
         }
     }
+
+    private fun ProviderSetting.OpenAI.bearerToken(): String? = apiKey
+        .takeIf(String::isNotBlank)
+        ?.let { "Bearer ${keyRoulette.next(it, id.toString())}" }
 
     private fun ProviderSetting.OpenAI.imageApiUrl(path: String): String {
         val normalizedBase = baseUrl.trimEnd('/')
@@ -345,25 +374,58 @@ class OpenAIProvider(
     }
 
     @OptIn(ExperimentalEncodingApi::class)
-    private suspend fun downloadImageAsBase64(url: String): ImageGenerationItem {
-        val request = Request.Builder()
-            .url(url)
-            .get()
-            .build()
+    private suspend fun downloadImageAsBase64(
+        url: String,
+        allowLocalDevelopment: Boolean,
+    ): ImageGenerationItem {
+        var currentUrl = GeneratedImageDownloadPolicy.validateUrl(url, allowLocalDevelopment)
+        repeat(GeneratedImageDownloadPolicy.MAX_REDIRECTS + 1) { redirectCount ->
+            val addresses = client.dns.lookup(currentUrl.host)
+            GeneratedImageDownloadPolicy.validateResolvedAddresses(
+                url = currentUrl,
+                addresses = addresses,
+                allowLocalDevelopment = allowLocalDevelopment,
+            )
+            val pinnedClient = client.newBuilder()
+                .followRedirects(false)
+                .followSslRedirects(false)
+                .connectionPool(ConnectionPool())
+                .dns { hostname ->
+                    if (hostname.equals(currentUrl.host, ignoreCase = true)) addresses else client.dns.lookup(hostname)
+                }
+                .build()
+            val request = Request.Builder().url(currentUrl).get().build()
 
-        val response = client.newCall(request).await()
-        if (!response.isSuccessful) {
-            error("Failed to download generated image: ${response.code} ${response.body.string()}")
+            pinnedClient.newCall(request).await().use { response ->
+                if (response.code in 300..399) {
+                    require(redirectCount < GeneratedImageDownloadPolicy.MAX_REDIRECTS) {
+                        "Generated image download redirected too many times"
+                    }
+                    val location = response.header("Location")
+                        ?: error("Generated image redirect has no Location")
+                    val redirectedUrl = currentUrl.resolve(location)
+                        ?: error("Generated image redirect URL is invalid")
+                    currentUrl = GeneratedImageDownloadPolicy.validateUrl(
+                        redirectedUrl.toString(),
+                        allowLocalDevelopment,
+                    )
+                    return@use
+                }
+                if (!response.isSuccessful) {
+                    error("Failed to download generated image: HTTP ${response.code}")
+                }
+
+                val body = response.body
+                val mimeType = GeneratedImageDownloadPolicy.validateMimeType(body.contentType()?.toString())
+                GeneratedImageDownloadPolicy.validateContentLength(body.contentLength())
+                val imageBytes = body.byteStream().use(GeneratedImageDownloadPolicy::readLimited)
+                return ImageGenerationItem(
+                    data = Base64.encode(imageBytes),
+                    mimeType = mimeType,
+                )
+            }
         }
-
-        val body = response.body
-        val mimeType = body.contentType()?.toString() ?: "image/png"
-        val base64 = Base64.encode(body.bytes())
-
-        return ImageGenerationItem(
-            data = base64,
-            mimeType = mimeType
-        )
+        error("Generated image download failed")
     }
 
     private fun File.imageMediaType(): String = when (extension.lowercase()) {

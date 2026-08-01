@@ -488,6 +488,7 @@ data class SyncResult(
 
 object FileFolders {
     const val UPLOAD = "upload"
+    const val CHAT_GENERATED_IMAGES = "chat_generated_images"
     const val SKILLS = "skills"
     const val FONTS = "fonts"
     const val TOOL_OUTPUTS = "tool_outputs"

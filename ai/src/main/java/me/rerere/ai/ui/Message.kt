@@ -386,6 +386,14 @@ fun ToolApprovalState.canResumeToolExecution(): Boolean {
 }
 
 @Serializable
+enum class ToolExecutionState {
+    RUNNING,
+    SUCCEEDED,
+    FAILED,
+    INTERRUPTED,
+}
+
+@Serializable
 sealed class UIMessagePart {
     abstract val metadata: JsonObject?
 
@@ -483,16 +491,25 @@ sealed class UIMessagePart {
         val output: List<UIMessagePart> = emptyList(),
         val progress: List<UIMessagePart> = emptyList(),
         val approvalState: ToolApprovalState = ToolApprovalState.Auto,
-        override var metadata: JsonObject? = null
+        override var metadata: JsonObject? = null,
+        val executionState: ToolExecutionState? = null,
+        val requestId: String = "",
     ) : UIMessagePart() {
-        /** Whether the tool has been executed (has output) */
-        val isExecuted: Boolean get() = output.isNotEmpty()
+        /** Terminal state is explicit so a successful empty result is not executed again. */
+        val isExecuted: Boolean
+            get() = executionState == ToolExecutionState.SUCCEEDED ||
+                executionState == ToolExecutionState.FAILED ||
+                executionState == ToolExecutionState.INTERRUPTED ||
+                output.isNotEmpty()
+
+        val isRunning: Boolean get() = executionState == ToolExecutionState.RUNNING
 
         /** Whether the tool is pending user approval */
         val isPending: Boolean get() = approvalState is ToolApprovalState.Pending
 
         /** Whether generation can resume and handle this tool immediately */
-        val canResumeExecution: Boolean get() = !isExecuted && approvalState.canResumeToolExecution()
+        val canResumeExecution: Boolean
+            get() = executionState == null && !isExecuted && approvalState.canResumeToolExecution()
 
         /** Parse input string as JsonElement */
         fun inputAsJson(): JsonElement = runCatching {
@@ -508,6 +525,8 @@ sealed class UIMessagePart {
                 progress = if (other.progress.isNotEmpty()) other.progress else progress,
                 approvalState = approvalState,
                 metadata = if (other.metadata != null) other.metadata else metadata,
+                executionState = other.executionState ?: executionState,
+                requestId = other.requestId.ifBlank { requestId },
             )
         }
     }
@@ -574,7 +593,7 @@ fun UIMessage.finishPendingTools(
     transform: (UIMessagePart.Tool) -> UIMessagePart.Tool
 ): UIMessage {
     val updatedParts = parts.map { part ->
-        if (part is UIMessagePart.Tool && !part.isExecuted) {
+        if (part is UIMessagePart.Tool && (!part.isExecuted || part.isRunning)) {
             transform(part)
         } else {
             part

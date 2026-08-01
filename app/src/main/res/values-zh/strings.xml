@@ -1320,6 +1320,8 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="update_dialog_retry">重试</string>
   <string name="update_dialog_checking">正在检查更新…</string>
   <string name="update_dialog_up_to_date">当前已是最新版本</string>
+  <string name="update_dialog_stale">暂时无法确认是否为最新版本，当前显示的是已验证缓存。</string>
+  <string name="update_dialog_stale_checked_at">更新检查失败，上次成功检查：%1$s</string>
   <string name="update_dialog_downloading">正在下载更新…</string>
   <string name="update_dialog_verifying">正在校验安装包…</string>
   <string name="update_dialog_ready">更新已下载并通过校验，可以安装。</string>

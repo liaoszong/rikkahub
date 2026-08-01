@@ -99,6 +99,7 @@ import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
+import me.rerere.ai.provider.asUserOwnedCopy
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.R
@@ -1492,11 +1493,9 @@ private fun ProviderOverrideSettings(
         } else {
             Button(
                 onClick = {
-                    editingProvider = parentProvider?.copyProvider(
+                    editingProvider = parentProvider?.asUserOwnedCopy(
                         id = Uuid.random(),
-                        builtIn = false,
                         models = emptyList(), // 这里必须设置为空，不然会导致循环依赖JSON
-                        description = {},
                     )
                     showProviderConfig = true
                 },

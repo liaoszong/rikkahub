@@ -4,6 +4,7 @@ param(
     [string]$IdentityFile = "$env:USERPROFILE\.ssh\rikkahub-updates-ed25519",
     [string]$DeployTarget = 'rikkahub-deploy@updates.paleink.cc',
     [string]$GitRemote = 'origin',
+    [switch]$SkipSymbolsUpload,
     [switch]$DryRun
 )
 
@@ -116,14 +117,29 @@ Invoke-Checked {
         $DeployTarget 'test -w /srv/rikkahub-updates/staging && test -w /srv/rikkahub-updates/public && test -w /srv/rikkahub-updates/public/api/v1'
 } 'The restricted update-site deployment account is not ready.'
 
-$status = Invoke-CapturedChecked { git status --short } 'Unable to inspect the Git working tree.'
+$status = @(Invoke-CapturedChecked {
+    git status --porcelain=v1 --untracked-files=all
+} 'Unable to inspect the Git working tree.')
+$normalizedNotesPath = $NotesPath.Replace('\', '/').TrimStart('./')
+$unexpectedChanges = @($status | ForEach-Object {
+    $line = $_.ToString()
+    if ($line.Length -lt 4) { return }
+    $path = $line.Substring(3)
+    if ($path.Contains(' -> ')) { $path = ($path -split ' -> ', 2)[1] }
+    $path = $path.Trim('"').Replace('\', '/')
+    if ($path -ne $normalizedNotesPath) { $line }
+})
+if ($unexpectedChanges.Count -gt 0) {
+    $details = ($unexpectedChanges | ForEach-Object { "  $_" }) -join "`n"
+    throw "Release requires a clean tree except for $NotesPath. Unexpected changes:`n$details"
+}
 Write-Host ''
 Write-Host "Release plan: $currentVersion ($currentCode) -> $nextVersion ($nextCode)" -ForegroundColor Cyan
 Write-Host "GitHub: https://github.com/$repoSlug/releases/tag/$tag"
 Write-Host "Update site: https://updates.paleink.cc/"
 Write-Host ''
-Write-Host 'Files that will be included:' -ForegroundColor Yellow
-if ($status) { $status | ForEach-Object { Write-Host "  $_" } } else { Write-Host '  (release metadata only)' }
+Write-Host 'Allowed pre-release changes:' -ForegroundColor Yellow
+if ($status.Count -gt 0) { $status | ForEach-Object { Write-Host "  $_" } } else { Write-Host '  (none)' }
 
 if ($DryRun) {
     Write-Host ''
@@ -146,14 +162,19 @@ if (-not $sdkRoot -or -not (Test-Path -LiteralPath $sdkRoot -PathType Container)
 $env:ANDROID_SDK_ROOT = $sdkRoot
 
 Write-Host ''
-Write-Host 'Building and testing once...' -ForegroundColor Cyan
+Write-Host 'Running deterministic release gate...' -ForegroundColor Cyan
 Invoke-Checked {
-    & '.\gradlew.bat' ':app:testDebugUnitTest' ':app:assembleRelease' `
+    & '.\gradlew.bat' 'verifyForkRelease' ':app:assembleRelease' `
         '-PpaleinkUniversalOnly=true' `
+        '-x' ':app:uploadCrashlyticsMappingFileRelease' `
         '--parallel' '--configuration-cache'
-} 'Gradle tests or release build failed.'
+} 'Full tests, Lint, or deterministic release build failed.'
 
 $apk = (Resolve-Path 'app/build/outputs/apk/release/app-release.apk').Path
+Invoke-Checked {
+    & 'ops/release/verify-android-16kb.ps1' -ApkPath $apk -SdkRoot $sdkRoot
+} 'Release APK failed the 16 KB page-alignment gate.'
+
 $releaseTemp = Join-Path ([IO.Path]::GetTempPath()) "rikkahub-github-$nextCode"
 $releaseAsset = Join-Path $releaseTemp "rikkahub-$nextVersion-universal.apk"
 New-Item -ItemType Directory -Path $releaseTemp -Force | Out-Null
@@ -162,7 +183,19 @@ Copy-Item -LiteralPath $apk -Destination $releaseAsset -Force
 try {
     Write-Host ''
     Write-Host 'Committing and tagging the verified source...' -ForegroundColor Cyan
-    Invoke-Checked { git add -A } 'Failed to stage release files.'
+    Invoke-Checked {
+        git add -- $buildFile $archiveNotesPath $NotesPath
+    } 'Failed to stage the release allowlist.'
+    $allowedStagePaths = @($buildFile, $archiveNotesPath, $normalizedNotesPath) |
+        ForEach-Object { $_.Replace('\', '/') } |
+        Sort-Object -Unique
+    $stagedPaths = @(Invoke-CapturedChecked {
+        git diff --cached --name-only
+    } 'Unable to inspect staged release files.')
+    $unexpectedStaged = @($stagedPaths | Where-Object { $_.ToString().Replace('\', '/') -notin $allowedStagePaths })
+    if ($unexpectedStaged.Count -gt 0) {
+        throw "Unexpected files reached the release index: $($unexpectedStaged -join ', ')"
+    }
     Invoke-Checked { git commit -m "release: $tag" } 'Failed to create the release commit.'
     Invoke-Checked { git tag -a $tag -m "PaleInk RikkaHub $nextVersion" } 'Failed to create the release tag.'
     Invoke-Checked { git push $GitRemote $branch } 'Failed to push the release commit.'
@@ -184,6 +217,18 @@ try {
     Invoke-Checked {
         gh release edit $tag --repo $repoSlug --draft=false
     } 'The update site is live, but the GitHub Release could not be promoted from draft.'
+
+    if (-not $SkipSymbolsUpload) {
+        Write-Host ''
+        Write-Host 'Uploading Crashlytics symbols as an independent step...' -ForegroundColor Cyan
+        try {
+            Invoke-Checked {
+                & '.\gradlew.bat' ':app:uploadCrashlyticsMappingFileRelease' '--configuration-cache'
+            } 'Crashlytics symbol upload failed.'
+        } catch {
+            Write-Warning "Release artifacts are already valid; symbols can be retried later. $($_.Exception.Message)"
+        }
+    }
 
     $published = Invoke-RestMethod -Uri 'https://updates.paleink.cc/api/v1/stable.json' `
         -Headers @{ 'Cache-Control' = 'no-cache' } -TimeoutSec 15

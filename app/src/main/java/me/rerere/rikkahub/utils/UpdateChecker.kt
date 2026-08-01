@@ -3,6 +3,7 @@ package me.rerere.rikkahub.utils
 import android.app.DownloadManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -10,6 +11,7 @@ import android.provider.Settings
 import androidx.core.net.toUri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -23,13 +25,19 @@ import me.rerere.common.http.await
 import me.rerere.rikkahub.BuildConfig
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.File
+import java.io.IOException
 import java.security.MessageDigest
+import java.net.URI
 
 private const val APK_MIME = "application/vnd.android.package-archive"
 private const val UPDATE_PREFERENCES = "app_update"
 private const val PREF_IGNORED_VERSION = "ignored_version"
 private const val PREF_DOWNLOAD_ID = "download_id"
 private const val PREF_DOWNLOAD_CONTEXT = "download_context"
+private const val PREF_LAST_KNOWN_GOOD_FEED = "last_known_good_feed"
+private const val PREF_LAST_RESOLVED_DOWNLOAD_URL = "last_resolved_download_url"
+private const val PREF_LAST_SUCCESSFUL_CHECK_AT = "last_successful_check_at"
 private const val NO_DOWNLOAD = -1L
 
 class UpdateChecker(
@@ -43,6 +51,7 @@ class UpdateChecker(
     private val _state = MutableStateFlow<AppUpdateState>(AppUpdateState.Checking)
     val state: StateFlow<AppUpdateState> = _state.asStateFlow()
     private var downloadObserver: Job? = null
+    private val checkGate = UpdateCheckSingleFlight()
 
     init {
         appScope.launch {
@@ -72,21 +81,39 @@ class UpdateChecker(
     }
 
     fun checkUpdate(silent: Boolean = false) {
+        if (!checkGate.tryEnter()) return
         if (!silent) _state.value = AppUpdateState.Checking
-        appScope.launch {
-            runCatching { fetchUpdateInfo() }
-                .onSuccess { info ->
+        appScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                runCatching { fetchUpdateResult() }
+                .onSuccess { result ->
+                    val info = result.info
                     val ignored = preferences.getString(PREF_IGNORED_VERSION, null)
-                    _state.value = if (isNewer(info) && ignored != info.version) {
-                        AppUpdateState.Available(info)
-                    } else {
-                        AppUpdateState.UpToDate
+                    _state.value = when {
+                        result.stale -> AppUpdateState.Stale(
+                            info = info.takeIf { isNewer(it) && ignored != it.version },
+                            lastSuccessfulCheckAt = result.lastSuccessfulCheckAt,
+                            message = result.warning ?: "Update check used cached data",
+                        )
+                        isNewer(info) && ignored != info.version -> AppUpdateState.Available(info)
+                        else -> AppUpdateState.UpToDate
                     }
                 }
                 .onFailure { error ->
-                    if (!silent) _state.value = AppUpdateState.Failed(error.message ?: "Update check failed")
-                    else _state.value = AppUpdateState.UpToDate
+                    val lastSuccess = preferences.getLong(PREF_LAST_SUCCESSFUL_CHECK_AT, 0L).takeIf { it > 0 }
+                    _state.value = if (lastSuccess != null) {
+                        AppUpdateState.Stale(
+                            info = null,
+                            lastSuccessfulCheckAt = lastSuccess,
+                            message = error.message ?: "Update check failed",
+                        )
+                    } else {
+                        AppUpdateState.Failed(error.message ?: "Update check failed")
+                    }
                 }
+            } finally {
+                checkGate.leave()
+            }
         }
     }
 
@@ -100,10 +127,21 @@ class UpdateChecker(
             _state.value = AppUpdateState.Failed("No compatible APK found", info)
             return
         }
-        context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-            ?.resolve("updates/${download.name}")
-            ?.takeIf { it.isFile }
-            ?.delete()
+        _state.value = AppUpdateState.Verifying(info, download)
+        appScope.launch(Dispatchers.IO) {
+            runCatching { resolveDownload(download) }
+                .onSuccess { resolved -> enqueueDownload(info, resolved) }
+                .onFailure { error ->
+                    _state.value = AppUpdateState.Failed(
+                        error.message ?: "Unable to validate update download location",
+                        info,
+                    )
+                }
+        }
+    }
+
+    private fun enqueueDownload(info: UpdateInfo, download: UpdateDownload) {
+        downloadedApkFile(download)?.takeIf { it.isFile }?.delete()
         val request = DownloadManager.Request(download.url.toUri()).apply {
             setTitle(download.name)
             setDescription("RikkaHub ${info.version}")
@@ -135,6 +173,15 @@ class UpdateChecker(
         val id = preferences.getLong(PREF_DOWNLOAD_ID, NO_DOWNLOAD)
         if (id == NO_DOWNLOAD) return
         if (!canInstallUpdates()) return
+        val downloadContext = preferences.getString(PREF_DOWNLOAD_CONTEXT, null)
+            ?.let { runCatching { json.decodeFromString<DownloadContext>(it) }.getOrNull() }
+            ?: return
+        val apkFile = downloadedApkFile(downloadContext.download) ?: return
+        runCatching { verifyDownloadedApk(apkFile, downloadContext.info) }
+            .onFailure {
+                _state.value = AppUpdateState.Failed(it.message ?: "Downloaded APK verification failed", downloadContext.info)
+                return
+            }
         val uri = downloadManager.getUriForDownloadedFile(id) ?: return
         runCatching {
             context.startActivity(
@@ -160,18 +207,61 @@ class UpdateChecker(
         false
     }
 
-    internal suspend fun fetchUpdateInfo(): UpdateInfo = withContext(Dispatchers.IO) {
-        client.newCall(
-            Request.Builder()
-                .url(BuildConfig.UPDATE_FEED_URL)
-                .get()
-                .addHeader("User-Agent", "RikkaHub ${BuildConfig.VERSION_NAME} #${BuildConfig.VERSION_CODE}")
-                .build()
-        ).await().use { response ->
-            check(response.isSuccessful) { "Update server returned HTTP ${response.code}" }
-            json.decodeFromString<UpdateInfo>(response.body.string()).also { info ->
-                UpdatePolicy.validate(info, BuildConfig.UPDATE_SOURCE)
+    internal suspend fun fetchUpdateInfo(): UpdateInfo = fetchUpdateResult().info
+
+    private suspend fun fetchUpdateResult(): UpdateFetchResult = withContext(Dispatchers.IO) {
+        try {
+            client.newCall(
+                Request.Builder()
+                    .url(BuildConfig.UPDATE_FEED_URL)
+                    .get()
+                    .addHeader("User-Agent", "RikkaHub ${BuildConfig.VERSION_NAME} #${BuildConfig.VERSION_CODE}")
+                    .build()
+            ).await().use { response ->
+                check(response.isSuccessful) { "Update server returned HTTP ${response.code}" }
+                UpdatePolicy.validateResolvedUrl(
+                    requestedUrl = BuildConfig.UPDATE_FEED_URL,
+                    resolvedUrl = response.request.url.toString(),
+                    trustedRootUrl = BuildConfig.UPDATE_FEED_URL,
+                )
+                val envelope = response.body.string()
+                val info = verifyFeed(envelope).also {
+                    check(preferences.edit().putString(PREF_LAST_KNOWN_GOOD_FEED, envelope).commit()) {
+                        "Verified update feed could not be persisted"
+                    }
+                }
+                val checkedAt = System.currentTimeMillis()
+                check(preferences.edit().putLong(PREF_LAST_SUCCESSFUL_CHECK_AT, checkedAt).commit()) {
+                    "Update check timestamp could not be persisted"
+                }
+                UpdateFetchResult(info, stale = false, lastSuccessfulCheckAt = checkedAt)
             }
+        } catch (error: IOException) {
+            val cached = preferences.getString(PREF_LAST_KNOWN_GOOD_FEED, null) ?: throw error
+            UpdateFetchResult(
+                info = verifyFeed(cached),
+                stale = true,
+                lastSuccessfulCheckAt = preferences.getLong(PREF_LAST_SUCCESSFUL_CHECK_AT, 0L).takeIf { it > 0 },
+                warning = error.message ?: "Update server is unavailable",
+            )
+        }
+    }
+
+    private fun verifyFeed(envelope: String): UpdateInfo =
+        UpdateFeedVerifier.verifyAndDecode(
+            envelopeJson = envelope,
+            expectedKeyId = BuildConfig.UPDATE_FEED_KEY_ID,
+            publicKeyDerBase64 = BuildConfig.UPDATE_FEED_PUBLIC_KEY,
+            json = json,
+        ).also { info -> UpdatePolicy.validate(info, BuildConfig.UPDATE_SOURCE, BuildConfig.UPDATE_FEED_URL) }
+
+    private suspend fun resolveDownload(download: UpdateDownload): UpdateDownload {
+        return client.newCall(Request.Builder().url(download.url).head().build()).await().use { response ->
+            check(response.isSuccessful) { "Update download server returned HTTP ${response.code}" }
+            val resolvedUrl = response.request.url.toString()
+            UpdatePolicy.validateResolvedUrl(download.url, resolvedUrl, BuildConfig.UPDATE_FEED_URL)
+            preferences.edit().putString(PREF_LAST_RESOLVED_DOWNLOAD_URL, resolvedUrl).apply()
+            download.copy(url = resolvedUrl)
         }
     }
 
@@ -209,10 +299,22 @@ class UpdateChecker(
                         _state.value = AppUpdateState.Verifying(info?.info, info?.download)
                         val uri = downloadManager.getUriForDownloadedFile(id)
                         val expected = info?.download?.sha256
-                        if (expected != null && uri != null && !verifySha256(uri, expected)) {
+                        val verification = runCatching {
+                            check(expected != null && uri != null) { "Downloaded APK metadata is unavailable" }
+                            check(verifySha256(uri, expected)) { "APK integrity check failed" }
+                            val current = checkNotNull(info) { "Downloaded APK context is unavailable" }
+                            val apkFile = checkNotNull(downloadedApkFile(current.download)) {
+                                "Downloaded APK file is unavailable"
+                            }
+                            verifyDownloadedApk(apkFile, current.info)
+                        }
+                        if (verification.isFailure) {
                             downloadManager.remove(id)
                             clearDownload()
-                            _state.value = AppUpdateState.Failed("APK integrity check failed", info.info)
+                            _state.value = AppUpdateState.Failed(
+                                verification.exceptionOrNull()?.message ?: "Downloaded APK verification failed",
+                                info?.info,
+                            )
                         } else {
                             _state.value = AppUpdateState.ReadyToInstall(info?.info, info?.download)
                         }
@@ -257,6 +359,46 @@ class UpdateChecker(
         return actual.equals(expected.trim(), ignoreCase = true)
     }
 
+    private fun downloadedApkFile(download: UpdateDownload): File? =
+        context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+            ?.resolve("updates/${download.name}")
+
+    @Suppress("DEPRECATION")
+    private fun verifyDownloadedApk(apkFile: File, info: UpdateInfo) {
+        check(apkFile.isFile) { "Downloaded APK file is unavailable" }
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            PackageManager.GET_SIGNING_CERTIFICATES
+        } else {
+            PackageManager.GET_SIGNATURES
+        }
+        val packageInfo = checkNotNull(context.packageManager.getPackageArchiveInfo(apkFile.absolutePath, flags)) {
+            "Downloaded file is not a readable APK"
+        }
+        val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            packageInfo.signingInfo?.apkContentsSigners.orEmpty().toList()
+        } else {
+            packageInfo.signatures.orEmpty().toList()
+        }
+        val signerDigests = signatures.map { signature ->
+            MessageDigest.getInstance("SHA-256").digest(signature.toByteArray())
+                .joinToString("") { "%02x".format(it) }
+        }
+        val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            packageInfo.longVersionCode
+        } else {
+            packageInfo.versionCode.toLong()
+        }
+        UpdateArtifactPolicy.validateMetadata(
+            packageName = packageInfo.packageName,
+            versionName = packageInfo.versionName,
+            versionCode = versionCode,
+            signerSha256 = signerDigests,
+            info = info,
+            expectedPackageName = BuildConfig.UPDATE_PACKAGE_NAME,
+            expectedSignerSha256 = BuildConfig.UPDATE_APK_SIGNER_SHA256,
+        )
+    }
+
     private fun clearDownload() {
         downloadObserver?.cancel()
         downloadObserver = null
@@ -297,23 +439,54 @@ sealed interface AppUpdateState {
     data class Downloading(val info: UpdateInfo?, val download: UpdateDownload?, val progress: Int) : AppUpdateState
     data class Verifying(val info: UpdateInfo?, val download: UpdateDownload?) : AppUpdateState
     data class ReadyToInstall(val info: UpdateInfo?, val download: UpdateDownload?) : AppUpdateState
+    data class Stale(
+        val info: UpdateInfo?,
+        val lastSuccessfulCheckAt: Long?,
+        val message: String,
+    ) : AppUpdateState
     data class Failed(val message: String, val info: UpdateInfo? = null) : AppUpdateState
 }
 
 @Serializable
 private data class DownloadContext(val info: UpdateInfo, val download: UpdateDownload)
 private data class DownloadSnapshot(val status: Int, val progress: Int, val reason: Int)
+private data class UpdateFetchResult(
+    val info: UpdateInfo,
+    val stale: Boolean,
+    val lastSuccessfulCheckAt: Long?,
+    val warning: String? = null,
+)
 
 internal object UpdatePolicy {
-    fun validate(info: UpdateInfo, expectedSource: String) {
+    fun validate(info: UpdateInfo, expectedSource: String, trustedRootUrl: String? = null) {
         check(info.source == expectedSource) { "Unexpected update source" }
         check(info.channel == "stable") { "Unexpected update channel" }
+        if (info.schemaVersion >= 2) {
+            check(info.versionCode != null) { "Signed update feed is missing version code" }
+        }
         check(info.downloads.all { it.url.startsWith("https://") }) { "Insecure download URL" }
         check(info.downloads.all { it.name.matches(Regex("^[A-Za-z0-9._-]+\\.apk$")) }) {
             "Invalid APK filename"
         }
         check(info.downloads.all { it.sha256?.matches(Regex("^[a-fA-F0-9]{64}$")) == true }) {
             "Missing or invalid APK checksum"
+        }
+        if (trustedRootUrl != null) {
+            info.downloads.forEach { validateResolvedUrl(it.url, it.url, trustedRootUrl) }
+        }
+    }
+
+    fun validateResolvedUrl(requestedUrl: String, resolvedUrl: String, trustedRootUrl: String) {
+        val trusted = URI(trustedRootUrl)
+        val requested = URI(requestedUrl)
+        val resolved = URI(resolvedUrl)
+        listOf(requested, resolved).forEach { candidate ->
+            check(candidate.scheme.equals("https", ignoreCase = true)) { "Insecure update URL" }
+            check(candidate.host.equals(trusted.host, ignoreCase = true)) {
+                "Update redirect left the trusted host"
+            }
+            check(candidate.userInfo == null && candidate.fragment == null) { "Invalid update URL" }
+            check(candidate.port == -1 || candidate.port == 443) { "Unexpected update URL port" }
         }
     }
 

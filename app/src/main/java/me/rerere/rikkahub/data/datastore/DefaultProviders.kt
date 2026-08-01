@@ -22,6 +22,7 @@ val DEFAULT_AUTO_MODEL_ID = Uuid.parse("b7055fb4-39f9-4042-a88a-0d80ed76cf08")
 
 internal val PALENIK_PROVIDER_ID = Uuid.parse("41e8f18a-1a7a-45af-97e7-5b3df96c3481")
 internal const val PALENIK_BASE_URL = "https://sub2api.paleink.cc/v1"
+internal const val PALENIK_MANAGED_BY = "paleink:rikkahub-default"
 
 val DEFAULT_PROVIDERS = listOf(
     ProviderSetting.OpenAI(
@@ -59,6 +60,7 @@ val DEFAULT_PROVIDERS = listOf(
         apiKey = "",
         enabled = false,
         builtIn = true,
+        managedBy = PALENIK_MANAGED_BY,
         models = listOf(
             Model(
                 id = Uuid.parse("cbcf0211-3979-4f8a-97e5-3fd31e911064"),

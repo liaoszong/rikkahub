@@ -50,7 +50,6 @@ import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.parseErrorDetail
 import me.rerere.ai.util.stringSafe
-import me.rerere.ai.util.toHeaders
 import me.rerere.common.http.await
 import me.rerere.common.http.jsonPrimitiveOrNull
 import okhttp3.MediaType.Companion.toMediaType
@@ -64,6 +63,48 @@ import okhttp3.sse.EventSources
 import kotlin.time.Clock
 
 private const val TAG = "ClaudeProvider"
+
+internal enum class ClaudeThinkingProtocol {
+    ALWAYS_ON_ADAPTIVE,
+    ADAPTIVE,
+    LEGACY_BUDGETED,
+}
+
+internal fun claudeThinkingProtocol(modelId: String): ClaudeThinkingProtocol {
+    val id = modelId.lowercase()
+    return when {
+        id.contains("claude-fable-5") || id.contains("claude-mythos-5") ->
+            ClaudeThinkingProtocol.ALWAYS_ON_ADAPTIVE
+        listOf(
+            "claude-opus-4-6",
+            "claude-opus-4-7",
+            "claude-opus-4-8",
+            "claude-sonnet-4-6",
+            "claude-sonnet-5",
+        ).any(id::contains) -> ClaudeThinkingProtocol.ADAPTIVE
+        else -> ClaudeThinkingProtocol.LEGACY_BUDGETED
+    }
+}
+
+internal fun supportsClaudeXHigh(modelId: String): Boolean {
+    val id = modelId.lowercase()
+    return listOf(
+        "claude-fable-5",
+        "claude-mythos-5",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-sonnet-5",
+    ).any(id::contains)
+}
+
+internal fun legacyThinkingBudget(reasoningLevel: ReasoningLevel, maxTokens: Int): Int? {
+    if (maxTokens <= 1_024 || reasoningLevel == ReasoningLevel.OFF) return null
+    val requested = when (reasoningLevel) {
+        ReasoningLevel.AUTO -> ReasoningLevel.HIGH.budgetTokens
+        else -> reasoningLevel.budgetTokens
+    }
+    return requested.coerceAtLeast(1_024).coerceAtMost(maxTokens - 1)
+}
 private const val ANTHROPIC_VERSION = "2023-06-01"
 
 class ClaudeProvider(private val client: OkHttpClient, context: Context? = null) : Provider<ProviderSetting.Claude> {
@@ -73,8 +114,13 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         withContext(Dispatchers.IO) {
             val request = Request.Builder()
                 .url("${providerSetting.baseUrl}/models")
-                .addHeader("x-api-key", keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString()))
-                .addHeader("anthropic-version", ANTHROPIC_VERSION)
+                .headers(
+                    providerAuthHeaders(
+                        emptyList(),
+                        "x-api-key" to providerSetting.authKey(),
+                        "anthropic-version" to ANTHROPIC_VERSION,
+                    )
+                )
                 .get()
                 .build()
 
@@ -114,14 +160,18 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         val requestBody = buildMessageRequest(providerSetting, messages, params)
         val request = Request.Builder()
             .url("${providerSetting.baseUrl}/messages")
-            .headers(params.customHeaders.toHeaders())
+            .headers(
+                providerAuthHeaders(
+                    params.customHeaders,
+                    "x-api-key" to providerSetting.authKey(),
+                    "anthropic-version" to ANTHROPIC_VERSION,
+                )
+            )
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
-            .addHeader("x-api-key", keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString()))
-            .addHeader("anthropic-version", ANTHROPIC_VERSION)
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        Log.i(TAG, "generateText: ${json.encodeToString(requestBody)}")
+        Log.i(TAG, "generateText: model=${params.model.modelId} messages=${messages.size}")
 
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
@@ -161,19 +211,19 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         val requestBody = buildMessageRequest(providerSetting, messages, params, stream = true)
         val request = Request.Builder()
             .url("${providerSetting.baseUrl}/messages")
-            .headers(params.customHeaders.toHeaders())
+            .headers(
+                providerAuthHeaders(
+                    params.customHeaders,
+                    "x-api-key" to providerSetting.authKey(),
+                    "anthropic-version" to ANTHROPIC_VERSION,
+                )
+            )
             .post(json.encodeToString(requestBody).toRequestBody("application/json".toMediaType()))
-            .addHeader("x-api-key", keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString()))
-            .addHeader("anthropic-version", ANTHROPIC_VERSION)
             .addHeader("Content-Type", "application/json")
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        Log.i(TAG, "streamText: ${json.encodeToString(requestBody)}")
-
-        requestBody["messages"]!!.jsonArray.forEach {
-            Log.i(TAG, "streamText: $it")
-        }
+        Log.i(TAG, "streamText: model=${params.model.modelId} messages=${messages.size}")
 
         val listener = object : EventSourceListener() {
             override fun onEvent(
@@ -182,7 +232,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 type: String?,
                 data: String
             ) {
-                Log.d(TAG, "onEvent: type=$type, data=$data")
+                Log.d(TAG, "onEvent: type=$type")
                 if (data == "[DONE]") {
                     return
                 }
@@ -214,7 +264,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 )
 
                 trySend(messageChunk).onFailure { e ->
-                    Log.w(TAG, "onEvent: chunk dropped (${e?.message})")
+                    Log.w(TAG, "onEvent: chunk dropped (${e?.javaClass?.simpleName})")
                 }
 
                 when (type) {
@@ -234,19 +284,16 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                 var exception = t
 
-                t?.printStackTrace()
-                Log.e(TAG, "onFailure: ${t?.javaClass?.name} ${t?.message} / $response")
+                Log.e(TAG, "onFailure: ${t?.javaClass?.simpleName ?: "HttpError"} status=${response?.code}")
 
                 val bodyRaw = response?.body?.stringSafe()
                 try {
                     if (!bodyRaw.isNullOrBlank()) {
                         val bodyElement = Json.parseToJsonElement(bodyRaw)
-                        Log.i(TAG, "Error response: $bodyElement")
                         exception = bodyElement.parseErrorDetail()
                     }
                 } catch (e: Throwable) {
-                    Log.w(TAG, "onFailure: failed to parse from $bodyRaw")
-                    e.printStackTrace()
+                    Log.w(TAG, "onFailure: error response parse failed (${e.javaClass.simpleName})")
                 } finally {
                     close(exception)
                 }
@@ -273,24 +320,28 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         params: TextGenerationParams,
         stream: Boolean = false
     ): JsonObject {
+        val maxTokens = params.maxTokens ?: 64_000
+        val thinkingProtocol = claudeThinkingProtocol(params.model.modelId)
         return buildJsonObject {
             put("model", params.model.modelId)
             put(
                 "messages",
                 buildMessages(messages, providerSetting.promptCaching, providerSetting.promptCacheTtl)
             )
-            put("max_tokens", params.maxTokens ?: 64_000)
+            put("max_tokens", maxTokens)
 
             // 顶层 cache_control: 让 Anthropic 自动管理缓存断点
             if (providerSetting.promptCaching) {
                 put("cache_control", cacheControlEphemeral(providerSetting.promptCacheTtl))
             }
 
-            if (params.temperature != null && !params.reasoningLevel.isEnabled) put(
+            val allowSampling = params.reasoningLevel == ReasoningLevel.OFF &&
+                thinkingProtocol == ClaudeThinkingProtocol.LEGACY_BUDGETED
+            if (params.temperature != null && allowSampling) put(
                 "temperature",
                 params.temperature
             )
-            if (params.topP != null) put("top_p", params.topP)
+            if (params.topP != null && allowSampling) put("top_p", params.topP)
 
             put("stream", stream)
 
@@ -311,30 +362,43 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 })
             }
 
-            // 处理 thinking
-            // Anthropic 新 API: adaptive 模式 + output_config.effort 控制强度
-            // 旧的 type=enabled + budget_tokens 在 Opus 4.7+ 上已不支持
+            // Claude 4.6+ 使用 adaptive；旧模型仍使用 enabled + budget_tokens。
+            // Fable/Mythos 的 thinking 永远开启，OFF 时必须省略参数而不是发送 disabled。
             if (params.model.abilities.contains(ModelAbility.REASONING)) {
-                when (params.reasoningLevel) {
-                    ReasoningLevel.OFF -> {
-                        put("thinking", buildJsonObject { put("type", "disabled") })
-                    }
-
-                    ReasoningLevel.AUTO -> {
+                when (thinkingProtocol) {
+                    ClaudeThinkingProtocol.ALWAYS_ON_ADAPTIVE -> if (params.reasoningLevel != ReasoningLevel.OFF) {
                         put("thinking", buildJsonObject {
                             put("type", "adaptive")
                             put("display", "summarized")
                         })
+                        params.reasoningLevel.claudeEffort(params.model.modelId)?.let { effort ->
+                            put("output_config", buildJsonObject { put("effort", effort) })
+                        }
                     }
 
-                    else -> {
-                        put("thinking", buildJsonObject {
-                            put("type", "adaptive")
-                            put("display", "summarized")
-                        })
-                        put("output_config", buildJsonObject {
-                            put("effort", params.reasoningLevel.effort)
-                        })
+                    ClaudeThinkingProtocol.ADAPTIVE -> when (params.reasoningLevel) {
+                        ReasoningLevel.OFF -> put(
+                            "thinking",
+                            buildJsonObject { put("type", "disabled") },
+                        )
+                        else -> {
+                            put("thinking", buildJsonObject {
+                                put("type", "adaptive")
+                                put("display", "summarized")
+                            })
+                            params.reasoningLevel.claudeEffort(params.model.modelId)?.let { effort ->
+                                put("output_config", buildJsonObject { put("effort", effort) })
+                            }
+                        }
+                    }
+
+                    ClaudeThinkingProtocol.LEGACY_BUDGETED -> if (params.reasoningLevel != ReasoningLevel.OFF) {
+                        legacyThinkingBudget(params.reasoningLevel, maxTokens)?.let { budget ->
+                            put("thinking", buildJsonObject {
+                                put("type", "enabled")
+                                put("budget_tokens", budget)
+                            })
+                        }
                     }
                 }
             }
@@ -355,6 +419,16 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 }
             }
         }.mergeCustomBody(params.customBody)
+    }
+
+    private fun ProviderSetting.Claude.authKey(): String? = apiKey
+        .takeIf(String::isNotBlank)
+        ?.let { keyRoulette.next(it, id.toString()) }
+
+    private fun ReasoningLevel.claudeEffort(modelId: String): String? = when (this) {
+        ReasoningLevel.OFF, ReasoningLevel.AUTO -> null
+        ReasoningLevel.XHIGH -> if (supportsClaudeXHigh(modelId)) effort else ReasoningLevel.HIGH.effort
+        else -> effort
     }
 
     private fun cacheControlEphemeral(promptCacheTtl: ClaudePromptCacheTtl) = buildJsonObject {
@@ -487,7 +561,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     put("data", encoded.base64)
                 })
             }.onFailure {
-                Log.w(TAG, "encode image failed: $url", it)
+                Log.w(TAG, "encode image failed (${it.javaClass.simpleName})")
                 put("type", "text")
                 put("text", "")
             }
@@ -550,7 +624,6 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
 
                 "redacted_thinking" -> {
                     val data = block["data"]?.jsonPrimitiveOrNull?.contentOrNull
-                    println(data)
                 }
 
                 "tool_use" -> {

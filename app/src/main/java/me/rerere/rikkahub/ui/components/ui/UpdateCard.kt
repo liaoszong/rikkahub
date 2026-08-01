@@ -54,6 +54,8 @@ import me.rerere.rikkahub.ui.components.richtext.MarkdownBlock
 import me.rerere.rikkahub.utils.AppUpdateState
 import me.rerere.rikkahub.utils.UpdateChecker
 import me.rerere.rikkahub.utils.UpdateInfo
+import java.text.DateFormat
+import java.util.Date
 import me.rerere.rikkahub.utils.openUrl
 
 @Composable
@@ -209,6 +211,18 @@ fun AppUpdateDialog(
                             }
                         }
 
+                        is AppUpdateState.Stale -> {
+                            Row(modifier = Modifier.fillMaxWidth()) {
+                                TextButton(onClick = onDismissRequest) {
+                                    Text(stringResource(R.string.update_dialog_later))
+                                }
+                                Spacer(Modifier.weight(1f))
+                                Button(onClick = { updateChecker.checkUpdate() }) {
+                                    Text(stringResource(R.string.update_dialog_retry))
+                                }
+                            }
+                        }
+
                         AppUpdateState.Checking,
                         is AppUpdateState.Verifying,
                         AppUpdateState.UpToDate -> Unit
@@ -329,6 +343,23 @@ private fun UpdateBody(state: AppUpdateState) {
 
         is AppUpdateState.ReadyToInstall -> StatusBlock(stringResource(R.string.update_dialog_ready))
 
+        is AppUpdateState.Stale -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            StatusBlock(
+                text = state.lastSuccessfulCheckAt?.let { timestamp ->
+                    stringResource(
+                        R.string.update_dialog_stale_checked_at,
+                        DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(timestamp)),
+                    )
+                } ?: stringResource(R.string.update_dialog_stale),
+                error = true,
+            )
+            Text(
+                text = state.message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
         is AppUpdateState.Failed -> StatusBlock(
             text = state.message,
             error = true,
@@ -377,6 +408,7 @@ private fun updateInfoOf(state: AppUpdateState): UpdateInfo? = when (state) {
     is AppUpdateState.Downloading -> state.info
     is AppUpdateState.Verifying -> state.info
     is AppUpdateState.ReadyToInstall -> state.info
+    is AppUpdateState.Stale -> state.info
     is AppUpdateState.Failed -> state.info
     else -> null
 }

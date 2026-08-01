@@ -16,12 +16,14 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import me.rerere.rikkahub.IMAGE_GENERATION_NOTIFICATION_CHANNEL_ID
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.RouteActivity
@@ -30,21 +32,70 @@ import me.rerere.rikkahub.data.imggen.ImageGenerationPhase
 import me.rerere.rikkahub.data.imggen.ImageGenerationTask
 import me.rerere.rikkahub.data.imggen.ImageGenerationTaskManager
 import org.koin.android.ext.android.inject
+import java.util.concurrent.ConcurrentHashMap
+
+class ImageGenerationForegroundReadiness {
+    private val pending = ConcurrentHashMap<String, CompletableDeferred<Unit>>()
+
+    fun prepare(taskId: String) {
+        pending[taskId] = CompletableDeferred()
+    }
+
+    fun signalReady(taskId: String) {
+        pending[taskId]?.complete(Unit)
+    }
+
+    fun signalFailure(taskId: String, error: Throwable) {
+        pending[taskId]?.completeExceptionally(error)
+    }
+
+    fun discard(taskId: String) {
+        pending.remove(taskId)?.cancel()
+    }
+
+    suspend fun await(taskId: String) {
+        val signal = pending[taskId]
+            ?: error("Image generation foreground service was not registered")
+        try {
+            withTimeout(FOREGROUND_READY_TIMEOUT_MILLIS) {
+                signal.await()
+            }
+        } finally {
+            pending.remove(taskId, signal)
+        }
+    }
+
+    private companion object {
+        const val FOREGROUND_READY_TIMEOUT_MILLIS = 10_000L
+    }
+}
 
 class AndroidImageGenerationForegroundController(
     private val context: Context,
+    private val readiness: ImageGenerationForegroundReadiness,
 ) : ImageGenerationForegroundController {
     override fun start(taskId: String) {
+        readiness.prepare(taskId)
         val intent = Intent(context, ImageGenerationForegroundService::class.java).apply {
             action = ImageGenerationForegroundService.ACTION_START
             putExtra(ImageGenerationForegroundService.EXTRA_TASK_ID, taskId)
         }
-        ContextCompat.startForegroundService(context, intent)
+        try {
+            ContextCompat.startForegroundService(context, intent)
+        } catch (error: Throwable) {
+            readiness.discard(taskId)
+            throw error
+        }
+    }
+
+    override suspend fun awaitReady(taskId: String) {
+        readiness.await(taskId)
     }
 }
 
 class ImageGenerationForegroundService : Service() {
     private val taskManager: ImageGenerationTaskManager by inject()
+    private val readiness: ImageGenerationForegroundReadiness by inject()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var observerJob: Job? = null
 
@@ -57,10 +108,24 @@ class ImageGenerationForegroundService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_START, null -> {
-                if (!startForegroundCompat(taskManager.task.value)) {
+                val taskId = intent?.getStringExtra(EXTRA_TASK_ID)
+                val task = taskManager.task.value
+                if (taskId.isNullOrBlank() || task.taskId != taskId) {
+                    taskId?.let {
+                        readiness.signalFailure(it, IllegalStateException("Image generation task is no longer active"))
+                    }
                     stopSelf()
                     return START_NOT_STICKY
                 }
+                if (!startForegroundCompat(task)) {
+                    readiness.signalFailure(
+                        taskId,
+                        IllegalStateException("Unable to start the image generation foreground service"),
+                    )
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                readiness.signalReady(taskId)
                 observeTask()
             }
         }

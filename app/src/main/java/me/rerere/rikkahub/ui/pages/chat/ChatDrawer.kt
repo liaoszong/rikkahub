@@ -775,6 +775,7 @@ private fun AppUpdateState.hasActionableUpdate(): Boolean = when (this) {
     is AppUpdateState.ReadyToInstall -> true
     AppUpdateState.Checking,
     AppUpdateState.UpToDate -> false
+    is AppUpdateState.Stale -> info != null
     is AppUpdateState.Failed -> info != null
 }
 

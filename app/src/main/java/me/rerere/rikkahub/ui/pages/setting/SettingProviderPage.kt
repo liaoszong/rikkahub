@@ -69,6 +69,7 @@ import com.dokar.sonner.ToastType
 import io.github.g00fy2.quickie.QRResult
 import io.github.g00fy2.quickie.ScanQRCode
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.provider.asUserOwnedCopy
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.data.datastore.RECOMMENDED_PROVIDERS
@@ -126,14 +127,14 @@ fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
                     RecommendProviderButton { provider ->
                         vm.updateSettings(
                             settings.copy(
-                                providers = listOf(provider.copyProvider(Uuid.random())) + settings.providers
+                                providers = listOf(provider.asUserOwnedCopy(Uuid.random())) + settings.providers
                             )
                         )
                     }
                     ImportProviderButton {
                         vm.updateSettings(
                             settings.copy(
-                                providers = listOf(it.copyProvider(Uuid.random())) + settings.providers
+                                providers = listOf(it.asUserOwnedCopy(Uuid.random())) + settings.providers
                             )
                         )
                     }

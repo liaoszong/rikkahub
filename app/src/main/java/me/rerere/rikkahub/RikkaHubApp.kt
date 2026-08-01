@@ -21,7 +21,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.first
+import kotlinx.serialization.json.Json
 import me.rerere.common.android.appTempFolder
 import com.whl.quickjs.android.QuickJSLoader
 import me.rerere.rikkahub.di.appModule
@@ -29,11 +31,13 @@ import me.rerere.rikkahub.di.dataSourceModule
 import me.rerere.rikkahub.di.repositoryModule
 import me.rerere.rikkahub.di.viewModelModule
 import me.rerere.rikkahub.data.files.FilesManager
+import me.rerere.rikkahub.data.imggen.ImageGenerationResultStore
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.service.WebServerService
 import me.rerere.rikkahub.utils.CrashHandler
 import me.rerere.rikkahub.utils.DatabaseUtil
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
+import me.rerere.rikkahub.data.sync.PendingRestoreManager
 import me.rerere.workspace.WorkspaceManager
 import org.koin.android.ext.android.get
 import org.koin.android.ext.koin.androidContext
@@ -51,11 +55,27 @@ const val IMAGE_GENERATION_NOTIFICATION_CHANNEL_ID = "image_generation"
 class RikkaHubApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        runCatching {
+            PendingRestoreManager.applyFilesBeforeDatabase(this)
+        }.onFailure {
+            Log.e(TAG, "Pending restore file switch failed; continuing with the previous data", it)
+        }
         startKoin {
             androidLogger()
             androidContext(this@RikkaHubApp)
             workManagerFactory()
             modules(appModule, viewModelModule, dataSourceModule, repositoryModule)
+        }
+        runBlocking {
+            runCatching {
+                PendingRestoreManager.completeSettingsAfterKoin(
+                    context = this@RikkaHubApp,
+                    settingsStore = get(),
+                    json = get<Json>(),
+                )
+            }.onFailure {
+                Log.e(TAG, "Pending restore settings commit failed; previous data was restored", it)
+            }
         }
         this.createNotificationChannel()
 
@@ -82,6 +102,9 @@ class RikkaHubApp : Application() {
 
         // sync upload files to DB
         syncManagedFiles()
+
+        // Retry gallery registration for generated images committed before a prior DB failure.
+        reconcileGeneratedImages()
 
         // Start WebServer if enabled in settings
         startWebServerIfEnabled()
@@ -151,6 +174,24 @@ class RikkaHubApp : Application() {
                 get<FilesManager>().syncFolder()
             }.onFailure {
                 Log.e(TAG, "syncManagedFiles failed", it)
+            }
+        }
+    }
+
+    private fun reconcileGeneratedImages() {
+        get<AppScope>().launch(Dispatchers.IO) {
+            runCatching {
+                get<ImageGenerationResultStore>().reconcilePending()
+            }.onSuccess { result ->
+                if (result.inspected > 0 || result.failures.isNotEmpty()) {
+                    Log.i(
+                        TAG,
+                        "reconcileGeneratedImages: inspected=${result.inspected} " +
+                            "registered=${result.registered} failures=${result.failures.size}",
+                    )
+                }
+            }.onFailure {
+                Log.e(TAG, "reconcileGeneratedImages failed", it)
             }
         }
     }

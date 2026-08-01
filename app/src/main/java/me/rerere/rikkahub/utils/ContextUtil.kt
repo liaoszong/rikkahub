@@ -68,9 +68,9 @@ fun Context.writeClipboardText(text: String) {
         getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
     runCatching {
         clipboardManager.setPrimaryClip(android.content.ClipData.newPlainText("text", text))
-        Log.i(TAG, "writeClipboardText: $text")
+        Log.i(TAG, "writeClipboardText: success (${text.length} chars)")
     }.onFailure {
-        Log.e(TAG, "writeClipboardText: $text", it)
+        Log.e(TAG, "writeClipboardText: failed (${it.javaClass.simpleName})")
         Toast.makeText(this, "Failed to write text into clipboard", Toast.LENGTH_SHORT).show()
     }
 }
@@ -116,14 +116,14 @@ fun Context.openUsageAccessSettings() {
  * Open a url
  */
 fun Context.openUrl(url: String) {
-    Log.i(TAG, "openUrl: $url")
+    Log.i(TAG, "openUrl: requested")
     runCatching {
         val intent = CustomTabsIntent.Builder()
             .setShowTitle(true)
             .build()
         intent.launchUrl(this, url.toUri())
     }.onFailure {
-        it.printStackTrace()
+        Log.e(TAG, "openUrl: failed (${it.javaClass.simpleName})")
         Toast.makeText(this, "Failed to open URL: $url", Toast.LENGTH_SHORT).show()
     }
 }

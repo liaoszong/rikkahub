@@ -26,12 +26,17 @@ data class ChatImageGenerationSlot(
     val error: String? = null,
     val startedAtEpochMillis: Long? = null,
     val finishedAtEpochMillis: Long? = null,
+    val requestId: String = "",
+    val attempt: Int = 1,
+    val failureKind: ImageGenerationFailureKind? = null,
 )
 
 @Serializable
 data class ChatImageGenerationState(
     val type: String = CHAT_IMAGE_GENERATION_PAYLOAD_TYPE,
     val version: Int = 1,
+    val requestId: String = "",
+    val attempt: Int = 1,
     val prompt: String,
     val model: String,
     val size: String,

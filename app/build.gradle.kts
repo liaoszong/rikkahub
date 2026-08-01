@@ -1,4 +1,7 @@
 import com.android.build.api.dsl.Packaging
+import com.android.build.api.artifact.SingleArtifact
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.attributes.Attribute
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import java.io.FileInputStream
@@ -27,6 +30,18 @@ android {
 
         buildConfigField("String", "UPDATE_FEED_URL", "\"https://updates.paleink.cc/api/v1/stable.json\"")
         buildConfigField("String", "UPDATE_SOURCE", "\"paleink/rikkahub\"")
+        buildConfigField("String", "UPDATE_FEED_KEY_ID", "\"paleink-update-feed-rsa-2026-01\"")
+        buildConfigField(
+            "String",
+            "UPDATE_FEED_PUBLIC_KEY",
+            "\"MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAxYOPCbNWGoj1/vGqAP+N7tEE11WN+pw/oQ+M4/l++CKgzaTbO3CE4fwZAY7uHUIYI8wfO7PJuiRdVwco0ULmXaBnHXokfVVlx4jEdBhEMrTJiPTc9ZwQED2Sbv1Jrgwxt4f3ar4pjTx5MFjZ1VpYmJO1AsS+xMDs3DKiA572beLmZXXG3fFRQncocifrK99CJi9QYQCuk3fP/WTf1a692IFGVZik2IJkq7kx+lgkP3QTvQSqbNyklgga+iXG3TqFNoxKxaU62SbWp6kNCDrkE120RENZw4dMpMoXStPbxHIZcEe8obHFfsCwy6O2KrMVjS1FW4YnLLVZK5qMXGIgpccWXg/3bRvJPohgDF6+Ox8vpaGZAREwGDjICefHjUBLOHeRO4m0h2Wml5grimXjZ/sytbnSZSaeLLF9w2BMWfWNuw+agthAiuZ19efwGZtAQEe2e2vL++4Mt3YXwaIasNdQHcBko+OQsdmQ5++xF1YaiUVlOHGPkL4G3jDpx/f3AgMBAAE=\"",
+        )
+        buildConfigField("String", "UPDATE_PACKAGE_NAME", "\"me.rerere.rikkahub\"")
+        buildConfigField(
+            "String",
+            "UPDATE_APK_SIGNER_SHA256",
+            "\"df8c1f92039b19cfbdd72491e0058eb4682ff75f99cbbe32450fe9ea4d408520\"",
+        )
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -106,6 +121,11 @@ android {
     androidResources {
         generateLocaleConfig = true
     }
+    lint {
+        baseline = file("lint-baseline.xml")
+        abortOnError = true
+        checkDependencies = true
+    }
     packaging {
         jniLibs {
             useLegacyPackaging = true
@@ -131,7 +151,10 @@ android {
 // does not send development analytics or crashes to the production Firebase app.
 // Release still processes app/google-services.json normally.
 tasks.configureEach {
-    if (name == "processDebugGoogleServices") {
+    val isDebugFirebaseTask =
+        name == "processDebugGoogleServices" ||
+            (name.contains("Crashlytics") && name.endsWith("Debug"))
+    if (isDebugFirebaseTask) {
         enabled = false
     }
 }
@@ -183,10 +206,12 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.navigation3)
     implementation(libs.androidx.material3.adaptive.navigation3)
 
-    // Firebase
-    implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.analytics)
-    implementation(libs.firebase.crashlytics)
+    // Firebase is a release-only product capability. Keeping its product SDKs
+    // off the debug runtime classpath prevents automatic providers and
+    // advertising/install-referrer permissions from entering development APKs.
+    releaseImplementation(platform(libs.firebase.bom))
+    releaseImplementation(libs.firebase.analytics)
+    releaseImplementation(libs.firebase.crashlytics)
 
     // DataStore
     implementation(libs.androidx.datastore.preferences)
@@ -319,4 +344,100 @@ dependencies {
     androidTestImplementation(libs.androidx.room.testing)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
+}
+
+androidComponents {
+    onVariants(selector().withBuildType("debug")) { variant ->
+        val debugRuntimeClasspath = configurations.named("${variant.name}RuntimeClasspath")
+        val debugExternalRuntimeArtifacts = debugRuntimeClasspath.get()
+            .incoming
+            .artifactView {
+                componentFilter { it is ModuleComponentIdentifier }
+                attributes.attribute(
+                    Attribute.of("artifactType", String::class.java),
+                    "android-classes-jar",
+                )
+            }
+            .files
+        val mergedManifest = variant.artifacts.get(SingleArtifact.MERGED_MANIFEST)
+        val verifyTask = tasks.register("verify${variant.name.replaceFirstChar(Char::uppercase)}FirebaseIsolation") {
+            group = "verification"
+            description =
+                "Verifies that ${variant.name} excludes Firebase product telemetry while retaining ML Kit transport"
+            // Keep the task action configuration-cache safe: all external
+            // Gradle model values are declared as inputs here, and the action
+            // reads only the resulting files instead of capturing a
+            // Configuration or Provider.
+            inputs.files(debugExternalRuntimeArtifacts)
+                .withPropertyName("runtimeClasspath")
+            inputs.file(mergedManifest)
+                .withPropertyName("mergedManifest")
+
+            doLast {
+                val forbiddenModules = setOf(
+                    "firebase-analytics",
+                    "firebase-analytics-impl",
+                    "firebase-analytics-ktx",
+                    "firebase-crashlytics",
+                    "firebase-crashlytics-ktx",
+                    "firebase-installations",
+                    "firebase-sessions",
+                )
+                val runtimeArtifacts = inputs.files.files
+                    .asSequence()
+                    .filterNot { it.name == "AndroidManifest.xml" }
+                    .map { it.name.substringBeforeLast('.') }
+                    .distinct()
+                    .toList()
+                val resolvedForbiddenModules = runtimeArtifacts
+                    .filter { artifactName ->
+                        forbiddenModules.any { module ->
+                            artifactName == module || artifactName.startsWith("$module-")
+                        } || artifactName.startsWith("play-services-measurement-")
+                    }
+                    .sorted()
+                check(resolvedForbiddenModules.isEmpty()) {
+                    "Debug runtime must not package Firebase Analytics/Crashlytics product modules: " +
+                        resolvedForbiddenModules.joinToString()
+                }
+
+                check(runtimeArtifacts.any {
+                    it == "transport-backend-cct" || it.startsWith("transport-backend-cct-")
+                }) {
+                    "Debug runtime must retain ML Kit's DataTransport CCT backend"
+                }
+
+                val manifestFile = inputs.files.files.singleOrNull { it.name == "AndroidManifest.xml" }
+                    ?: error("Debug merged manifest input is missing")
+                val manifest = manifestFile.readText()
+                val forbiddenManifestEntries = listOf(
+                    "com.google.firebase.provider.FirebaseInitProvider",
+                    "com.google.firebase.crashlytics.startup.CrashlyticsInitProvider",
+                    "com.google.firebase.sessions.FirebaseSessionsInitProvider",
+                    "com.google.android.gms.measurement.AppMeasurementReceiver",
+                    "com.google.android.gms.measurement.AppMeasurementService",
+                    "com.google.android.gms.measurement.AppMeasurementJobService",
+                    "com.google.android.gms.permission.AD_ID",
+                    "com.google.android.finsky.permission.BIND_GET_INSTALL_REFERRER_SERVICE",
+                ).filter(manifest::contains)
+                check(forbiddenManifestEntries.isEmpty()) {
+                    "Debug merged manifest contains Firebase product initialization/advertising entries: " +
+                        forbiddenManifestEntries.joinToString()
+                }
+
+                val requiredTransportEntries = listOf(
+                    "com.google.android.datatransport.runtime.backends.TransportBackendDiscovery",
+                    "com.google.android.datatransport.runtime.scheduling.jobscheduling.JobInfoSchedulerService",
+                    "com.google.android.datatransport.runtime.scheduling.jobscheduling.AlarmManagerSchedulerBroadcastReceiver",
+                ).filterNot(manifest::contains)
+                check(requiredTransportEntries.isEmpty()) {
+                    "Debug merged manifest must retain ML Kit DataTransport components: " +
+                        requiredTransportEntries.joinToString()
+                }
+            }
+        }
+
+        tasks.named("check").configure { dependsOn(verifyTask) }
+        tasks.named("lint").configure { dependsOn(verifyTask) }
+    }
 }
