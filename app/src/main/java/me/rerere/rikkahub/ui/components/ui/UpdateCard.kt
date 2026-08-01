@@ -1,189 +1,327 @@
 package me.rerere.rikkahub.ui.components.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItem
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.SheetValue
-import androidx.compose.material3.rememberBottomSheetState
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.util.fastForEach
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.dokar.sonner.ToastType
 import me.rerere.hugeicons.HugeIcons
-import me.rerere.hugeicons.stroke.Cancel01
-import me.rerere.hugeicons.stroke.Download01
+import me.rerere.hugeicons.stroke.DownloadCircle02
+import me.rerere.hugeicons.stroke.Rocket01
+import me.rerere.hugeicons.stroke.Sparkles
+import me.rerere.hugeicons.stroke.SystemUpdate02
 import me.rerere.rikkahub.BuildConfig
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.ui.components.richtext.MarkdownBlock
-import me.rerere.rikkahub.ui.context.LocalToaster
-import me.rerere.rikkahub.ui.hooks.useThrottle
-import me.rerere.rikkahub.ui.pages.chat.ChatVM
-import me.rerere.rikkahub.utils.UpdateDownload
-import me.rerere.rikkahub.utils.Version
-import me.rerere.rikkahub.utils.onError
-import me.rerere.rikkahub.utils.onSuccess
-import me.rerere.rikkahub.utils.toLocalDateTime
-import kotlin.time.ExperimentalTime
-import kotlin.time.Instant
-import kotlin.time.toJavaInstant
+import me.rerere.rikkahub.utils.AppUpdateState
+import me.rerere.rikkahub.utils.UpdateChecker
+import me.rerere.rikkahub.utils.UpdateInfo
+import me.rerere.rikkahub.utils.openUrl
 
-@OptIn(ExperimentalTime::class)
 @Composable
-fun UpdateCard(vm: ChatVM) {
-    val state by vm.updateState.collectAsStateWithLifecycle()
+fun AppUpdateDialog(
+    updateChecker: UpdateChecker,
+    onDismissRequest: () -> Unit,
+) {
+    val state by updateChecker.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    val toaster = LocalToaster.current
-    state.onError {
-        Card {
-            Column(
-                modifier = Modifier
-                    .padding(8.dp)
-                    .fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = stringResource(R.string.update_card_check_failed),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.error
-                )
-                Text(
-                    text = it.message ?: stringResource(R.string.update_card_unknown_error),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error
-                )
-            }
-        }
-    }
-    state.onSuccess { info ->
-        var showDetail by remember { mutableStateOf(false) }
-        var dismissed by remember { mutableStateOf(false) }
-        val current = remember { Version(BuildConfig.VERSION_NAME) }
-        val latest = remember(info) { Version(info.version) }
-        if (latest > current && !dismissed) {
-            Card(
-                onClick = {
-                    showDetail = true
-                }
-            ) {
-                Column(
+
+    Dialog(
+        onDismissRequest = onDismissRequest,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier
+                .padding(horizontal = 24.dp)
+                .widthIn(max = 380.dp),
+            shape = MaterialTheme.shapes.extraLarge,
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+            shadowElevation = 16.dp,
+        ) {
+            Box {
+                Icon(
+                    imageVector = HugeIcons.Rocket01,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier
-                        .padding(8.dp)
-                        .fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = stringResource(R.string.update_card_new_version_found, info.version),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(onClick = { dismissed = true }) {
-                            Icon(
-                                imageVector = HugeIcons.Cancel01,
-                                contentDescription = stringResource(R.string.update_card_close),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                        .align(Alignment.TopEnd)
+                        .graphicsLayer {
+                            translationX = 44.dp.toPx()
+                            translationY = (-28).dp.toPx()
+                            rotationZ = -12f
                         }
-                    }
-                    MarkdownBlock(
-                        content = info.changelog,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.heightIn(max = 200.dp)
-                    )
-                }
-            }
-        }
-        if (showDetail) {
-            val downloadHandler = useThrottle<UpdateDownload>(500) { item ->
-                vm.updateChecker.downloadUpdate(context, item)
-                showDetail = false
-                toaster.show(context.getString(R.string.update_card_downloading), type = ToastType.Info)
-            }
-            ModalBottomSheet(
-                onDismissRequest = { showDetail = false },
-                sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)),
-            ) {
+                        .size(180.dp)
+                        .alpha(0.055f),
+                )
+
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 32.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-                    Text(
-                        text = info.version,
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        text = Instant.parse(info.publishedAt).toJavaInstant().toLocalDateTime(),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    MarkdownBlock(
-                        content = info.changelog,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(300.dp)
-                            .verticalScroll(rememberScrollState()),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    info.downloads.fastForEach { downloadItem ->
-                        OutlinedCard(
-                            onClick = {
-                                downloadHandler(downloadItem)
-                            },
-                        ) {
-                            ListItem(
-                                headlineContent = {
-                                    Text(
-                                        text = downloadItem.name,
-                                    )
-                                },
-                                supportingContent = {
-                                    Text(
-                                        text = downloadItem.size
-                                    )
-                                },
-                                leadingContent = {
-                                    Icon(
-                                        imageVector = HugeIcons.Download01,
-                                        contentDescription = null
-                                    )
+                    UpdateHeader(state)
+                    UpdateBody(state)
+
+                    when (val current = state) {
+                        is AppUpdateState.Available -> {
+                            Button(
+                                onClick = { updateChecker.startDownload(current.info) },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Icon(HugeIcons.DownloadCircle02, contentDescription = null)
+                                Spacer(Modifier.size(8.dp))
+                                Text(stringResource(R.string.update_dialog_update_now))
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                TextButton(
+                                    onClick = {
+                                        updateChecker.ignoreVersion(current.info.version)
+                                        onDismissRequest()
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                ) {
+                                    Text(stringResource(R.string.update_dialog_ignore_version))
                                 }
-                            )
+                                current.info.releaseUrl?.let { url ->
+                                    TextButton(
+                                        onClick = { context.openUrl(url) },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                    ) {
+                                        Text(stringResource(R.string.update_dialog_view_details))
+                                    }
+                                }
+                                Spacer(Modifier.weight(1f))
+                                TextButton(
+                                    onClick = onDismissRequest,
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp),
+                                ) {
+                                    Text(stringResource(R.string.update_dialog_later))
+                                }
+                            }
                         }
+
+                        is AppUpdateState.Downloading -> {
+                            Text(
+                                text = stringResource(R.string.update_dialog_background_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Row(modifier = Modifier.fillMaxWidth()) {
+                                TextButton(onClick = updateChecker::cancelDownload) {
+                                    Text(stringResource(R.string.update_dialog_cancel_download))
+                                }
+                                Spacer(Modifier.weight(1f))
+                                TextButton(onClick = onDismissRequest) {
+                                    Text(stringResource(R.string.update_dialog_continue_background))
+                                }
+                            }
+                        }
+
+                        is AppUpdateState.ReadyToInstall -> {
+                            Button(
+                                onClick = updateChecker::installDownloadedApk,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Icon(HugeIcons.SystemUpdate02, contentDescription = null)
+                                Spacer(Modifier.size(8.dp))
+                                Text(stringResource(R.string.update_dialog_install))
+                            }
+                            TextButton(onClick = onDismissRequest, modifier = Modifier.align(Alignment.End)) {
+                                Text(stringResource(R.string.update_dialog_later))
+                            }
+                        }
+
+                        is AppUpdateState.Failed -> {
+                            Row(modifier = Modifier.fillMaxWidth()) {
+                                TextButton(onClick = onDismissRequest) {
+                                    Text(stringResource(R.string.update_dialog_later))
+                                }
+                                Spacer(Modifier.weight(1f))
+                                Button(onClick = { updateChecker.checkUpdate() }) {
+                                    Text(stringResource(R.string.update_dialog_retry))
+                                }
+                            }
+                        }
+
+                        AppUpdateState.Checking,
+                        is AppUpdateState.Verifying,
+                        AppUpdateState.UpToDate -> Unit
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun UpdateHeader(state: AppUpdateState) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        ) {
+            Icon(
+                imageVector = HugeIcons.Sparkles,
+                contentDescription = null,
+                modifier = Modifier.padding(10.dp).size(22.dp),
+            )
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(
+                text = stringResource(R.string.update_dialog_title),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            updateInfoOf(state)?.let { info ->
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    VersionChip("v${BuildConfig.VERSION_NAME}", emphasized = false)
+                    Text("→", color = MaterialTheme.colorScheme.outline)
+                    VersionChip("v${info.version}", emphasized = true)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UpdateBody(state: AppUpdateState) {
+    when (state) {
+        AppUpdateState.Checking -> StatusBlock(
+            text = stringResource(R.string.update_dialog_checking),
+            loading = true,
+        )
+
+        AppUpdateState.UpToDate -> StatusBlock(stringResource(R.string.update_dialog_up_to_date))
+
+        is AppUpdateState.Available -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = stringResource(R.string.update_dialog_changelog),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            MarkdownBlock(
+                content = state.info.changelog,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 300.dp)
+                    .verticalScroll(rememberScrollState()),
+            )
+        }
+
+        is AppUpdateState.Downloading -> Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = "${state.progress}%",
+                style = MaterialTheme.typography.displayMedium,
+                fontWeight = FontWeight.Light,
+            )
+            LinearProgressIndicator(
+                progress = { state.progress / 100f },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(
+                text = state.download?.name ?: stringResource(R.string.update_dialog_downloading),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        is AppUpdateState.Verifying -> StatusBlock(
+            text = stringResource(R.string.update_dialog_verifying),
+            loading = true,
+        )
+
+        is AppUpdateState.ReadyToInstall -> StatusBlock(stringResource(R.string.update_dialog_ready))
+
+        is AppUpdateState.Failed -> StatusBlock(
+            text = state.message,
+            error = true,
+        )
+    }
+}
+
+@Composable
+private fun StatusBlock(text: String, loading: Boolean = false, error: Boolean = false) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        if (loading) CircularProgressIndicator()
+        Text(
+            text = text,
+            textAlign = TextAlign.Center,
+            color = if (error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun VersionChip(text: String, emphasized: Boolean) {
+    Surface(
+        shape = MaterialTheme.shapes.extraSmall,
+        color = if (emphasized) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHighest
+        },
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = if (emphasized) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = if (emphasized) FontWeight.SemiBold else FontWeight.Normal,
+        )
+    }
+}
+
+private fun updateInfoOf(state: AppUpdateState): UpdateInfo? = when (state) {
+    is AppUpdateState.Available -> state.info
+    is AppUpdateState.Downloading -> state.info
+    is AppUpdateState.Verifying -> state.info
+    is AppUpdateState.ReadyToInstall -> state.info
+    else -> null
 }

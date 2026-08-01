@@ -25,6 +25,9 @@ android {
         versionCode = 172
         versionName = "2.4.5"
 
+        buildConfigField("String", "UPDATE_FEED_URL", "\"https://updates.paleink.cc/api/v1/stable.json\"")
+        buildConfigField("String", "UPDATE_SOURCE", "\"paleink/rikkahub\"")
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {

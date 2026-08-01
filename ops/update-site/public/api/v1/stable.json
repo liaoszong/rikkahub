@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "source": "paleink/rikkahub",
+  "channel": "stable",
+  "version": "2.4.5",
+  "versionCode": 172,
+  "publishedAt": "2026-08-01T00:00:00Z",
+  "changelog": "当前为 PaleInk RikkaHub 更新服务初始化版本。",
+  "releaseUrl": "https://updates.paleink.cc/",
+  "downloads": []
+}

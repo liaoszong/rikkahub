@@ -1,0 +1,113 @@
+[CmdletBinding(SupportsShouldProcess)]
+param(
+    [Parameter(Mandatory)]
+    [ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })]
+    [string]$ApkPath,
+
+    [Parameter(Mandatory)]
+    [ValidatePattern('^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$')]
+    [string]$Version,
+
+    [Parameter(Mandatory)]
+    [ValidateRange(1, [int]::MaxValue)]
+    [int]$VersionCode,
+
+    [Parameter(Mandatory)]
+    [string]$Changelog,
+
+    [ValidateSet('arm64-v8a', 'x86_64', 'universal')]
+    [string]$Abi = 'arm64-v8a',
+
+    [string]$SshTarget = 'root@updates.paleink.cc',
+
+    [int]$SshPort = 22,
+
+    [ValidateScript({ -not $_ -or (Test-Path -LiteralPath $_ -PathType Leaf) })]
+    [string]$IdentityFile
+)
+
+$ErrorActionPreference = 'Stop'
+$resolvedApk = (Resolve-Path -LiteralPath $ApkPath).Path
+$resolvedIdentity = if ($IdentityFile) { (Resolve-Path -LiteralPath $IdentityFile).Path } else { $null }
+$fileName = "rikkahub-$Version-$Abi.apk"
+$sha256 = (Get-FileHash -LiteralPath $resolvedApk -Algorithm SHA256).Hash.ToLowerInvariant()
+$sizeBytes = (Get-Item -LiteralPath $resolvedApk).Length
+$size = '{0:N2} MB' -f ($sizeBytes / 1MB)
+$downloadUrl = "https://updates.paleink.cc/files/$fileName"
+$remoteRoot = '/srv/rikkahub-updates'
+$remoteStaging = "$remoteRoot/staging/$VersionCode"
+
+$manifest = [ordered]@{
+    schemaVersion = 1
+    source = 'paleink/rikkahub'
+    channel = 'stable'
+    version = $Version
+    versionCode = $VersionCode
+    publishedAt = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+    changelog = $Changelog
+    releaseUrl = 'https://updates.paleink.cc/'
+    downloads = @(
+        [ordered]@{
+            name = $fileName
+            url = $downloadUrl
+            size = $size
+            sizeBytes = $sizeBytes
+            abi = $Abi
+            sha256 = $sha256
+        }
+    )
+}
+
+$tempDirectory = Join-Path ([IO.Path]::GetTempPath()) "rikkahub-update-$VersionCode"
+$manifestPath = Join-Path $tempDirectory 'stable.json'
+New-Item -ItemType Directory -Path $tempDirectory -Force | Out-Null
+try {
+    $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM
+
+    Write-Host "APK: $fileName"
+    Write-Host "SHA-256: $sha256"
+    Write-Host "Size: $size"
+
+    if (-not $PSCmdlet.ShouldProcess($SshTarget, "Publish RikkaHub $Version ($VersionCode)")) {
+        return
+    }
+
+    $ssh = @('-p', $SshPort)
+    $scp = @('-P', $SshPort)
+    if ($resolvedIdentity) {
+        $ssh += @('-i', $resolvedIdentity, '-o', 'IdentitiesOnly=yes')
+        $scp += @('-i', $resolvedIdentity, '-o', 'IdentitiesOnly=yes')
+    }
+    $ssh += $SshTarget
+
+    & ssh @ssh "install -d -m 755 '$remoteStaging' '$remoteRoot/public/files' '$remoteRoot/public/api/v1'"
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to create remote staging directory.' }
+
+    & scp @scp $resolvedApk "${SshTarget}:$remoteStaging/$fileName"
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to upload APK.' }
+    & scp @scp $manifestPath "${SshTarget}:$remoteStaging/stable.json"
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to upload update manifest.' }
+
+    $publishCommand = @"
+set -eu
+actual=`$(sha256sum '$remoteStaging/$fileName' | awk '{print `$1}')
+test "`$actual" = '$sha256'
+install -m 644 '$remoteStaging/$fileName' '$remoteRoot/public/files/$fileName'
+install -m 644 '$remoteStaging/stable.json' '$remoteRoot/public/api/v1/stable.json.next'
+mv '$remoteRoot/public/api/v1/stable.json.next' '$remoteRoot/public/api/v1/stable.json'
+chown caddy:caddy '$remoteRoot/public/files/$fileName' '$remoteRoot/public/api/v1/stable.json'
+"@
+    & ssh @ssh $publishCommand
+    if ($LASTEXITCODE -ne 0) { throw 'Remote verification or publication failed.' }
+
+    $published = Invoke-RestMethod -Uri 'https://updates.paleink.cc/api/v1/stable.json' -Headers @{ 'Cache-Control' = 'no-cache' }
+    if ($published.versionCode -ne $VersionCode -or $published.downloads[0].sha256 -ne $sha256) {
+        throw 'Published manifest verification failed.'
+    }
+    Write-Host "Published and verified: https://updates.paleink.cc/api/v1/stable.json"
+}
+finally {
+    if (Test-Path -LiteralPath $tempDirectory) {
+        Remove-Item -LiteralPath $tempDirectory -Recurse -Force
+    }
+}

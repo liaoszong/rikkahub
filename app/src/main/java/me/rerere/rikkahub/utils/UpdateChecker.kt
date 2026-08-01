@@ -2,78 +2,254 @@ package me.rerere.rikkahub.utils
 
 import android.app.DownloadManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Environment
-import android.widget.Toast
+import android.provider.Settings
 import androidx.core.net.toUri
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import me.rerere.rikkahub.AppScope
 import me.rerere.common.http.await
 import me.rerere.rikkahub.BuildConfig
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.security.MessageDigest
 
-private const val API_URL = "https://updates.rikka-ai.com/"
+private const val APK_MIME = "application/vnd.android.package-archive"
+private const val UPDATE_PREFERENCES = "app_update"
+private const val PREF_IGNORED_VERSION = "ignored_version"
+private const val PREF_DOWNLOAD_ID = "download_id"
+private const val PREF_DOWNLOAD_CONTEXT = "download_context"
+private const val NO_DOWNLOAD = -1L
 
-class UpdateChecker(private val client: OkHttpClient) {
+class UpdateChecker(
+    private val context: Context,
+    private val client: OkHttpClient,
+    private val appScope: AppScope,
+) {
     private val json = Json { ignoreUnknownKeys = true }
+    private val preferences = context.getSharedPreferences(UPDATE_PREFERENCES, Context.MODE_PRIVATE)
+    private val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+    private val _state = MutableStateFlow<AppUpdateState>(AppUpdateState.Checking)
+    val state: StateFlow<AppUpdateState> = _state.asStateFlow()
+    private var downloadObserver: Job? = null
 
-    fun checkUpdate(): Flow<UiState<UpdateInfo>> = flow {
-        emit(UiState.Loading)
-        emit(
-            UiState.Success(
-                data = try {
-                    val response = client.newCall(
-                        Request.Builder()
-                            .url(API_URL)
-                            .get()
-                            .addHeader(
-                                "User-Agent",
-                                "RikkaHub ${BuildConfig.VERSION_NAME} #${BuildConfig.VERSION_CODE}"
-                            )
-                            .build()
-                    ).await()
-                    if (response.isSuccessful) {
-                        json.decodeFromString<UpdateInfo>(response.body.string())
-                    } else {
-                        throw Exception("Failed to fetch update info")
+    init {
+        appScope.launch {
+            val restoredId = preferences.getLong(PREF_DOWNLOAD_ID, NO_DOWNLOAD)
+            if (restoredId != NO_DOWNLOAD) {
+                val restoredContext = preferences.getString(PREF_DOWNLOAD_CONTEXT, null)
+                    ?.let { runCatching { json.decodeFromString<DownloadContext>(it) }.getOrNull() }
+                when {
+                    restoredContext == null -> {
+                        downloadManager.remove(restoredId)
+                        clearDownload()
+                        checkUpdate(silent = true)
                     }
-                } catch (e: Exception) {
-                    throw Exception("Failed to fetch update info", e)
+                    !isNewer(restoredContext.info) -> {
+                        downloadManager.remove(restoredId)
+                        clearDownload()
+                        checkUpdate(silent = true)
+                    }
+                    else -> observeDownload(restoredId, restoredContext)
+                }
+            } else if (PlayStoreUtil.isInstalledFromPlayStore(context)) {
+                _state.value = AppUpdateState.UpToDate
+            } else {
+                checkUpdate(silent = true)
+            }
+        }
+    }
+
+    fun checkUpdate(silent: Boolean = false) {
+        if (!silent) _state.value = AppUpdateState.Checking
+        appScope.launch {
+            runCatching { fetchUpdateInfo() }
+                .onSuccess { info ->
+                    val ignored = preferences.getString(PREF_IGNORED_VERSION, null)
+                    _state.value = if (isNewer(info) && ignored != info.version) {
+                        AppUpdateState.Available(info)
+                    } else {
+                        AppUpdateState.UpToDate
+                    }
+                }
+                .onFailure { error ->
+                    if (!silent) _state.value = AppUpdateState.Failed(error.message ?: "Update check failed")
+                    else _state.value = AppUpdateState.UpToDate
+                }
+        }
+    }
+
+    fun ignoreVersion(version: String) {
+        preferences.edit().putString(PREF_IGNORED_VERSION, version).apply()
+        _state.value = AppUpdateState.UpToDate
+    }
+
+    fun startDownload(info: UpdateInfo) {
+        val download = selectDownload(info) ?: run {
+            _state.value = AppUpdateState.Failed("No compatible APK found")
+            return
+        }
+        context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+            ?.resolve("updates/${download.name}")
+            ?.takeIf { it.isFile }
+            ?.delete()
+        val request = DownloadManager.Request(download.url.toUri()).apply {
+            setTitle(download.name)
+            setDescription("RikkaHub ${info.version}")
+            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE)
+            setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, "updates/${download.name}")
+            setMimeType(APK_MIME)
+        }
+        runCatching { downloadManager.enqueue(request) }
+            .onSuccess { id ->
+                val downloadContext = DownloadContext(info, download)
+                preferences.edit()
+                    .putLong(PREF_DOWNLOAD_ID, id)
+                    .putString(PREF_DOWNLOAD_CONTEXT, json.encodeToString(downloadContext))
+                    .apply()
+                observeDownload(id, downloadContext)
+            }
+            .onFailure { _state.value = AppUpdateState.Failed(it.message ?: "Download failed") }
+    }
+
+    fun cancelDownload() {
+        val id = preferences.getLong(PREF_DOWNLOAD_ID, NO_DOWNLOAD)
+        if (id != NO_DOWNLOAD) downloadManager.remove(id)
+        clearDownload()
+        checkUpdate(silent = true)
+    }
+
+    fun installDownloadedApk() {
+        val id = preferences.getLong(PREF_DOWNLOAD_ID, NO_DOWNLOAD)
+        if (id == NO_DOWNLOAD) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
+            runCatching {
+                context.startActivity(
+                    Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, "package:${context.packageName}".toUri())
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }.onFailure { _state.value = AppUpdateState.Failed(it.message ?: "Unable to open install settings") }
+            return
+        }
+        val uri = downloadManager.getUriForDownloadedFile(id) ?: return
+        runCatching {
+            context.startActivity(
+                Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, APK_MIME)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
             )
-        )
-    }.catch {
-        emit(UiState.Error(it))
-    }.flowOn(Dispatchers.IO)
+        }.onFailure { _state.value = AppUpdateState.Failed(it.message ?: "Unable to start APK installer") }
+    }
 
-    fun downloadUpdate(context: Context, download: UpdateDownload) {
-        runCatching {
-            val request = DownloadManager.Request(download.url.toUri()).apply {
-                // 设置下载时通知栏的标题和描述
-                setTitle(download.name)
-                setDescription("正在下载更新包...")
-                // 下载完成后通知栏可见
-                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                // 允许在移动网络和WiFi下下载
-                setAllowedNetworkTypes(DownloadManager.Request.NETWORK_WIFI or DownloadManager.Request.NETWORK_MOBILE)
-                // 设置文件保存路径
-                setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, download.name)
-                // 允许下载的文件类型
-                setMimeType("application/vnd.android.package-archive")
+    internal suspend fun fetchUpdateInfo(): UpdateInfo = withContext(Dispatchers.IO) {
+        client.newCall(
+            Request.Builder()
+                .url(BuildConfig.UPDATE_FEED_URL)
+                .get()
+                .addHeader("User-Agent", "RikkaHub ${BuildConfig.VERSION_NAME} #${BuildConfig.VERSION_CODE}")
+                .build()
+        ).await().use { response ->
+            check(response.isSuccessful) { "Update server returned HTTP ${response.code}" }
+            json.decodeFromString<UpdateInfo>(response.body.string()).also { info ->
+                UpdatePolicy.validate(info, BuildConfig.UPDATE_SOURCE)
             }
-            // 获取系统的DownloadManager
-            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            dm.enqueue(request)
-            // 你可以保存返回的downloadId到本地，以便后续查询下载进度或状态
-        }.onFailure {
-            Toast.makeText(context, "Failed to update", Toast.LENGTH_SHORT).show()
-            context.openUrl(download.url) // 跳转到下载页面
         }
+    }
+
+    internal fun isNewer(info: UpdateInfo): Boolean {
+        return UpdatePolicy.isNewer(
+            info = info,
+            currentVersion = BuildConfig.VERSION_NAME,
+            currentVersionCode = BuildConfig.VERSION_CODE.toIntOrNull(),
+        )
+    }
+
+    internal fun selectDownload(info: UpdateInfo): UpdateDownload? {
+        return UpdatePolicy.selectDownload(info, Build.SUPPORTED_ABIS.toList())
+    }
+
+    private fun observeDownload(id: Long, contextInfo: DownloadContext?) {
+        downloadObserver?.cancel()
+        downloadObserver = appScope.launch(Dispatchers.IO) {
+            var info = contextInfo
+            while (true) {
+                val snapshot = queryDownload(id) ?: run {
+                    clearDownload()
+                    _state.value = AppUpdateState.Failed("Downloaded update is no longer available")
+                    return@launch
+                }
+                when (snapshot.status) {
+                    DownloadManager.STATUS_PENDING, DownloadManager.STATUS_PAUSED, DownloadManager.STATUS_RUNNING -> {
+                        _state.value = AppUpdateState.Downloading(info?.info, info?.download, snapshot.progress)
+                    }
+                    DownloadManager.STATUS_SUCCESSFUL -> {
+                        _state.value = AppUpdateState.Verifying(info?.info, info?.download)
+                        val uri = downloadManager.getUriForDownloadedFile(id)
+                        val expected = info?.download?.sha256
+                        if (expected != null && uri != null && !verifySha256(uri, expected)) {
+                            downloadManager.remove(id)
+                            clearDownload()
+                            _state.value = AppUpdateState.Failed("APK integrity check failed")
+                        } else {
+                            _state.value = AppUpdateState.ReadyToInstall(info?.info, info?.download)
+                        }
+                        return@launch
+                    }
+                    DownloadManager.STATUS_FAILED -> {
+                        clearDownload()
+                        _state.value = AppUpdateState.Failed("Download failed (${snapshot.reason})")
+                        return@launch
+                    }
+                }
+                delay(750)
+            }
+        }
+    }
+
+    private fun queryDownload(id: Long): DownloadSnapshot? =
+        downloadManager.query(DownloadManager.Query().setFilterById(id))?.use { cursor ->
+            if (!cursor.moveToFirst()) return@use null
+            val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+            val downloaded = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+            val total = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+            val reason = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
+            DownloadSnapshot(status, if (total > 0) ((downloaded * 100) / total).toInt().coerceIn(0, 100) else 0, reason)
+        }
+
+    private fun verifySha256(uri: Uri, expected: String): Boolean {
+        val digest = MessageDigest.getInstance("SHA-256")
+        context.contentResolver.openInputStream(uri)?.buffered()?.use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val count = input.read(buffer)
+                if (count <= 0) break
+                digest.update(buffer, 0, count)
+            }
+        } ?: return false
+        val actual = digest.digest().joinToString("") { "%02x".format(it) }
+        return actual.equals(expected.trim(), ignoreCase = true)
+    }
+
+    private fun clearDownload() {
+        downloadObserver?.cancel()
+        downloadObserver = null
+        preferences.edit()
+            .remove(PREF_DOWNLOAD_ID)
+            .remove(PREF_DOWNLOAD_CONTEXT)
+            .apply()
     }
 }
 
@@ -81,16 +257,70 @@ class UpdateChecker(private val client: OkHttpClient) {
 data class UpdateDownload(
     val name: String,
     val url: String,
-    val size: String
+    val size: String = "",
+    val sizeBytes: Long? = null,
+    val abi: String? = null,
+    val sha256: String? = null,
 )
 
 @Serializable
 data class UpdateInfo(
+    val schemaVersion: Int = 1,
+    val source: String,
+    val channel: String = "stable",
     val version: String,
+    val versionCode: Int? = null,
     val publishedAt: String,
     val changelog: String,
-    val downloads: List<UpdateDownload>
+    val releaseUrl: String? = null,
+    val downloads: List<UpdateDownload>,
 )
+
+sealed interface AppUpdateState {
+    data object Checking : AppUpdateState
+    data object UpToDate : AppUpdateState
+    data class Available(val info: UpdateInfo) : AppUpdateState
+    data class Downloading(val info: UpdateInfo?, val download: UpdateDownload?, val progress: Int) : AppUpdateState
+    data class Verifying(val info: UpdateInfo?, val download: UpdateDownload?) : AppUpdateState
+    data class ReadyToInstall(val info: UpdateInfo?, val download: UpdateDownload?) : AppUpdateState
+    data class Failed(val message: String) : AppUpdateState
+}
+
+@Serializable
+private data class DownloadContext(val info: UpdateInfo, val download: UpdateDownload)
+private data class DownloadSnapshot(val status: Int, val progress: Int, val reason: Int)
+
+internal object UpdatePolicy {
+    fun validate(info: UpdateInfo, expectedSource: String) {
+        check(info.source == expectedSource) { "Unexpected update source" }
+        check(info.channel == "stable") { "Unexpected update channel" }
+        check(info.downloads.all { it.url.startsWith("https://") }) { "Insecure download URL" }
+        check(info.downloads.all { it.name.matches(Regex("^[A-Za-z0-9._-]+\\.apk$")) }) {
+            "Invalid APK filename"
+        }
+        check(info.downloads.all { it.sha256?.matches(Regex("^[a-fA-F0-9]{64}$")) == true }) {
+            "Missing or invalid APK checksum"
+        }
+    }
+
+    fun isNewer(info: UpdateInfo, currentVersion: String, currentVersionCode: Int?): Boolean {
+        return if (info.versionCode != null && currentVersionCode != null) {
+            info.versionCode > currentVersionCode
+        } else {
+            Version(info.version) > Version(currentVersion)
+        }
+    }
+
+    fun selectDownload(info: UpdateInfo, supportedAbis: List<String>): UpdateDownload? {
+        return info.downloads.firstOrNull { candidate ->
+            val abi = candidate.abi
+                ?: supportedAbis.firstOrNull { candidate.name.contains(it, ignoreCase = true) }
+            abi != null && abi in supportedAbis
+        } ?: info.downloads.firstOrNull {
+            it.abi.equals("universal", ignoreCase = true) || it.name.contains("universal", ignoreCase = true)
+        } ?: info.downloads.singleOrNull()
+    }
+}
 
 /**
  * 版本号值类，封装版本号字符串并提供比较功能

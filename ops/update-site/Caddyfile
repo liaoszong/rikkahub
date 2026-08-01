@@ -1,0 +1,32 @@
+sub2api.paleink.cc {
+	route {
+		@preflight method OPTIONS
+		header {
+			Access-Control-Allow-Origin "*"
+			Access-Control-Allow-Methods "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+			Access-Control-Allow-Headers "{http.request.header.Access-Control-Request-Headers}"
+			Access-Control-Max-Age "86400"
+		}
+		respond @preflight 204
+		reverse_proxy 127.0.0.1:8080
+	}
+}
+
+updates.paleink.cc {
+	root * /srv/rikkahub-updates/public
+	encode zstd gzip
+
+	@manifest path /api/v1/*.json
+	header @manifest Cache-Control "no-store"
+
+	@apk path /files/*.apk
+	header @apk Cache-Control "public, max-age=31536000, immutable"
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		X-Frame-Options "DENY"
+	}
+
+	file_server
+}

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='18' fill='%23eaddff'/%3E%3Cpath d='M32 12c2 12 8 18 20 20-12 2-18 8-20 20-2-12-8-18-20-20 12-2 18-8 20-20Z' fill='%236750a4'/%3E%3C/svg%3E">
+  <title>RikkaHub 更新</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #1d1b20; background: #f7f2fa; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at 80% 10%, #e7ddff 0, transparent 34%), #f7f2fa; }
+    main { width: min(680px, 100%); padding: 32px; border-radius: 30px; background: color-mix(in srgb, #fff 92%, transparent); box-shadow: 0 20px 70px #4d3e6820; }
+    .mark { width: 52px; height: 52px; display: grid; place-items: center; border-radius: 17px; color: #4f378b; background: #eaddff; font-size: 26px; }
+    h1 { margin: 20px 0 4px; font-size: clamp(28px, 6vw, 42px); letter-spacing: -.03em; }
+    .source { color: #6750a4; font-weight: 650; }
+    .version { display: flex; align-items: center; gap: 10px; margin: 22px 0; }
+    .chip { padding: 6px 10px; border-radius: 9px; background: #eee8f4; font-size: 14px; }
+    .chip.latest { color: #4f378b; background: #eaddff; font-weight: 700; }
+    #notes { line-height: 1.7; white-space: pre-wrap; color: #49454f; }
+    #downloads { display: grid; gap: 10px; margin-top: 24px; }
+    a.download { display: flex; justify-content: space-between; gap: 16px; padding: 14px 18px; border-radius: 15px; color: #fff; background: #6750a4; text-decoration: none; font-weight: 650; }
+    .empty { padding: 14px 0; color: #79747e; }
+    footer { margin-top: 28px; color: #79747e; font-size: 13px; }
+    @media (prefers-color-scheme: dark) {
+      :root { color: #e6e1e5; background: #141218; }
+      body { background: radial-gradient(circle at 80% 10%, #33294a 0, transparent 35%), #141218; }
+      main { background: #211f26; }
+      .chip { background: #363139; }
+      #notes { color: #cac4d0; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="mark" aria-hidden="true">✦</div>
+    <h1>RikkaHub 更新</h1>
+    <div class="source">PaleInk 维护版 · Stable</div>
+    <div class="version"><span>最新版本</span><span class="chip latest" id="version">读取中…</span></div>
+    <div id="notes">正在获取更新信息…</div>
+    <div id="downloads"></div>
+    <footer>更新清单与安装包均由 updates.paleink.cc 提供。安装前请核对 SHA-256。</footer>
+  </main>
+  <script>
+    fetch('/api/v1/stable.json', { cache: 'no-store' }).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    }).then(info => {
+      document.querySelector('#version').textContent = `v${info.version}`;
+      document.querySelector('#notes').textContent = info.changelog || '暂无更新说明。';
+      const downloads = document.querySelector('#downloads');
+      if (!info.downloads?.length) {
+        downloads.innerHTML = '<div class="empty">当前版本暂无公开安装包。</div>';
+        return;
+      }
+      for (const item of info.downloads) {
+        const link = document.createElement('a');
+        link.className = 'download';
+        link.href = item.url;
+        link.textContent = item.name;
+        const size = document.createElement('span');
+        size.textContent = item.size || '';
+        link.append(size);
+        downloads.append(link);
+      }
+    }).catch(error => {
+      document.querySelector('#version').textContent = '不可用';
+      document.querySelector('#notes').textContent = `更新服务暂时不可用：${error.message}`;
+    });
+  </script>
+</body>
+</html>

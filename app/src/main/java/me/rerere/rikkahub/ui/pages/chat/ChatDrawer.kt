@@ -66,6 +66,7 @@ import me.rerere.hugeicons.stroke.PencilEdit01
 import me.rerere.hugeicons.stroke.Search01
 import me.rerere.hugeicons.stroke.Settings03
 import me.rerere.hugeicons.stroke.Sparkles
+import me.rerere.hugeicons.stroke.SystemUpdate01
 import me.rerere.hugeicons.stroke.TransactionHistory
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.Screen
@@ -79,7 +80,7 @@ import me.rerere.rikkahub.ui.components.ui.BackupReminderCard
 import me.rerere.rikkahub.ui.components.ui.Greeting
 import me.rerere.rikkahub.ui.components.ui.Tooltip
 import me.rerere.rikkahub.ui.components.ui.UIAvatar
-import me.rerere.rikkahub.ui.components.ui.UpdateCard
+import me.rerere.rikkahub.ui.components.ui.AppUpdateDialog
 import androidx.compose.ui.draw.clip
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.context.Navigator
@@ -91,6 +92,8 @@ import me.rerere.rikkahub.ui.hooks.useEditState
 import me.rerere.rikkahub.ui.modifier.onClick
 import me.rerere.rikkahub.utils.navigateToChatPage
 import me.rerere.rikkahub.utils.toDp
+import me.rerere.rikkahub.utils.AppUpdateState
+import me.rerere.rikkahub.utils.UpdateChecker
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
 import kotlin.uuid.Uuid
@@ -107,6 +110,8 @@ fun ChatDrawerContent(
     val toaster = LocalToaster.current
     val isPlayStore = rememberIsPlayStoreVersion()
     val repo = koinInject<ConversationRepository>()
+    val updateChecker = koinInject<UpdateChecker>()
+    val updateState by updateChecker.state.collectAsStateWithLifecycle()
 
     val activity = context as ComponentActivity
     val drawerVm: ChatDrawerVM = koinViewModel(viewModelStoreOwner = activity)
@@ -160,18 +165,15 @@ fun ChatDrawerContent(
 
     // Menu popup 状态
     var showMenuPopup by remember { mutableStateOf(false) }
+    var showUpdateDialog by remember { mutableStateOf(false) }
 
     ModalDrawerSheet(
-        modifier = Modifier.width(300.dp)
+        modifier = Modifier.width(316.dp)
     ) {
         Column(
             modifier = Modifier.padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (settings.displaySetting.showUpdates && !isPlayStore) {
-                UpdateCard(vm)
-            }
-
             BackupReminderCard(
                 settings = settings,
                 onClick = { navController.navigate(Screen.Backup) },
@@ -307,11 +309,11 @@ fun ChatDrawerContent(
             )
 
             Row(
-                horizontalArrangement = Arrangement.SpaceAround,
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp)
+                    .padding(horizontal = 0.dp)
             ) {
                 DrawerAction(
                     icon = {
@@ -387,8 +389,6 @@ fun ChatDrawerContent(
                     },
                 )
 
-                Spacer(Modifier.weight(1f))
-
                 DrawerAction(
                     icon = {
                         Icon(HugeIcons.Settings03, null)
@@ -398,8 +398,32 @@ fun ChatDrawerContent(
                         navController.navigate(Screen.Setting)
                     },
                 )
+
+                val showUpdateEntry = settings.displaySetting.showUpdates &&
+                    !isPlayStore &&
+                    updateState !is AppUpdateState.UpToDate &&
+                    updateState !is AppUpdateState.Checking
+                if (showUpdateEntry) {
+                    DrawerAction(
+                        icon = {
+                            Icon(
+                                HugeIcons.SystemUpdate01,
+                                contentDescription = stringResource(R.string.update_dialog_entry),
+                            )
+                        },
+                        label = { Text(stringResource(R.string.update_dialog_entry)) },
+                        onClick = { showUpdateDialog = true },
+                    )
+                }
             }
         }
+    }
+
+    if (showUpdateDialog) {
+        AppUpdateDialog(
+            updateChecker = updateChecker,
+            onDismissRequest = { showUpdateDialog = false },
+        )
     }
 
     // 昵称编辑对话框

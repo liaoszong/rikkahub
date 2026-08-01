@@ -39,11 +39,15 @@ val appModule = module {
     }
 
     single {
-        UpdateChecker(get())
+        AppScope()
     }
 
-    single {
-        AppScope()
+    single(createdAtStart = true) {
+        UpdateChecker(
+            context = get(),
+            client = get(),
+            appScope = get(),
+        )
     }
 
     single<ImageGenerationTaskStore> {
