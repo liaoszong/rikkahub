@@ -52,9 +52,34 @@ if (-not $signerMatch.Success -or $signerMatch.Groups[1].Value.ToLowerInvariant(
     throw 'APK is not signed with the permanent PaleInk RikkaHub release certificate.'
 }
 
-$actualApplicationId = (& $apkAnalyzer manifest application-id $resolvedApk).Trim()
-$actualVersion = (& $apkAnalyzer manifest version-name $resolvedApk).Trim()
-$actualVersionCode = [int](& $apkAnalyzer manifest version-code $resolvedApk).Trim()
+function Get-ApkAnalyzerValue {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Property
+    )
+
+    $output = @(& $apkAnalyzer manifest $Property $resolvedApk 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        throw "apkanalyzer failed to read manifest property '$Property'."
+    }
+    $values = @(
+        $output |
+            ForEach-Object { $_.ToString().Trim() } |
+            Where-Object { $_ }
+    )
+    if ($values.Count -ne 1) {
+        throw "apkanalyzer returned an unexpected value for '$Property': $($values -join ', ')"
+    }
+    return $values[0]
+}
+
+$actualApplicationId = Get-ApkAnalyzerValue -Property 'application-id'
+$actualVersion = Get-ApkAnalyzerValue -Property 'version-name'
+$actualVersionCodeText = Get-ApkAnalyzerValue -Property 'version-code'
+if ($actualVersionCodeText -notmatch '^\d+$') {
+    throw "apkanalyzer returned an invalid version code: $actualVersionCodeText"
+}
+$actualVersionCode = [int]$actualVersionCodeText
 if ($actualApplicationId -ne $expectedApplicationId) {
     throw "Unexpected application ID: $actualApplicationId"
 }
