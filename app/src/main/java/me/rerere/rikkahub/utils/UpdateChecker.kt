@@ -97,7 +97,7 @@ class UpdateChecker(
 
     fun startDownload(info: UpdateInfo) {
         val download = selectDownload(info) ?: run {
-            _state.value = AppUpdateState.Failed("No compatible APK found")
+            _state.value = AppUpdateState.Failed("No compatible APK found", info)
             return
         }
         context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
@@ -121,7 +121,7 @@ class UpdateChecker(
                     .apply()
                 observeDownload(id, downloadContext)
             }
-            .onFailure { _state.value = AppUpdateState.Failed(it.message ?: "Download failed") }
+            .onFailure { _state.value = AppUpdateState.Failed(it.message ?: "Download failed", info) }
     }
 
     fun cancelDownload() {
@@ -134,15 +134,7 @@ class UpdateChecker(
     fun installDownloadedApk() {
         val id = preferences.getLong(PREF_DOWNLOAD_ID, NO_DOWNLOAD)
         if (id == NO_DOWNLOAD) return
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
-            runCatching {
-                context.startActivity(
-                    Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, "package:${context.packageName}".toUri())
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-            }.onFailure { _state.value = AppUpdateState.Failed(it.message ?: "Unable to open install settings") }
-            return
-        }
+        if (!canInstallUpdates()) return
         val uri = downloadManager.getUriForDownloadedFile(id) ?: return
         runCatching {
             context.startActivity(
@@ -152,6 +144,20 @@ class UpdateChecker(
                 }
             )
         }.onFailure { _state.value = AppUpdateState.Failed(it.message ?: "Unable to start APK installer") }
+    }
+
+    fun canInstallUpdates(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.O || context.packageManager.canRequestPackageInstalls()
+
+    fun openInstallPermissionSettings(): Boolean = runCatching {
+        context.startActivity(
+            Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, "package:${context.packageName}".toUri())
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+        true
+    }.getOrElse {
+        _state.value = AppUpdateState.Failed(it.message ?: "Unable to open install settings")
+        false
     }
 
     internal suspend fun fetchUpdateInfo(): UpdateInfo = withContext(Dispatchers.IO) {
@@ -187,8 +193,12 @@ class UpdateChecker(
             var info = contextInfo
             while (true) {
                 val snapshot = queryDownload(id) ?: run {
+                    downloadManager.remove(id)
                     clearDownload()
-                    _state.value = AppUpdateState.Failed("Downloaded update is no longer available")
+                    _state.value = AppUpdateState.Failed(
+                        message = "Downloaded update is no longer available",
+                        info = info?.info,
+                    )
                     return@launch
                 }
                 when (snapshot.status) {
@@ -202,15 +212,19 @@ class UpdateChecker(
                         if (expected != null && uri != null && !verifySha256(uri, expected)) {
                             downloadManager.remove(id)
                             clearDownload()
-                            _state.value = AppUpdateState.Failed("APK integrity check failed")
+                            _state.value = AppUpdateState.Failed("APK integrity check failed", info.info)
                         } else {
                             _state.value = AppUpdateState.ReadyToInstall(info?.info, info?.download)
                         }
                         return@launch
                     }
                     DownloadManager.STATUS_FAILED -> {
+                        downloadManager.remove(id)
                         clearDownload()
-                        _state.value = AppUpdateState.Failed("Download failed (${snapshot.reason})")
+                        _state.value = AppUpdateState.Failed(
+                            message = "Download failed (${snapshot.reason})",
+                            info = info?.info,
+                        )
                         return@launch
                     }
                 }
@@ -283,7 +297,7 @@ sealed interface AppUpdateState {
     data class Downloading(val info: UpdateInfo?, val download: UpdateDownload?, val progress: Int) : AppUpdateState
     data class Verifying(val info: UpdateInfo?, val download: UpdateDownload?) : AppUpdateState
     data class ReadyToInstall(val info: UpdateInfo?, val download: UpdateDownload?) : AppUpdateState
-    data class Failed(val message: String) : AppUpdateState
+    data class Failed(val message: String, val info: UpdateInfo? = null) : AppUpdateState
 }
 
 @Serializable

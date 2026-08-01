@@ -1,0 +1,295 @@
+package me.rerere.rikkahub.ui.components.message
+
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
+import me.rerere.rikkahub.R
+import me.rerere.rikkahub.data.imggen.ChatImageGenerationSlot
+import me.rerere.rikkahub.data.imggen.ChatImageGenerationState
+import me.rerere.rikkahub.data.imggen.ChatImageSlotStatus
+import me.rerere.rikkahub.ui.components.richtext.ZoomableAsyncImage
+import me.rerere.rikkahub.ui.modifier.shimmer
+
+@Composable
+fun ChatImageGenerationGallery(
+    toolCallId: String,
+    state: ChatImageGenerationState?,
+    active: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    var collapsed by rememberSaveable(toolCallId) { mutableStateOf(false) }
+    var selectedSlotIndex by rememberSaveable(toolCallId) { mutableIntStateOf(0) }
+    var now by rememberSaveable(toolCallId) { mutableLongStateOf(System.currentTimeMillis()) }
+
+    LaunchedEffect(active, state?.finishedAtEpochMillis) {
+        while (active && state?.finishedAtEpochMillis == null) {
+            now = System.currentTimeMillis()
+            delay(1_000)
+        }
+    }
+
+    val succeeded = state?.slots.orEmpty().filter {
+        it.status == ChatImageSlotStatus.SUCCEEDED && !it.imageUrl.isNullOrBlank()
+    }
+    LaunchedEffect(succeeded.map { it.index }) {
+        if (succeeded.isNotEmpty() && succeeded.none { it.index == selectedSlotIndex }) {
+            selectedSlotIndex = succeeded.first().index
+        }
+    }
+
+    val elapsedMillis = state?.let {
+        (it.finishedAtEpochMillis ?: now) - it.startedAtEpochMillis
+    }?.coerceAtLeast(0L) ?: 0L
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .animateContentSize(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = galleryStatusText(state, active, elapsedMillis),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (state != null) {
+                TextButton(onClick = { collapsed = !collapsed }) {
+                    Text(stringResource(if (collapsed) R.string.chat_image_generation_expand else R.string.chat_image_generation_collapse))
+                }
+            }
+        }
+
+        if (!collapsed) {
+            val selected = state?.slots?.firstOrNull { it.index == selectedSlotIndex }
+                ?.takeIf { it.status == ChatImageSlotStatus.SUCCEEDED }
+                ?: succeeded.firstOrNull()
+            AnimatedContent(
+                targetState = selected?.imageUrl,
+                transitionSpec = { androidx.compose.animation.fadeIn(tween(280)) togetherWith androidx.compose.animation.fadeOut(tween(180)) },
+                label = "generated-image-main",
+            ) { imageUrl ->
+                if (imageUrl.isNullOrBlank()) {
+                    PendingMainImage(
+                        elapsedMillis = elapsedMillis,
+                        aspectRatio = state.imageAspectRatio(),
+                    )
+                } else {
+                    val previewImages = succeeded.mapNotNull { it.imageUrl }
+                    ZoomableAsyncImage(
+                        model = imageUrl,
+                        contentDescription = stringResource(R.string.chat_image_generation_main_description),
+                        previewImages = previewImages,
+                        previewIndex = previewImages.indexOf(imageUrl).coerceAtLeast(0),
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(state.imageAspectRatio())
+                            .clip(RoundedCornerShape(18.dp)),
+                    )
+                }
+            }
+
+            val slots = state?.slots.orEmpty()
+            if (slots.size > 1) {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(slots, key = ChatImageGenerationSlot::index) { slot ->
+                        GalleryThumbnail(
+                            slot = slot,
+                            selected = slot.index == selectedSlotIndex,
+                            onClick = {
+                                if (slot.status == ChatImageSlotStatus.SUCCEEDED) {
+                                    selectedSlotIndex = slot.index
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+        } else {
+            LazyRow(horizontalArrangement = Arrangement.spacedBy((-10).dp)) {
+                items(state?.slots.orEmpty().take(4), key = ChatImageGenerationSlot::index) { slot ->
+                    GalleryThumbnail(slot = slot, selected = false, onClick = { collapsed = false }, compact = true)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PendingMainImage(elapsedMillis: Long, aspectRatio: Float) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(aspectRatio)
+            .clip(RoundedCornerShape(18.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f))
+            .shimmer(isLoading = true),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = stringResource(
+                R.string.chat_image_generation_elapsed,
+                formatElapsed(elapsedMillis),
+            ),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun GalleryThumbnail(
+    slot: ChatImageGenerationSlot,
+    selected: Boolean,
+    onClick: () -> Unit,
+    compact: Boolean = false,
+) {
+    val shape = RoundedCornerShape(if (compact) 9.dp else 12.dp)
+    Surface(
+        modifier = Modifier
+            .size(if (compact) 48.dp else 62.dp)
+            .clickable(onClick = onClick),
+        shape = shape,
+        border = if (selected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
+        color = when (slot.status) {
+            ChatImageSlotStatus.FAILED -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
+            else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.76f)
+        },
+    ) {
+        val imageUrl = slot.imageUrl
+        if (slot.status == ChatImageSlotStatus.SUCCEEDED && !imageUrl.isNullOrBlank()) {
+            ZoomableAsyncImage(
+                model = imageUrl,
+                contentDescription = stringResource(R.string.chat_image_generation_item_description, slot.index + 1),
+                onClick = onClick,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(
+                        if (slot.status == ChatImageSlotStatus.RUNNING) Modifier.shimmer(isLoading = true)
+                        else Modifier
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = when (slot.status) {
+                        ChatImageSlotStatus.FAILED -> stringResource(R.string.chat_image_generation_failed)
+                        ChatImageSlotStatus.CANCELLED -> stringResource(R.string.chat_image_generation_cancelled)
+                        ChatImageSlotStatus.RUNNING -> "${slot.index + 1}"
+                        else -> "${slot.index + 1}"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun galleryStatusText(
+    state: ChatImageGenerationState?,
+    active: Boolean,
+    elapsedMillis: Long,
+): String {
+    if (state == null) return stringResource(
+        if (active) R.string.chat_image_generation_preparing else R.string.chat_image_generation_unavailable
+    )
+    val total = state.slots.size
+    val success = state.succeededCount
+    return when {
+        !state.isTerminal && active -> stringResource(
+            R.string.chat_image_generation_running,
+            success,
+            total,
+            formatElapsed(elapsedMillis),
+        )
+        !state.isTerminal -> stringResource(
+            R.string.chat_image_generation_interrupted,
+            success,
+            total,
+            formatElapsed(elapsedMillis),
+        )
+        state.failedCount > 0 -> stringResource(
+            R.string.chat_image_generation_partial,
+            success,
+            total,
+            state.failedCount,
+            formatElapsed(elapsedMillis),
+        )
+        else -> stringResource(
+            R.string.chat_image_generation_completed,
+            success,
+            formatElapsed(elapsedMillis),
+        )
+    }
+}
+
+private fun formatElapsed(milliseconds: Long): String {
+    val totalSeconds = milliseconds.coerceAtLeast(0L) / 1_000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+    return "%02d:%02d".format(minutes, seconds)
+}
+
+private fun ChatImageGenerationState?.imageAspectRatio(): Float {
+    val value = this?.size.orEmpty()
+    val width = value.substringBefore('x').toFloatOrNull()
+    val height = value.substringAfter('x', "").toFloatOrNull()
+    return if (width != null && height != null && height > 0f) {
+        (width / height).coerceIn(0.68f, 1.55f)
+    } else {
+        1f
+    }
+}

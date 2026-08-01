@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -22,7 +23,11 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -35,6 +40,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.DownloadCircle02
 import me.rerere.hugeicons.stroke.Rocket01
@@ -55,6 +63,20 @@ fun AppUpdateDialog(
 ) {
     val state by updateChecker.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var showInstallPermissionExplanation by rememberSaveable { mutableStateOf(false) }
+    var waitingForInstallPermission by rememberSaveable { mutableStateOf(false) }
+
+    DisposableEffect(lifecycleOwner, waitingForInstallPermission) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && waitingForInstallPermission) {
+                waitingForInstallPermission = false
+                if (updateChecker.canInstallUpdates()) updateChecker.installDownloadedApk()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     Dialog(
         onDismissRequest = onDismissRequest,
@@ -154,7 +176,13 @@ fun AppUpdateDialog(
 
                         is AppUpdateState.ReadyToInstall -> {
                             Button(
-                                onClick = updateChecker::installDownloadedApk,
+                                onClick = {
+                                    if (updateChecker.canInstallUpdates()) {
+                                        updateChecker.installDownloadedApk()
+                                    } else {
+                                        showInstallPermissionExplanation = true
+                                    }
+                                },
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
                                 Icon(HugeIcons.SystemUpdate02, contentDescription = null)
@@ -172,7 +200,10 @@ fun AppUpdateDialog(
                                     Text(stringResource(R.string.update_dialog_later))
                                 }
                                 Spacer(Modifier.weight(1f))
-                                Button(onClick = { updateChecker.checkUpdate() }) {
+                                Button(onClick = {
+                                    current.info?.let(updateChecker::startDownload)
+                                        ?: updateChecker.checkUpdate()
+                                }) {
                                     Text(stringResource(R.string.update_dialog_retry))
                                 }
                             }
@@ -185,6 +216,29 @@ fun AppUpdateDialog(
                 }
             }
         }
+    }
+
+    if (showInstallPermissionExplanation) {
+        AlertDialog(
+            onDismissRequest = { showInstallPermissionExplanation = false },
+            title = { Text(stringResource(R.string.update_dialog_install_permission_title)) },
+            text = { Text(stringResource(R.string.update_dialog_install_permission_body)) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showInstallPermissionExplanation = false
+                        waitingForInstallPermission = updateChecker.openInstallPermissionSettings()
+                    }
+                ) {
+                    Text(stringResource(R.string.update_dialog_install_permission_continue))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showInstallPermissionExplanation = false }) {
+                    Text(stringResource(R.string.update_dialog_install_permission_cancel))
+                }
+            },
+        )
     }
 }
 
@@ -323,5 +377,6 @@ private fun updateInfoOf(state: AppUpdateState): UpdateInfo? = when (state) {
     is AppUpdateState.Downloading -> state.info
     is AppUpdateState.Verifying -> state.info
     is AppUpdateState.ReadyToInstall -> state.info
+    is AppUpdateState.Failed -> state.info
     else -> null
 }

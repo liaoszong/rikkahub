@@ -31,6 +31,10 @@ $expectedApplicationId = 'me.rerere.rikkahub'
 $expectedSignerSha256 = 'df8c1f92039b19cfbdd72491e0058eb4682ff75f99cbbe32450fe9ea4d408520'
 $resolvedApk = (Resolve-Path -LiteralPath $ApkPath).Path
 $resolvedIdentity = if ($IdentityFile) { (Resolve-Path -LiteralPath $IdentityFile).Path } else { $null }
+$siteIndex = Join-Path $PSScriptRoot 'public\index.html'
+if (-not (Test-Path -LiteralPath $siteIndex -PathType Leaf)) {
+    throw "Update site index not found: $siteIndex"
+}
 
 $androidSdkRoot = if ($env:ANDROID_SDK_ROOT) { $env:ANDROID_SDK_ROOT } else { $env:ANDROID_HOME }
 if (-not $androidSdkRoot -or -not (Test-Path -LiteralPath $androidSdkRoot -PathType Container)) {
@@ -122,6 +126,7 @@ if ($actualVersion -ne $Version -or $actualVersionCode -ne $VersionCode) {
 
 $fileName = "rikkahub-$Version-$Abi.apk"
 $sha256 = (Get-FileHash -LiteralPath $resolvedApk -Algorithm SHA256).Hash.ToLowerInvariant()
+$siteIndexSha256 = (Get-FileHash -LiteralPath $siteIndex -Algorithm SHA256).Hash.ToLowerInvariant()
 $sizeBytes = (Get-Item -LiteralPath $resolvedApk).Length
 $size = '{0:N2} MB' -f ($sizeBytes / 1MB)
 $downloadUrl = "https://updates.paleink.cc/files/$fileName"
@@ -151,13 +156,16 @@ $manifest = [ordered]@{
 
 $tempDirectory = Join-Path ([IO.Path]::GetTempPath()) "rikkahub-update-$VersionCode"
 $manifestPath = Join-Path $tempDirectory 'stable.json'
+$stagedApkPath = Join-Path $tempDirectory $fileName
 New-Item -ItemType Directory -Path $tempDirectory -Force | Out-Null
 try {
     $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM
+    Copy-Item -LiteralPath $resolvedApk -Destination $stagedApkPath -Force
 
     Write-Host "APK: $fileName"
     Write-Host "Signer SHA-256: $expectedSignerSha256"
     Write-Host "SHA-256: $sha256"
+    Write-Host "Site index SHA-256: $siteIndexSha256"
     Write-Host "Size: $size"
 
     if (-not $PSCmdlet.ShouldProcess($SshTarget, "Publish RikkaHub $Version ($VersionCode)")) {
@@ -175,19 +183,19 @@ try {
     & ssh @ssh "install -d -m 755 '$remoteStaging' '$remoteRoot/public/files' '$remoteRoot/public/api/v1'"
     if ($LASTEXITCODE -ne 0) { throw 'Failed to create remote staging directory.' }
 
-    & scp @scp $resolvedApk "${SshTarget}:$remoteStaging/$fileName"
-    if ($LASTEXITCODE -ne 0) { throw 'Failed to upload APK.' }
-    & scp @scp $manifestPath "${SshTarget}:$remoteStaging/stable.json"
-    if ($LASTEXITCODE -ne 0) { throw 'Failed to upload update manifest.' }
+    & scp @scp $stagedApkPath $manifestPath $siteIndex "${SshTarget}:$remoteStaging/"
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to upload APK, manifest, or update site index.' }
 
     $publishCommand = @"
 set -eu
 actual=`$(sha256sum '$remoteStaging/$fileName' | awk '{print `$1}')
 test "`$actual" = '$sha256'
+actual_site=`$(sha256sum '$remoteStaging/index.html' | awk '{print `$1}')
+test "`$actual_site" = '$siteIndexSha256'
 install -m 644 '$remoteStaging/$fileName' '$remoteRoot/public/files/$fileName'
+install -m 644 '$remoteStaging/index.html' '$remoteRoot/public/index.html'
 install -m 644 '$remoteStaging/stable.json' '$remoteRoot/public/api/v1/stable.json.next'
 mv '$remoteRoot/public/api/v1/stable.json.next' '$remoteRoot/public/api/v1/stable.json'
-chown caddy:caddy '$remoteRoot/public/files/$fileName' '$remoteRoot/public/api/v1/stable.json'
 "@
     & ssh @ssh $publishCommand
     if ($LASTEXITCODE -ne 0) { throw 'Remote verification or publication failed.' }

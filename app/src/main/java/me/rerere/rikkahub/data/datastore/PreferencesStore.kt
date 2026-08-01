@@ -22,6 +22,7 @@ import kotlinx.serialization.Transient
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.ai.mcp.McpServerConfig
@@ -249,12 +250,23 @@ class SettingsStore(
         .map {
             var providers = it.providers.ifEmpty { DEFAULT_PROVIDERS }.toMutableList()
             DEFAULT_PROVIDERS.forEach { defaultProvider ->
-                if (providers.none { it.id == defaultProvider.id }) {
+                val existingIndex = providers.indexOfFirst { provider ->
+                    provider.id == defaultProvider.id ||
+                        provider.isEquivalentPalenikProvider(defaultProvider)
+                }
+                if (existingIndex < 0) {
                     providers.add(defaultProvider.copyProvider())
+                } else if (defaultProvider.id == PALENIK_PROVIDER_ID) {
+                    providers[existingIndex] = mergePalenikProvider(
+                        existing = providers[existingIndex],
+                        defaults = defaultProvider,
+                    )
                 }
             }
             providers = providers.map { provider ->
-                val defaultProvider = DEFAULT_PROVIDERS.find { it.id == provider.id }
+                val defaultProvider = DEFAULT_PROVIDERS.find { default ->
+                    default.id == provider.id || provider.isEquivalentPalenikProvider(default)
+                }
                 if (defaultProvider != null) {
                     provider.copyProvider(
                         builtIn = defaultProvider.builtIn,
@@ -288,7 +300,7 @@ class SettingsStore(
             val validLorebookIds = settings.lorebooks.map { it.id }.toSet()
             val validQuickMessageIds = settings.quickMessages.map { it.id }.toSet()
             val asrProviders = settings.asrProviders.distinctBy { it.id }
-            settings.copy(
+            val cleanedSettings = settings.copy(
                 providers = settings.providers.distinctBy { it.id }.map { provider ->
                     when (provider) {
                         is ProviderSetting.OpenAI -> provider.copy(
@@ -336,6 +348,12 @@ class SettingsStore(
                 lorebooks = settings.lorebooks.distinctBy { it.id },
                 quickMessages = settings.quickMessages.distinctBy { it.id },
             )
+            val selectedImageModel = cleanedSettings.resolveImageGenerationModel()
+            if (selectedImageModel == null) {
+                cleanedSettings
+            } else {
+                cleanedSettings.copy(imageGenerationModelId = selectedImageModel.id)
+            }
         }
         .onEach {
             get<PebbleEngine>().templateCache.invalidateAll()
@@ -610,6 +628,8 @@ data class DisplaySetting(
     val enableAutoScroll: Boolean = true,
     val enableLatexRendering: Boolean = true,
     val enableBlurEffect: Boolean = false,
+    val drawerCreativeToolsExpanded: Boolean = true,
+    val drawerChatsExpanded: Boolean = true,
     val chatFontFamily: ChatFontFamily = ChatFontFamily.DEFAULT,
     val chatCustomFontPath: String = "",
     val chatCustomFontName: String = "",
@@ -665,6 +685,56 @@ fun Settings.getCurrentChatModel(): Model? {
     return findModelById(this.getCurrentAssistant().chatModelId ?: this.chatModelId)
 }
 
+/**
+ * Resolve the model used by short background text tasks such as title generation.
+ * The built-in `auto` route is useful for interactive chat, but is not a reliable
+ * background fallback for users who only configured a third-party provider.
+ */
+fun Settings.resolveBackgroundTextModel(preferredId: Uuid?, fallbackId: Uuid?): Model? {
+    val explicitCandidates = listOfNotNull(
+        findModelById(preferredId),
+        findModelById(fallbackId),
+        getCurrentChatModel(),
+    )
+    explicitCandidates.firstOrNull { model ->
+        model.type == ModelType.CHAT &&
+            model.modelId != "auto" &&
+            model.findProvider(providers)?.isReadyForRequests() == true
+    }?.let { return it }
+
+    return providers.asSequence()
+        .filter { it.isReadyForRequests() }
+        .flatMap { it.models.asSequence() }
+        .filter { it.type == ModelType.CHAT && it.modelId != "auto" }
+        .sortedBy { model ->
+            when {
+                model.modelId.contains("mini", ignoreCase = true) -> 0
+                model.modelId.contains("luna", ignoreCase = true) -> 1
+                model.modelId.contains("nano", ignoreCase = true) -> 2
+                else -> 3
+            }
+        }
+        .firstOrNull()
+        ?: explicitCandidates.firstOrNull { it.type == ModelType.CHAT }
+}
+
+/** Keep an explicit valid choice; otherwise choose the newest available image model. */
+fun Settings.resolveImageGenerationModel(): Model? {
+    findModelById(imageGenerationModelId)?.takeIf { model ->
+        model.type == ModelType.IMAGE &&
+            model.findProvider(providers)?.isReadyForRequests() == true
+    }?.let { return it }
+
+    return providers.asSequence()
+        .filter { it.isReadyForRequests() }
+        .flatMap { it.models.asSequence() }
+        .filter { it.type == ModelType.IMAGE }
+        .maxWithOrNull(
+            compareBy<Model> { imageModelVersionScore(it.modelId) }
+                .thenBy { if (it.modelId.contains("mini", ignoreCase = true)) 0 else 1 }
+        )
+}
+
 fun Settings.getCurrentAssistant(): Assistant {
     return this.assistants.find { it.id == assistantId } ?: this.assistants.first()
 }
@@ -706,6 +776,62 @@ private fun Model.findModelProviderFromList(providers: List<ProviderSetting>): P
         }
     }
     return null
+}
+
+private fun ProviderSetting.isReadyForRequests(): Boolean = enabled && when (this) {
+    is ProviderSetting.OpenAI -> apiKey.isNotBlank()
+    is ProviderSetting.Google -> apiKey.isNotBlank() ||
+        (useServiceAccount && privateKey.isNotBlank() && serviceAccountEmail.isNotBlank())
+    is ProviderSetting.Claude -> apiKey.isNotBlank()
+}
+
+private fun imageModelVersionScore(modelId: String): Double {
+    val normalized = modelId.lowercase()
+    val version = Regex("""(?:gpt[-_ ]?image|image)[-_ ]?(\d+(?:\.\d+)?)""")
+        .find(normalized)
+        ?.groupValues
+        ?.getOrNull(1)
+        ?.toDoubleOrNull()
+        ?: 0.0
+    return version - if (normalized.contains("mini")) 0.001 else 0.0
+}
+
+private fun ProviderSetting.isEquivalentPalenikProvider(defaultProvider: ProviderSetting): Boolean {
+    if (defaultProvider.id != PALENIK_PROVIDER_ID || this !is ProviderSetting.OpenAI) return false
+    val normalizedHost = baseUrl
+        .lowercase()
+        .removeSuffix("/")
+        .removeSuffix("/v1")
+    return normalizedHost == PALENIK_BASE_URL.removeSuffix("/v1")
+}
+
+private fun mergePalenikProvider(
+    existing: ProviderSetting,
+    defaults: ProviderSetting,
+): ProviderSetting {
+    if (existing !is ProviderSetting.OpenAI || defaults !is ProviderSetting.OpenAI) return existing
+    val defaultIds = defaults.models.map { it.modelId.lowercase() }.toSet()
+    val mergedModels = defaults.models.map { defaultModel ->
+        existing.models.firstOrNull { it.modelId.equals(defaultModel.modelId, ignoreCase = true) }
+            ?.let { existingModel ->
+                existingModel.copy(
+                    displayName = existingModel.displayName.ifBlank { defaultModel.displayName },
+                    type = defaultModel.type,
+                    inputModalities = defaultModel.inputModalities,
+                    outputModalities = defaultModel.outputModalities,
+                    abilities = defaultModel.abilities,
+                )
+            }
+            ?: defaultModel
+    } + existing.models.filter { it.modelId.lowercase() !in defaultIds }
+
+    return existing.copy(
+        name = defaults.name,
+        models = mergedModels,
+        builtIn = true,
+        description = defaults.description,
+        shortDescription = defaults.shortDescription,
+    )
 }
 
 internal val DEFAULT_ASSISTANT_ID = Uuid.parse("0950e2dc-9bd5-4801-afa3-aa887aa36b4e")

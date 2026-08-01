@@ -22,8 +22,8 @@ android {
         applicationId = "me.rerere.rikkahub"
         minSdk = 26
         targetSdk = 37
-        versionCode = 173
-        versionName = "2.4.5-pale.1"
+        versionCode = 174
+        versionName = "2.4.5-pale.2"
 
         buildConfigField("String", "UPDATE_FEED_URL", "\"https://updates.paleink.cc/api/v1/stable.json\"")
         buildConfigField("String", "UPDATE_SOURCE", "\"paleink/rikkahub\"")
@@ -40,7 +40,9 @@ android {
             // AppBundle tasks usually contain "bundle" in their name
             //noinspection WrongGradleMethod
             val isBuildingBundle = gradle.startParameter.taskNames.any { it.lowercase().contains("bundle") }
-            isEnable = !isBuildingBundle
+            val isBuildingPaleInkUniversal =
+                providers.gradleProperty("paleinkUniversalOnly").orNull?.toBoolean() == true
+            isEnable = !isBuildingBundle && !isBuildingPaleInkUniversal
             reset()
             include("arm64-v8a", "x86_64")
             isUniversalApk = true
@@ -122,6 +124,15 @@ android {
         compilerOptions.optIn.add("kotlin.time.ExperimentalTime")
         compilerOptions.optIn.add("kotlinx.coroutines.ExperimentalCoroutinesApi")
         compilerOptions.optIn.add("androidx.navigation3.runtime.ExperimentalNavigation3Api")
+    }
+}
+
+// Debug has its own application ID (`me.rerere.rikkahub.debug`) and deliberately
+// does not send development analytics or crashes to the production Firebase app.
+// Release still processes app/google-services.json normally.
+tasks.configureEach {
+    if (name == "processDebugGoogleServices") {
+        enabled = false
     }
 }
 

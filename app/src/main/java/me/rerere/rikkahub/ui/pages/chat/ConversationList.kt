@@ -22,8 +22,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -51,7 +51,6 @@ import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.itemKey
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.model.Conversation
-import me.rerere.rikkahub.ui.theme.extendColors
 import me.rerere.rikkahub.utils.toLocalString
 import java.time.LocalDate
 import java.time.ZoneId
@@ -278,14 +277,15 @@ private fun ConversationItem(
                 )
             }
             AnimatedVisibility(loading) {
-                Box(
+                CircularProgressIndicator(
                     modifier = Modifier
-                        .clip(CircleShape)
-                        .background(MaterialTheme.extendColors.green6)
-                        .size(4.dp)
+                        .padding(start = 6.dp)
+                        .size(12.dp)
                         .semantics {
-                            contentDescription = "Loading"
-                        }
+                            contentDescription = "正在生成"
+                        },
+                    strokeWidth = 1.5.dp,
+                    color = MaterialTheme.colorScheme.primary,
                 )
             }
             DropdownMenu(

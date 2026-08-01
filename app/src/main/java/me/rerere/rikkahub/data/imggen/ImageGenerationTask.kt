@@ -45,6 +45,7 @@ data class ImageGenerationTask(
     val size: String,
     val numberOfImages: Int,
     val startedAt: Long,
+    val finishedAt: Long? = null,
     val phase: ImageGenerationPhase,
     val errorKind: ImageGenerationFailureKind? = null,
     val errorMessage: String? = null,
@@ -53,6 +54,9 @@ data class ImageGenerationTask(
     val isActive: Boolean
         get() = phase == ImageGenerationPhase.RUNNING ||
             phase == ImageGenerationPhase.PREVIEW_AVAILABLE
+
+    val durationMillis: Long?
+        get() = finishedAt?.let { (it - startedAt).coerceAtLeast(0) }
 
     companion object {
         val Idle = ImageGenerationTask(

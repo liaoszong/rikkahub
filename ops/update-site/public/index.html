@@ -17,7 +17,12 @@
     .version { display: flex; align-items: center; gap: 10px; margin: 22px 0; }
     .chip { padding: 6px 10px; border-radius: 9px; background: #eee8f4; font-size: 14px; }
     .chip.latest { color: #4f378b; background: #eaddff; font-weight: 700; }
-    #notes { line-height: 1.7; white-space: pre-wrap; color: #49454f; }
+    #notes { line-height: 1.7; color: #49454f; }
+    #notes h2 { margin: 26px 0 8px; color: #1d1b20; font-size: 21px; }
+    #notes h3 { margin: 20px 0 6px; color: #1d1b20; font-size: 17px; }
+    #notes p { margin: 6px 0; }
+    #notes ul { margin: 6px 0 12px; padding-left: 1.35em; }
+    #notes li { margin: 5px 0; }
     #downloads { display: grid; gap: 10px; margin-top: 24px; }
     a.download { display: flex; justify-content: space-between; gap: 16px; padding: 14px 18px; border-radius: 15px; color: #fff; background: #6750a4; text-decoration: none; font-weight: 650; }
     .empty { padding: 14px 0; color: #79747e; }
@@ -28,6 +33,7 @@
       main { background: #211f26; }
       .chip { background: #363139; }
       #notes { color: #cac4d0; }
+      #notes h2, #notes h3 { color: #e6e1e5; }
     }
   </style>
 </head>
@@ -42,12 +48,45 @@
     <footer>更新清单与安装包均由 updates.paleink.cc 提供。安装前请核对 SHA-256。</footer>
   </main>
   <script>
+    function renderNotes(container, markdown) {
+      container.replaceChildren();
+      let list = null;
+      const appendText = (tag, text) => {
+        const element = document.createElement(tag);
+        element.textContent = text;
+        container.append(element);
+      };
+      for (const rawLine of (markdown || '暂无更新说明。').split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line) {
+          list = null;
+        } else if (line.startsWith('### ')) {
+          list = null;
+          appendText('h3', line.slice(4));
+        } else if (line.startsWith('## ')) {
+          list = null;
+          appendText('h2', line.slice(3));
+        } else if (line.startsWith('- ')) {
+          if (!list) {
+            list = document.createElement('ul');
+            container.append(list);
+          }
+          const item = document.createElement('li');
+          item.textContent = line.slice(2);
+          list.append(item);
+        } else {
+          list = null;
+          appendText('p', line);
+        }
+      }
+    }
+
     fetch('/api/v1/stable.json', { cache: 'no-store' }).then(r => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return r.json();
     }).then(info => {
       document.querySelector('#version').textContent = `v${info.version}`;
-      document.querySelector('#notes').textContent = info.changelog || '暂无更新说明。';
+      renderNotes(document.querySelector('#notes'), info.changelog);
       const downloads = document.querySelector('#downloads');
       if (!info.downloads?.length) {
         downloads.innerHTML = '<div class="empty">当前版本暂无公开安装包。</div>';

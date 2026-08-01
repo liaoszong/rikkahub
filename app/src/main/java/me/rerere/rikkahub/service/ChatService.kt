@@ -70,6 +70,7 @@ import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.datastore.getAssistantById
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.datastore.getCurrentChatModel
+import me.rerere.rikkahub.data.datastore.resolveBackgroundTextModel
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.Assistant
@@ -603,6 +604,18 @@ class ChatService(
                             .updateCurrentMessages(chunk.messages)
                         updateConversation(conversationId, updatedConversation)
 
+                        // Image generation emits only a small number of slot transitions. Persist
+                        // them immediately so switching screens or process recreation never turns
+                        // the gallery back into an empty tool card.
+                        val hasImageGenerationProgress = chunk.messages.lastOrNull()?.parts?.any { part ->
+                            part is UIMessagePart.Tool &&
+                                part.toolName == "generate_image" &&
+                                part.progress.isNotEmpty()
+                        } == true
+                        if (hasImageGenerationProgress) {
+                            saveConversation(conversationId, updatedConversation)
+                        }
+
                         // 通知等边缘副作用由 ChatNotificationManager 消费；
                         // tryEmit 不挂起，事件丢失只影响单次通知更新，不能反压生成链
                         chunk.messages.lastOrNull()?.let { lastMessage ->
@@ -743,7 +756,10 @@ class ChatService(
 
         runCatching {
             val settings = settingsStore.settingsFlow.first()
-            val model = settings.findModelById(settings.titleModelId, fallback = settings.fastModelId) ?: return
+            val model = settings.resolveBackgroundTextModel(
+                preferredId = settings.titleModelId,
+                fallbackId = settings.fastModelId,
+            ) ?: return
             val provider = model.findProvider(settings.providers) ?: return
 
             val providerHandler = providerManager.getProviderByType(provider)
@@ -784,7 +800,10 @@ class ChatService(
         runCatching {
             val settings = settingsStore.settingsFlow.first()
             if (!settings.enableSuggestion) return
-            val model = settings.findModelById(settings.suggestionModelId, fallback = settings.fastModelId) ?: return
+            val model = settings.resolveBackgroundTextModel(
+                preferredId = settings.suggestionModelId,
+                fallbackId = settings.fastModelId,
+            ) ?: return
             val provider = model.findProvider(settings.providers) ?: return
 
             sessions[conversationId]?.let { session ->

@@ -537,7 +537,12 @@ private fun ExportedChatMessage(
         model?.displayName?.isNotBlank() == true -> model.displayName
         else -> "AI"
     }
-    val groupedParts = remember(message.parts) { message.parts.groupMessageParts() }
+    val groupedParts = remember(message.parts, message.role) {
+        message.parts.groupMessageParts(
+            groupImages = true,
+            groupSingleImages = message.role == MessageRole.ASSISTANT,
+        )
+    }
     val messageContent: @Composable () -> Unit = {
         Column(
             modifier = Modifier
@@ -570,6 +575,41 @@ private fun ExportedChatMessage(
                                 }
                             }
                         }
+                    }
+
+                    is MessagePartBlock.ImageBlock -> {
+                        block.images.forEach { part ->
+                            AsyncImage(
+                                model = ImageRequest.Builder(context)
+                                    .data(part.url)
+                                    .allowHardware(false)
+                                    .crossfade(false)
+                                    .build(),
+                                contentDescription = "Image",
+                                modifier = Modifier
+                                    .sizeIn(maxHeight = 300.dp)
+                                    .clip(RoundedCornerShape(12.dp)),
+                            )
+                        }
+                    }
+
+                    is MessagePartBlock.ImageGenerationBlock -> {
+                        block.state?.slots
+                            .orEmpty()
+                            .mapNotNull { it.imageUrl }
+                            .forEach { imageUrl ->
+                                AsyncImage(
+                                    model = ImageRequest.Builder(context)
+                                        .data(imageUrl)
+                                        .allowHardware(false)
+                                        .crossfade(false)
+                                        .build(),
+                                    contentDescription = "Generated image",
+                                    modifier = Modifier
+                                        .sizeIn(maxHeight = 300.dp)
+                                        .clip(RoundedCornerShape(12.dp)),
+                                )
+                            }
                     }
 
                     is MessagePartBlock.ContentBlock -> {

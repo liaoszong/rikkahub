@@ -288,6 +288,7 @@
   <string name="chat_page_history">聊天历史</string>
   <string name="chat_page_menu_ai_translator">AI翻译</string>
   <string name="chat_page_menu_image_generation">图像生成</string>
+  <string name="chat_drawer_creative_tools">创作工具</string>
   <string name="chat_page_message_count">%d 条消息</string>
   <string name="chat_page_move_to_assistant">移至助手</string>
   <string name="chat_page_new_chat">新聊天</string>
@@ -395,6 +396,26 @@
   <string name="imggen_page_delete">删除</string>
   <string name="imggen_page_gallery">相册</string>
   <string name="imggen_page_generate_image">生成图片</string>
+  <string name="imggen_page_generating_background">正在后台生成图片</string>
+  <string name="imggen_page_preview_waiting">已收到预览图，正在等待最终图片</string>
+  <string name="imggen_page_elapsed_switch_safely">已用时 %1$d:%2$02d · 可以放心切换页面</string>
+  <string name="imggen_page_generation_completed_in">生成耗时 %1$d:%2$02d</string>
+  <string name="imggen_page_edit_prompt_fullscreen">全屏编辑提示词</string>
+  <string name="chat_message_tool_generating_image">正在生成图片</string>
+  <string name="chat_message_tool_generated_image">图片已生成</string>
+  <string name="chat_image_generation_preparing">正在准备图片生成</string>
+  <string name="chat_image_generation_unavailable">图片生成未完成</string>
+  <string name="chat_image_generation_running">正在生成图片 · %1$d/%2$d · %3$s</string>
+  <string name="chat_image_generation_elapsed">正在生成图片 · %1$s</string>
+  <string name="chat_image_generation_interrupted">图片生成已中断 · %1$d/%2$d · %3$s</string>
+  <string name="chat_image_generation_partial">已完成 %1$d/%2$d · %3$d 张失败 · %4$s</string>
+  <string name="chat_image_generation_completed">已生成 %1$d 张图片 · %2$s</string>
+  <string name="chat_image_generation_expand">展开</string>
+  <string name="chat_image_generation_collapse">收起</string>
+  <string name="chat_image_generation_failed">失败</string>
+  <string name="chat_image_generation_cancelled">取消</string>
+  <string name="chat_image_generation_main_description">生成的图片</string>
+  <string name="chat_image_generation_item_description">第 %1$d 张生成图片</string>
   <string name="imggen_page_generation_count">生成数量</string>
   <string name="imggen_page_generation_count_desc">每次生成的图片数量</string>
   <string name="imggen_page_image_saved_success">图片已保存到相册</string>
@@ -1147,6 +1168,8 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="setting_provider_page_include_history_reasoning">回传历史思考过程</string>
   <string name="setting_model_page_fast_model">快速模型</string>
   <string name="setting_model_page_fast_model_desc">用于快速或后台任务的模型，当未设置时也用作标题和建议模型的后备</string>
+  <string name="setting_model_page_image_generation_model">图像生成模型</string>
+  <string name="setting_model_page_image_generation_model_desc">供聊天模型调用生图；当前选择不可用时，会自动选择已配置供应商中版本较新的图像模型。</string>
   <string name="setting_model_page_enable_suggestion">启用聊天建议</string>
   <string name="assistant_page_gradient_background">渐变背景</string>
   <string name="assistant_page_gradient_background_desc">在聊天页面使用动态渐变背景</string>
@@ -1275,6 +1298,7 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="chat_page_delete_folder">删除文件夹</string>
   <string name="chat_page_rename">重命名</string>
   <string name="chat_page_folder_default">聊天</string>
+  <string name="chat_page_folder_all">全部</string>
   <string name="chat_page_folder_add">新建</string>
   <string name="chat_page_delete_folder_confirm">删除文件夹 "%1$s"？其中的对话不会被删除，只会从文件夹中移除。</string>
   <string name="chat_page_delete_folder_generating">此文件夹中有对话仍在生成中，请停止后再删除。</string>
@@ -1299,6 +1323,10 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="update_dialog_downloading">正在下载更新…</string>
   <string name="update_dialog_verifying">正在校验安装包…</string>
   <string name="update_dialog_ready">更新已下载并通过校验，可以安装。</string>
-  <string name="update_dialog_entry">应用更新</string>
+    <string name="update_dialog_entry">应用更新</string>
+    <string name="update_dialog_install_permission_title">允许 RikkaHub 安装本次更新？</string>
+    <string name="update_dialog_install_permission_body">由于 RikkaHub 不通过应用商店更新，Android 需要你进行一次授权。安装包已通过完整性校验，允许一次后，后续更新通常不会再出现此提示。</string>
+    <string name="update_dialog_install_permission_continue">继续前往系统设置</string>
+    <string name="update_dialog_install_permission_cancel">暂不安装</string>
 </resources>
 

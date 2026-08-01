@@ -288,6 +288,7 @@
   <string name="chat_page_history">Chat History</string>
   <string name="chat_page_menu_ai_translator">AI Translator</string>
   <string name="chat_page_menu_image_generation">Image Generation</string>
+  <string name="chat_drawer_creative_tools">Creative tools</string>
   <string name="chat_page_message_count">%d messages</string>
   <string name="chat_page_move_to_assistant">Move to Assistant</string>
   <string name="chat_page_new_chat">New Chat</string>
@@ -396,6 +397,26 @@
   <string name="imggen_page_delete">Delete</string>
   <string name="imggen_page_gallery">Gallery</string>
   <string name="imggen_page_generate_image">Generate Image</string>
+  <string name="imggen_page_generating_background">Generating in background</string>
+  <string name="imggen_page_preview_waiting">Preview received · waiting for final image</string>
+  <string name="imggen_page_elapsed_switch_safely">Elapsed %1$d:%2$02d · You can safely switch screens</string>
+  <string name="imggen_page_generation_completed_in">Completed in %1$d:%2$02d</string>
+  <string name="imggen_page_edit_prompt_fullscreen">Edit prompt in full screen</string>
+  <string name="chat_message_tool_generating_image">Generating image</string>
+  <string name="chat_message_tool_generated_image">Image generated</string>
+  <string name="chat_image_generation_preparing">Preparing image generation</string>
+  <string name="chat_image_generation_unavailable">Image generation did not finish</string>
+  <string name="chat_image_generation_running">Generating images · %1$d/%2$d · %3$s</string>
+  <string name="chat_image_generation_elapsed">Generating image · %1$s</string>
+  <string name="chat_image_generation_interrupted">Image generation interrupted · %1$d/%2$d · %3$s</string>
+  <string name="chat_image_generation_partial">Completed %1$d/%2$d · %3$d failed · %4$s</string>
+  <string name="chat_image_generation_completed">Generated %1$d images · %2$s</string>
+  <string name="chat_image_generation_expand">Expand</string>
+  <string name="chat_image_generation_collapse">Collapse</string>
+  <string name="chat_image_generation_failed">Failed</string>
+  <string name="chat_image_generation_cancelled">Cancelled</string>
+  <string name="chat_image_generation_main_description">Generated image</string>
+  <string name="chat_image_generation_item_description">Generated image %1$d</string>
   <string name="imggen_page_generation_count">Generation Count</string>
   <string name="imggen_page_generation_count_desc">Number of images to generate each time</string>
   <string name="imggen_page_image_saved_success">Image saved to gallery</string>
@@ -782,6 +803,8 @@
   <string name="setting_model_page_compress_model">Compress Model</string>
   <string name="setting_model_page_fast_model">Fast Model</string>
   <string name="setting_model_page_fast_model_desc">Model for fast or background tasks, also used as fallback for title and suggestion models when not set</string>
+  <string name="setting_model_page_image_generation_model">Image Generation Model</string>
+  <string name="setting_model_page_image_generation_model_desc">Used when a chat model calls image generation. If the selection is unavailable, the newest configured image model is selected automatically.</string>
   <string name="setting_model_page_compress_model_desc">Model for compressing conversation history</string>
   <string name="setting_model_page_compress_prompt_vars">Variables: {content}, {target_tokens}, {additional_context}</string>
   <string name="setting_model_page_ocr_model">OCR Model</string>
@@ -1277,6 +1300,7 @@
   <string name="chat_page_delete_folder">Delete Folder</string>
   <string name="chat_page_rename">Rename</string>
   <string name="chat_page_folder_default">Chat</string>
+  <string name="chat_page_folder_all">All</string>
   <string name="chat_page_folder_add">New</string>
   <string name="chat_page_delete_folder_confirm">Delete folder "%1$s"? Conversations inside will not be deleted, only removed from the folder.</string>
   <string name="chat_page_delete_folder_generating">Some conversations in this folder are still generating. Please stop them before deleting.</string>
@@ -1315,5 +1339,9 @@
   <string name="update_dialog_downloading">Downloading update…</string>
   <string name="update_dialog_verifying">Verifying downloaded APK…</string>
   <string name="update_dialog_ready">Update downloaded and verified. Ready to install.</string>
-  <string name="update_dialog_entry">App update</string>
+    <string name="update_dialog_entry">App update</string>
+    <string name="update_dialog_install_permission_title">Allow RikkaHub to install this update?</string>
+    <string name="update_dialog_install_permission_body">Android requires this one-time permission because RikkaHub updates outside an app store. The downloaded update has passed an integrity check; after allowing it once, future updates normally install without this warning.</string>
+    <string name="update_dialog_install_permission_continue">Continue to system settings</string>
+    <string name="update_dialog_install_permission_cancel">Not now</string>
 </resources>

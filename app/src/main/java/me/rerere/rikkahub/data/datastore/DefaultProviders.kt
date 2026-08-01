@@ -12,12 +12,16 @@ import me.rerere.ai.provider.BalanceOption
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
+import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.ui.components.richtext.MarkdownBlock
 import kotlin.uuid.Uuid
 
 val DEFAULT_AUTO_MODEL_ID = Uuid.parse("b7055fb4-39f9-4042-a88a-0d80ed76cf08")
+
+internal val PALENIK_PROVIDER_ID = Uuid.parse("41e8f18a-1a7a-45af-97e7-5b3df96c3481")
+internal const val PALENIK_BASE_URL = "https://sub2api.paleink.cc/v1"
 
 val DEFAULT_PROVIDERS = listOf(
     ProviderSetting.OpenAI(
@@ -47,6 +51,101 @@ val DEFAULT_PROVIDERS = listOf(
         baseUrl = "https://api.openai.com/v1",
         apiKey = "",
         builtIn = true
+    ),
+    ProviderSetting.OpenAI(
+        id = PALENIK_PROVIDER_ID,
+        name = "Palenik",
+        baseUrl = PALENIK_BASE_URL,
+        apiKey = "",
+        enabled = false,
+        builtIn = true,
+        models = listOf(
+            Model(
+                id = Uuid.parse("cbcf0211-3979-4f8a-97e5-3fd31e911064"),
+                modelId = "codex-auto-review",
+                displayName = "codex-auto-review",
+            ),
+            Model(
+                id = Uuid.parse("91530e22-6f5a-4f4d-b1ad-084997e28ed2"),
+                modelId = "gpt-5.4",
+                displayName = "gpt-5.4",
+                inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
+                abilities = listOf(ModelAbility.TOOL, ModelAbility.REASONING),
+            ),
+            Model(
+                id = Uuid.parse("3dad75ca-d533-4638-80f8-e9f538f04e05"),
+                modelId = "gpt-5.4-2026-03-05",
+                displayName = "gpt-5.4-2026-03-05",
+                inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
+                abilities = listOf(ModelAbility.TOOL, ModelAbility.REASONING),
+            ),
+            Model(
+                id = Uuid.parse("bac6b371-c026-4614-8d59-9bb10cdf6279"),
+                modelId = "gpt-5.4-mini",
+                displayName = "gpt-5.4-mini",
+                inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
+                abilities = listOf(ModelAbility.TOOL, ModelAbility.REASONING),
+            ),
+            Model(
+                id = Uuid.parse("27e40233-8c2b-4653-8b23-e222e9c65f52"),
+                modelId = "gpt-5.5",
+                displayName = "gpt-5.5",
+                inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
+                abilities = listOf(ModelAbility.TOOL, ModelAbility.REASONING),
+            ),
+            Model(
+                id = Uuid.parse("a1c82d73-aba3-4964-8ecb-2b5de89ddec3"),
+                modelId = "gpt-5.6",
+                displayName = "gpt-5.6",
+                inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
+                abilities = listOf(ModelAbility.TOOL, ModelAbility.REASONING),
+            ),
+            Model(
+                id = Uuid.parse("874638a6-9248-4017-80ff-2860eecc3202"),
+                modelId = "gpt-5.6-luna",
+                displayName = "gpt-5.6-luna",
+                inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
+                abilities = listOf(ModelAbility.TOOL, ModelAbility.REASONING),
+            ),
+            Model(
+                id = Uuid.parse("56c7e6c1-4756-4413-8fc7-101b7095d98f"),
+                modelId = "gpt-5.6-sol",
+                displayName = "gpt-5.6-sol",
+                inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
+                abilities = listOf(ModelAbility.TOOL, ModelAbility.REASONING),
+            ),
+            Model(
+                id = Uuid.parse("241b445e-8dc3-4dc0-9f4c-0ad9c08a63f8"),
+                modelId = "gpt-5.6-terra",
+                displayName = "gpt-5.6-terra",
+                inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
+                abilities = listOf(ModelAbility.TOOL, ModelAbility.REASONING),
+            ),
+            Model(
+                id = Uuid.parse("a73127c7-9b11-4f36-9cb7-ab98dd0bbc1f"),
+                modelId = "gpt-image-2",
+                displayName = "gpt-image-2",
+                type = ModelType.IMAGE,
+                inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
+                outputModalities = listOf(Modality.IMAGE),
+            ),
+            Model(
+                id = Uuid.parse("96d6dadd-c84b-4b84-9d0d-1ee73c931621"),
+                modelId = "gpt-image-1",
+                displayName = "gpt-image-1",
+                type = ModelType.IMAGE,
+                inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
+                outputModalities = listOf(Modality.IMAGE),
+            ),
+            Model(
+                id = Uuid.parse("a2731a0b-861f-4941-85ef-cbf78da722ad"),
+                modelId = "gpt-image-1.5",
+                displayName = "gpt-image-1.5",
+                type = ModelType.IMAGE,
+                inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
+                outputModalities = listOf(Modality.IMAGE),
+            ),
+        ),
     ),
     ProviderSetting.Google(
         id = Uuid.parse("6ab18148-c138-4394-a46f-1cd8c8ceaa6d"),

@@ -57,6 +57,7 @@ class ImageGenerationTaskManager(
         } catch (error: Exception) {
             _task.value = newTask.copy(
                 phase = ImageGenerationPhase.FAILED,
+                finishedAt = clock(),
                 errorKind = ImageGenerationFailureKind.CONFIGURATION,
                 errorMessage = "Image generation was not started because its state could not be saved",
             )
@@ -68,6 +69,7 @@ class ImageGenerationTaskManager(
             updateTaskBestEffort(
                 newTask.copy(
                     phase = ImageGenerationPhase.FAILED,
+                    finishedAt = clock(),
                     errorKind = ImageGenerationFailureKind.CONFIGURATION,
                     errorMessage = "Unable to start the required background notification service",
                 ),
@@ -155,6 +157,7 @@ class ImageGenerationTaskManager(
             updateTask(
                 startingTask.copy(
                     phase = ImageGenerationPhase.COMPLETED,
+                    finishedAt = clock(),
                     images = finalImages.toList(),
                 ),
             )
@@ -168,6 +171,7 @@ class ImageGenerationTaskManager(
                     } else {
                         ImageGenerationPhase.INTERRUPTED
                     },
+                    finishedAt = clock(),
                     errorKind = if (userCancellationRequested) {
                         ImageGenerationFailureKind.USER_CANCELLED
                     } else {
@@ -192,6 +196,7 @@ class ImageGenerationTaskManager(
             updateTaskBestEffort(
                 _task.value.copy(
                     phase = ImageGenerationPhase.FAILED,
+                    finishedAt = clock(),
                     errorKind = kind,
                     errorMessage = message,
                     images = preservedImages,
@@ -228,6 +233,7 @@ class ImageGenerationTaskManager(
         restored.images.filter { it.isPreview }.forEach(resultStore::deletePreview)
         return restored.copy(
             phase = ImageGenerationPhase.INTERRUPTED,
+            finishedAt = clock(),
             errorKind = ImageGenerationFailureKind.PROCESS_INTERRUPTED,
             errorMessage = "The app process stopped before the response was saved. The request was not retried.",
             images = restored.images.filterNot { it.isPreview },

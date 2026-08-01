@@ -481,6 +481,7 @@ sealed class UIMessagePart {
         val toolName: String,
         val input: String,
         val output: List<UIMessagePart> = emptyList(),
+        val progress: List<UIMessagePart> = emptyList(),
         val approvalState: ToolApprovalState = ToolApprovalState.Auto,
         override var metadata: JsonObject? = null
     ) : UIMessagePart() {
@@ -504,6 +505,7 @@ sealed class UIMessagePart {
                 toolName = toolName + other.toolName,
                 input = input + other.input,
                 output = output + other.output,
+                progress = if (other.progress.isNotEmpty()) other.progress else progress,
                 approvalState = approvalState,
                 metadata = if (other.metadata != null) other.metadata else metadata,
             )

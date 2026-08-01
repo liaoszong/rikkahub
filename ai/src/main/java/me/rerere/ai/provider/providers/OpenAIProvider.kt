@@ -229,7 +229,7 @@ class OpenAIProvider(
         Log.i(TAG, "generateImage: $requestBody")
 
         val request = Request.Builder()
-            .url("${providerSetting.baseUrl}/images/generations")
+            .url(providerSetting.imageApiUrl("/images/generations"))
             .headers(params.customHeaders.toHeaders())
             .addHeader("Authorization", "Bearer $key")
             .addHeader("Content-Type", "application/json")
@@ -294,7 +294,7 @@ class OpenAIProvider(
         }
 
         val request = Request.Builder()
-            .url("${providerSetting.baseUrl}/images/edits")
+            .url(providerSetting.imageApiUrl("/images/edits"))
             .headers(params.customHeaders.toHeaders())
             .addHeader("Authorization", "Bearer $key")
             .post(bodyBuilder.build())
@@ -330,6 +330,17 @@ class OpenAIProvider(
                     ?: error("No b64_json or url in image response")
                 downloadImageAsBase64(url)
             }
+        }
+    }
+
+    private fun ProviderSetting.OpenAI.imageApiUrl(path: String): String {
+        val normalizedBase = baseUrl.trimEnd('/')
+        val chatPath = chatCompletionsPath.substringBefore("/chat/completions")
+        val apiPrefix = chatPath.takeIf { it.isNotBlank() && it != "/" }.orEmpty()
+        return if (apiPrefix.isNotEmpty() && !normalizedBase.endsWith(apiPrefix)) {
+            "$normalizedBase$apiPrefix$path"
+        } else {
+            "$normalizedBase$path"
         }
     }
 

@@ -2,8 +2,8 @@ package me.rerere.rikkahub.di
 
 import com.google.firebase.Firebase
 import com.google.firebase.analytics.analytics
-import com.google.firebase.crashlytics.crashlytics
 import kotlinx.serialization.json.Json
+import me.rerere.rikkahub.BuildConfig
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.ai.tools.local.LocalTools
 import me.rerere.rikkahub.data.imggen.ImageGenerationForegroundController
@@ -20,7 +20,10 @@ import me.rerere.rikkahub.service.ChatNotificationManager
 import me.rerere.rikkahub.service.ChatService
 import me.rerere.rikkahub.utils.EmojiData
 import me.rerere.rikkahub.utils.EmojiUtils
+import me.rerere.rikkahub.utils.AppAnalytics
+import me.rerere.rikkahub.utils.FirebaseAppAnalytics
 import me.rerere.rikkahub.utils.JsonInstant
+import me.rerere.rikkahub.utils.NoOpAppAnalytics
 import me.rerere.rikkahub.utils.SoundEffectPlayer
 import me.rerere.rikkahub.utils.UpdateChecker
 import me.rerere.rikkahub.web.WebServerManager
@@ -35,7 +38,7 @@ val appModule = module {
     }
 
     single {
-        LocalTools(get(), get(), get(), get())
+        LocalTools(get(), get(), get(), get(), get(), get())
     }
 
     single {
@@ -88,12 +91,12 @@ val appModule = module {
         TTSManager(get())
     }
 
-    single {
-        Firebase.crashlytics
-    }
-
-    single {
-        Firebase.analytics
+    single<AppAnalytics> {
+        if (BuildConfig.DEBUG) {
+            NoOpAppAnalytics
+        } else {
+            FirebaseAppAnalytics(Firebase.analytics)
+        }
     }
 
     single {

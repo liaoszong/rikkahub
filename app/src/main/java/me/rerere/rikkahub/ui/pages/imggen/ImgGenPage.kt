@@ -32,7 +32,10 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularWavyProgressIndicator
@@ -49,6 +52,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SheetState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
@@ -73,6 +79,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.paging.compose.itemContentType
@@ -95,6 +102,7 @@ import me.rerere.hugeicons.stroke.Colors
 import me.rerere.hugeicons.stroke.Copy01
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.FloppyDisk
+import me.rerere.hugeicons.stroke.FullScreen
 import me.rerere.hugeicons.stroke.Image03
 import me.rerere.hugeicons.stroke.Tools
 import me.rerere.rikkahub.R
@@ -152,6 +160,8 @@ fun ImageGenPage(
     ) { innerPadding ->
         HorizontalPager(
             state = pagerState,
+            // Edge back gestures must win consistently; tabs remain available in the bottom bar.
+            userScrollEnabled = false,
             modifier = modifier
                 .padding(innerPadding)
                 .consumeWindowInsets(innerPadding)
@@ -206,7 +216,6 @@ private fun BottomBar(
 private fun ImageGenScreen(
     vm: ImgGenVM,
 ) {
-    val prompt by vm.prompt.collectAsStateWithLifecycle()
     val numberOfImages by vm.numberOfImages.collectAsStateWithLifecycle()
     val size by vm.size.collectAsStateWithLifecycle()
     val isGenerating by vm.isGenerating.collectAsStateWithLifecycle()
@@ -243,29 +252,41 @@ private fun ImageGenScreen(
                 .weight(1f)
                 .verticalScroll(rememberScrollState()),
         ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                (0 until minOf(2, currentGeneratedImages.size)).forEach { index ->
-                    val image = currentGeneratedImages[index]
-                    var showPreview by remember { mutableStateOf(false) }
-                    AsyncImage(
-                        model = File(image.filePath),
-                        contentDescription = null,
-                        modifier = Modifier
-                            .weight(1f)
-                            .aspectRatio(1f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable { showPreview = true },
-                        contentScale = ContentScale.Crop
-                    )
-
-                    if (showPreview) {
-                        ImagePreviewDialog(
-                            images = listOf(image.filePath),
-                            onDismissRequest = { showPreview = false },
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    (0 until minOf(2, currentGeneratedImages.size)).forEach { index ->
+                        val image = currentGeneratedImages[index]
+                        var showPreview by remember { mutableStateOf(false) }
+                        AsyncImage(
+                            model = File(image.filePath),
+                            contentDescription = null,
+                            modifier = Modifier
+                                .weight(1f)
+                                .aspectRatio(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { showPreview = true },
+                            contentScale = ContentScale.Crop
                         )
+
+                        if (showPreview) {
+                            ImagePreviewDialog(
+                                images = listOf(image.filePath),
+                                onDismissRequest = { showPreview = false },
+                            )
+                        }
                     }
+                }
+                task.durationMillis?.takeIf { task.phase == ImageGenerationPhase.COMPLETED }?.let { duration ->
+                    Text(
+                        text = stringResource(
+                            R.string.imggen_page_generation_completed_in,
+                            duration / 1_000 / 60,
+                            duration / 1_000 % 60,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.align(Alignment.CenterHorizontally),
+                    )
                 }
             }
             if (isGenerating) {
@@ -276,7 +297,7 @@ private fun ImageGenScreen(
             }
         }
         InputBar(
-            prompt = prompt,
+            prompt = vm.prompt,
             vm = vm,
             isGenerating = isGenerating,
             referenceImages = referenceImages,
@@ -315,9 +336,9 @@ private fun GenerationProgress(
     }
     val elapsedSeconds = (now - task.startedAt).coerceAtLeast(0) / 1_000
     val status = if (task.phase == ImageGenerationPhase.PREVIEW_AVAILABLE) {
-        "Preview received · waiting for final image"
+        stringResource(R.string.imggen_page_preview_waiting)
     } else {
-        "Generating in background"
+        stringResource(R.string.imggen_page_generating_background)
     }
     Column(
         modifier = modifier,
@@ -331,7 +352,8 @@ private fun GenerationProgress(
             fontWeight = FontWeight.Medium,
         )
         Text(
-            text = "Elapsed %d:%02d · You can safely switch screens".format(
+            text = stringResource(
+                R.string.imggen_page_elapsed_switch_safely,
                 elapsedSeconds / 60,
                 elapsedSeconds % 60,
             ),
@@ -343,7 +365,7 @@ private fun GenerationProgress(
 
 @Composable
 private fun InputBar(
-    prompt: String,
+    prompt: TextFieldState,
     vm: ImgGenVM,
     isGenerating: Boolean,
     referenceImages: List<String>,
@@ -362,6 +384,7 @@ private fun InputBar(
     )
     PermissionManager(permissionState = notificationPermission)
     var submitAfterPermission by remember { mutableStateOf(false) }
+    var showFullScreenEditor by remember { mutableStateOf(false) }
 
     fun submit() {
         if (referenceImages.isEmpty()) {
@@ -412,17 +435,30 @@ private fun InputBar(
         }
 
         OutlinedTextField(
-            value = prompt,
-            onValueChange = vm::updatePrompt,
+            state = prompt,
             placeholder = { Text(stringResource(R.string.imggen_page_prompt_placeholder)) },
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(max = 140.dp),
-            minLines = 1,
-            maxLines = 5,
+            lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 5),
             shape = MaterialTheme.shapes.large,
             textStyle = MaterialTheme.typography.bodySmall,
+            trailingIcon = {
+                IconButton(onClick = { showFullScreenEditor = true }) {
+                    Icon(
+                        imageVector = HugeIcons.FullScreen,
+                        contentDescription = stringResource(R.string.imggen_page_edit_prompt_fullscreen),
+                    )
+                }
+            },
         )
+
+        if (showFullScreenEditor) {
+            FullScreenPromptEditor(
+                state = prompt,
+                onDone = { showFullScreenEditor = false },
+            )
+        }
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -460,7 +496,7 @@ private fun InputBar(
 
             Spacer(modifier = Modifier.weight(1f))
 
-            val canSend = prompt.isNotBlank()
+            val canSend = prompt.text.isNotBlank()
             Surface(
                 onClick = {
                     if (!isGenerating) {
@@ -498,6 +534,50 @@ private fun InputBar(
                         modifier = Modifier.size(20.dp)
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FullScreenPromptEditor(
+    state: TextFieldState,
+    onDone: () -> Unit,
+) {
+    BasicAlertDialog(
+        onDismissRequest = onDone,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxSize()
+                .imePadding(),
+            shape = RoundedCornerShape(0.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                TextButton(onClick = onDone) {
+                    Text(stringResource(R.string.imggen_page_confirm))
+                }
+                TextField(
+                    state = state,
+                    modifier = Modifier.fillMaxSize(),
+                    placeholder = {
+                        Text(stringResource(R.string.imggen_page_prompt_placeholder))
+                    },
+                    colors = TextFieldDefaults.colors().copy(
+                        unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                        focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                    ),
+                )
             }
         }
     }

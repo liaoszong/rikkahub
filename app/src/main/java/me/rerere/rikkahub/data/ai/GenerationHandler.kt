@@ -18,6 +18,7 @@ import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
+import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.core.merge
 import me.rerere.ai.provider.CustomBody
 import me.rerere.ai.provider.Model
@@ -176,17 +177,20 @@ class GenerationHandler(
                     assistant = assistant,
                     settings = settings
                 )
-                messages = messages.slice(0 until messages.lastIndex) + messages.last().copy(
-                    finishedAt = Clock.System.now()
-                        .toLocalDateTime(TimeZone.currentSystemDefault())
-                )
-                emit(GenerationChunk.Messages(messages))
-
                 val tools = messages.last().getTools().filter { !it.isExecuted }
                 if (tools.isEmpty()) {
+                    messages = messages.slice(0 until messages.lastIndex) + messages.last().copy(
+                        finishedAt = Clock.System.now()
+                            .toLocalDateTime(TimeZone.currentSystemDefault())
+                    )
+                    emit(GenerationChunk.Messages(messages))
                     // no tool calls, break
                     break
                 }
+
+                // A model step that only requested tools is not the end of the user turn.
+                // Keep its usage, but do not mark it finished or show a completion notification yet.
+                emit(GenerationChunk.Messages(messages))
 
                 // Check for tools that need approval
                 var hasPendingApproval = false
@@ -284,10 +288,30 @@ class GenerationHandler(
                                 error("Invalid tool arguments JSON for ${tool.toolName}: ${it.message}")
                             }
                             Log.i(TAG, "generateText: executing tool ${toolDef.name} with args: $args")
-                            val result = toolDef.execute(args)
+                            val result = toolDef.executeWithContext?.invoke(
+                                args,
+                                ToolExecutionContext(
+                                    toolCallId = tool.toolCallId,
+                                    messages = messages,
+                                    emitProgress = { progress ->
+                                        val progressMessage = messages.last().copy(
+                                            parts = messages.last().parts.map { part ->
+                                                if (part is UIMessagePart.Tool && part.toolCallId == tool.toolCallId) {
+                                                    part.copy(progress = progress)
+                                                } else {
+                                                    part
+                                                }
+                                            }
+                                        )
+                                        messages = messages.dropLast(1) + progressMessage
+                                        emit(GenerationChunk.Messages(messages))
+                                    },
+                                )
+                            ) ?: toolDef.execute(args)
                             val hasShellAccess = toolsInternal.any { it.name == "workspace_shell" }
                             executedTools += tool.copy(
-                                output = maybeTruncateToolOutput(tool.toolCallId, result, hasShellAccess)
+                                output = maybeTruncateToolOutput(tool.toolCallId, result, hasShellAccess),
+                                progress = emptyList(),
                             )
                         }.onFailure {
                             // 取消必须向上传播，否则停止生成会被误报为工具执行错误
@@ -308,7 +332,8 @@ class GenerationHandler(
                                             }
                                         )
                                     )
-                                )
+                                ),
+                                progress = emptyList(),
                             )
                         }
                     }

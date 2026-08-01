@@ -59,6 +59,17 @@ class ImageGenerationTaskManagerTest {
     }
 
     @Test
+    fun `completed task records a stable generation duration`() = runBlocking {
+        val fixture = Fixture()
+        fixture.manager.start(request())
+
+        fixture.gateway.complete()
+        val completed = fixture.awaitPhase(ImageGenerationPhase.COMPLETED)
+
+        assertEquals(1_000L, completed.durationMillis)
+    }
+
+    @Test
     fun `explicit cancellation ends task without retry`() = runBlocking {
         val fixture = Fixture()
         fixture.manager.start(request())
@@ -147,6 +158,7 @@ class ImageGenerationTaskManagerTest {
         val taskStore: InMemoryTaskStore = InMemoryTaskStore(),
     ) {
         private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        private var currentTime = 0L
         val resultStore = FakeResultStore()
         val foregroundController = FakeForegroundController()
         val manager = ImageGenerationTaskManager(
@@ -156,7 +168,7 @@ class ImageGenerationTaskManagerTest {
             taskStore = taskStore,
             foregroundController = foregroundController,
             executionDispatcher = Dispatchers.Unconfined,
-            clock = { 100L },
+            clock = { currentTime += 1_000L; currentTime },
             idGenerator = { "task-1" },
         )
 

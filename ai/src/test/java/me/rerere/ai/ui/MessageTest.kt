@@ -9,6 +9,19 @@ import org.junit.Test
 
 class MessageTest {
 
+    @Test
+    fun `tool progress does not mark execution complete`() {
+        val running = UIMessagePart.Tool(
+            toolCallId = "image-1",
+            toolName = "generate_image",
+            input = "{}",
+            progress = listOf(UIMessagePart.Text("running")),
+        )
+
+        assertFalse(running.isExecuted)
+        assertTrue(running.copy(output = listOf(UIMessagePart.Text("done"))).isExecuted)
+    }
+
     // ==================== limitContext Tests ====================
 
     @Test

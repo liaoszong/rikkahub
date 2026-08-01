@@ -30,6 +30,9 @@ fun ZoomableAsyncImage(
     alignment: Alignment = Alignment.Center,
     contentScale: ContentScale = ContentScale.Fit,
     alpha: Float = DefaultAlpha,
+    previewImages: List<String>? = null,
+    previewIndex: Int = 0,
+    onClick: (() -> Unit)? = null,
 ) {
     var showImageViewer by remember { mutableStateOf(false) }
     val context = LocalContext.current
@@ -48,7 +51,7 @@ fun ZoomableAsyncImage(
         modifier = modifier
             .shimmer(isLoading = loading)
             .clickable {
-                showImageViewer = true
+                if (onClick != null) onClick() else showImageViewer = true
             },
         contentScale = contentScale,
         alpha = alpha,
@@ -64,7 +67,13 @@ fun ZoomableAsyncImage(
         },
     )
     if (showImageViewer) {
-        ImagePreviewDialog(images = listOf(model ?: "")) {
+        val images = previewImages
+            ?.filter { it.isNotBlank() }
+            ?.takeIf { it.isNotEmpty() }
+            ?: listOf(model ?: "")
+        val safeIndex = previewIndex.coerceIn(images.indices)
+        val orderedImages = images.drop(safeIndex) + images.take(safeIndex)
+        ImagePreviewDialog(images = orderedImages) {
             showImageViewer = false
         }
     }

@@ -1,6 +1,8 @@
 package me.rerere.rikkahub.ui.pages.imggen
 
 import android.util.Log
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.paging.Pager
@@ -47,8 +49,7 @@ class ImgGenVM(
     private val filesManager: FilesManager,
 ) : ViewModel() {
     private val restoredTask = taskManager.task.value
-    private val _prompt = MutableStateFlow(restoredTask.prompt)
-    val prompt: StateFlow<String> = _prompt
+    val prompt = TextFieldState(initialText = restoredTask.prompt)
 
     private val _numberOfImages = MutableStateFlow(restoredTask.numberOfImages.takeIf { it > 0 } ?: 1)
     val numberOfImages: StateFlow<Int> = _numberOfImages
@@ -86,11 +87,11 @@ class ImgGenVM(
         .cachedIn(viewModelScope)
 
     fun updatePrompt(prompt: String) {
-        _prompt.value = prompt
+        this.prompt.setTextAndPlaceCursorAtEnd(prompt)
     }
 
     fun updateNumberOfImages(count: Int) {
-        _numberOfImages.value = count.coerceIn(1, 4)
+        _numberOfImages.value = count.coerceIn(1, 8)
     }
 
     fun updateSize(size: String) {
@@ -129,7 +130,7 @@ class ImgGenVM(
             return
         }
         clearReferenceImages()
-        _prompt.value = ""
+        prompt.setTextAndPlaceCursorAtEnd("")
         _numberOfImages.value = 1
         _size.value = ImageGenSize.AUTO.value
         _localError.value = null
@@ -162,7 +163,7 @@ class ImgGenVM(
     }
 
     private fun submit(referenceImages: List<String>) {
-        val requestPrompt = _prompt.value
+        val requestPrompt = prompt.text.toString()
         if (requestPrompt.isBlank()) return
 
         val settings = settingsStore.settingsFlow.value

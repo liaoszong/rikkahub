@@ -15,7 +15,15 @@ data class Tool(
     val parameters: () -> InputSchema? = { null },
     val systemPrompt: (model: Model, messages: List<UIMessage>) -> String = { _, _ -> "" },
     val needsApproval: (JsonElement) -> Boolean = { false },
-    val execute: suspend (JsonElement) -> List<UIMessagePart>
+    val execute: suspend (JsonElement) -> List<UIMessagePart>,
+    val executeWithContext: (suspend (JsonElement, ToolExecutionContext) -> List<UIMessagePart>)? = null,
+)
+
+/** Runtime-only context for tools that need conversation attachments or progressive UI updates. */
+data class ToolExecutionContext(
+    val toolCallId: String,
+    val messages: List<UIMessage>,
+    val emitProgress: suspend (List<UIMessagePart>) -> Unit,
 )
 
 @Serializable

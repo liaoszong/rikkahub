@@ -54,6 +54,7 @@ import me.rerere.hugeicons.stroke.Eraser
 import me.rerere.hugeicons.stroke.GlobalSearch
 import me.rerere.hugeicons.stroke.MagicWand01
 import me.rerere.hugeicons.stroke.Message02
+import me.rerere.hugeicons.stroke.Image03
 import me.rerere.hugeicons.stroke.QuillWrite01
 import me.rerere.hugeicons.stroke.Refresh01
 import me.rerere.hugeicons.stroke.Search01
@@ -261,6 +262,22 @@ object GetTimeInfoToolUI : ToolUIRenderer {
     @Composable
     override fun title(context: ToolUIContext): String =
         stringResource(R.string.chat_message_tool_get_time)
+}
+
+/** App-side image generation tool: keep the generated artwork visible in the conversation. */
+object ImageGenerationToolUI : ToolUIRenderer {
+    override val toolName: String = "generate_image"
+
+    override fun icon(context: ToolUIContext): ImageVector = HugeIcons.Image03
+
+    @Composable
+    override fun title(context: ToolUIContext): String = stringResource(
+        if (context.loading) {
+            R.string.chat_message_tool_generating_image
+        } else {
+            R.string.chat_message_tool_generated_image
+        }
+    )
 }
 
 /**

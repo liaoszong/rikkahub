@@ -213,7 +213,9 @@ fun ChatMessage(
         )
 
         ProvideTextStyle(textStyle) {
-            ChatMessageNerdLine(message = message)
+            if (!loading) {
+                ChatMessageNerdLine(message = message)
+            }
         }
 
     }
@@ -313,7 +315,12 @@ private fun MessagePartsBlock(
     }
 
     // Render parts in original order (group thinking/tool as chain-of-thought)
-    val groupedParts = remember(parts) { parts.groupMessageParts() }
+    val groupedParts = remember(parts, role) {
+        parts.groupMessageParts(
+            groupImages = true,
+            groupSingleImages = role == MessageRole.ASSISTANT,
+        )
+    }
     groupedParts.fastForEach { block ->
         when (block) {
             is MessagePartBlock.ThinkingBlock -> {
@@ -352,6 +359,21 @@ private fun MessagePartsBlock(
                         }
                     }
                 }
+            }
+
+            is MessagePartBlock.ImageBlock -> key(block.firstIndex) {
+                MessageImageGallery(
+                    images = block.images.map { it.url },
+                    compact = role == MessageRole.USER,
+                )
+            }
+
+            is MessagePartBlock.ImageGenerationBlock -> key(block.tool.toolCallId) {
+                ChatImageGenerationGallery(
+                    toolCallId = block.tool.toolCallId,
+                    state = block.state,
+                    active = loading && !block.state.orEmptyTerminal(),
+                )
             }
 
             is MessagePartBlock.ContentBlock -> key(block.index) {
@@ -627,3 +649,6 @@ private fun MessagePartsBlock(
         }
     }
 }
+
+private fun me.rerere.rikkahub.data.imggen.ChatImageGenerationState?.orEmptyTerminal(): Boolean =
+    this?.isTerminal == true

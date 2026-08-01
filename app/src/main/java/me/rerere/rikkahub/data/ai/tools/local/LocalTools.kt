@@ -3,7 +3,10 @@ package me.rerere.rikkahub.data.ai.tools.local
 import android.content.Context
 import me.rerere.ai.core.Tool
 import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.data.datastore.resolveImageGenerationModel
 import me.rerere.rikkahub.data.event.AppEventBus
+import me.rerere.rikkahub.data.files.FilesManager
+import me.rerere.rikkahub.data.imggen.ImageGenerationGateway
 import me.rerere.tts.provider.TTSManager
 
 class LocalTools(
@@ -11,6 +14,8 @@ class LocalTools(
     private val eventBus: AppEventBus,
     private val ttsManager: TTSManager,
     private val settingsStore: SettingsStore,
+    private val imageGenerationGateway: ImageGenerationGateway,
+    private val filesManager: FilesManager,
 ) {
     val javascriptTool by lazy { buildJavascriptTool() }
 
@@ -27,6 +32,10 @@ class LocalTools(
     val calendarQueryTool by lazy { buildCalendarQueryTool(context) }
 
     val calendarCreateTool by lazy { buildCalendarCreateTool(context) }
+
+    val imageGenerationTool by lazy {
+        buildImageGenerationTool(settingsStore, imageGenerationGateway, filesManager)
+    }
 
     fun getTools(options: List<LocalToolOption>): List<Tool> {
         val tools = mutableListOf<Tool>()
@@ -51,6 +60,9 @@ class LocalTools(
         if (options.contains(LocalToolOption.Calendar)) {
             tools.add(calendarQueryTool)
             tools.add(calendarCreateTool)
+        }
+        if (settingsStore.settingsFlow.value.resolveImageGenerationModel() != null) {
+            tools.add(imageGenerationTool)
         }
         return tools
     }
