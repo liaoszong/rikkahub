@@ -266,6 +266,9 @@ if ($Phase -in @('Full', 'Verify')) {
     elseif (-not $DryRun) {
         Invoke-TimedPhase -Name 'Repository tests and Lint' -Action {
             Invoke-Checked {
+                & 'pwsh' '-NoProfile' '-File' 'ops/fork-boundary/verify-fork-boundary.ps1'
+            } 'Fork boundary verification failed.'
+            Invoke-Checked {
                 & '.\gradlew.bat' 'verifyForkRelease' '--parallel' '--configuration-cache'
             } 'Full tests or Lint failed.'
         }

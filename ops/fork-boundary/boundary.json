@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "upstreamBase": "8349ef2599dfc1cfad3823554441a63fd919dcb4",
+  "forkOwnedPrefixes": [
+    "docs/architecture/",
+    "ops/fork-boundary/",
+    "ops/release/",
+    "ops/update-site/",
+    "pale/",
+    "app/src/main/java/me/rerere/rikkahub/fork/pale/",
+    "app/src/test/java/me/rerere/rikkahub/fork/pale/"
+  ],
+  "forkOwnedPaths": [
+    ".github/workflows/quality-gate.yml",
+    "release.cmd"
+  ],
+  "knownIntegrationPathCount": 152,
+  "knownIntegrationPathSetSha256": "a5bd7af0e803ca523a4aea89ebe3aa4cea3c0d574fb994eb425070b5b7444275"
+}

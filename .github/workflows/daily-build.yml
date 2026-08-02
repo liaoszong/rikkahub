@@ -78,6 +78,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' || steps.prior-quality.outputs.reuse != 'true'
         with:
           submodules: recursive # 拉取子模块
+          fetch-depth: 0
 
       - name: Set up JDK
         if: github.event_name == 'workflow_dispatch' || steps.prior-quality.outputs.reuse != 'true'
@@ -107,6 +108,11 @@ jobs:
         if: github.event_name == 'workflow_dispatch' || steps.prior-quality.outputs.reuse != 'true'
         working-directory: web-ui
         run: pnpm install --frozen-lockfile
+
+      - name: Verify Fork boundary
+        if: github.event_name == 'workflow_dispatch' || steps.prior-quality.outputs.reuse != 'true'
+        shell: pwsh
+        run: ./ops/fork-boundary/verify-fork-boundary.ps1
 
       - name: Run repository verification gate
         if: github.event_name == 'workflow_dispatch' || steps.prior-quality.outputs.reuse != 'true'

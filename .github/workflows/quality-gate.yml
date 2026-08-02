@@ -23,6 +23,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -47,6 +48,10 @@ jobs:
         working-directory: web-ui
         run: pnpm install --frozen-lockfile
 
+      - name: Verify Fork boundary
+        shell: pwsh
+        run: ./ops/fork-boundary/verify-fork-boundary.ps1
+
       - name: Run repository verification gate
         run: ./gradlew verifyForkRelease --stacktrace --no-daemon --configuration-cache
 
@@ -70,6 +75,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
