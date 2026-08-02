@@ -403,6 +403,8 @@
   <string name="imggen_page_save_failed">保存に失敗しました: %1$s</string>
   <string name="imggen_page_settings_title">画像生成設定</string>
   <string name="imggen_page_title">画像生成</string>
+  <string name="chat_image_generation_legacy_completed">%1$d 枚の画像を生成しました</string>
+  <string name="chat_image_generation_file_missing">画像の記録は残っていますが、ローカルファイルが見つかりません。画像ライブラリを確認するか、バックアップから復元してください。</string>
   <string name="language_english">🇺🇸 English</string>
   <string name="language_french">🇫🇷 Français</string>
   <string name="language_german">🇩🇪 Deutsch</string>

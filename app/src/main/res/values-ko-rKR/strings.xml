@@ -403,6 +403,8 @@
   <string name="imggen_page_save_failed">저장 실패: %1$s</string>
   <string name="imggen_page_settings_title">이미지 생성 설정</string>
   <string name="imggen_page_title">이미지 생성</string>
+  <string name="chat_image_generation_legacy_completed">%1$d장의 이미지를 생성했습니다</string>
+  <string name="chat_image_generation_file_missing">이미지 기록은 남아 있지만 로컬 파일이 없습니다. 이미지 라이브러리를 확인하거나 백업에서 복원하세요.</string>
   <string name="language_english">🇺🇸 영어</string>
   <string name="language_french">🇫🇷 프랑스어</string>
   <string name="language_german">🇩🇪 독일어</string>

@@ -42,6 +42,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
+import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.imggen.ChatImageGenerationSlot
 import me.rerere.rikkahub.data.imggen.ChatImageGenerationState
@@ -50,6 +51,7 @@ import me.rerere.rikkahub.data.imggen.ChatImageGenerationTaskPhase
 import me.rerere.rikkahub.data.imggen.ChatImageGenerationTaskRecord
 import me.rerere.rikkahub.data.imggen.ChatImageSlotStatus
 import me.rerere.rikkahub.data.imggen.ImageGenerationFailureKind
+import me.rerere.rikkahub.data.imggen.withFallbackImages
 import me.rerere.rikkahub.ui.components.richtext.ZoomableAsyncImage
 import me.rerere.rikkahub.ui.modifier.shimmer
 import org.koin.compose.koinInject
@@ -58,20 +60,26 @@ import org.koin.compose.koinInject
 fun ChatImageGenerationGallery(
     toolCallId: String,
     state: ChatImageGenerationState?,
+    fallbackImages: List<UIMessagePart.Image> = emptyList(),
     active: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val taskController = koinInject<ChatImageGenerationTaskController>()
     val durableTasks by taskController.tasks.collectAsStateWithLifecycle()
+    val recoveredState = remember(toolCallId, state, fallbackImages) {
+        state.withFallbackImages(toolCallId, fallbackImages)
+    }
+    val legacyFallback = state == null && recoveredState != null
     val durableTask = durableTasks[toolCallId]
-        ?: state?.requestId?.let(durableTasks::get)
-    val resolvedState = remember(state, durableTask) {
-        state?.reconcileTerminalTask(durableTask)
+        ?: recoveredState?.requestId?.let(durableTasks::get)
+    val resolvedState = remember(recoveredState, durableTask) {
+        recoveredState?.reconcileTerminalTask(durableTask)
     }
     val resolvedActive = active && (durableTask?.isActive ?: true)
     var collapsed by rememberSaveable(toolCallId) { mutableStateOf(false) }
     var selectedSlotIndex by rememberSaveable(toolCallId) { mutableIntStateOf(0) }
     var now by rememberSaveable(toolCallId) { mutableLongStateOf(System.currentTimeMillis()) }
+    var failedImageUrls by remember(toolCallId) { mutableStateOf(emptySet<String>()) }
 
     LaunchedEffect(resolvedActive, resolvedState?.finishedAtEpochMillis) {
         while (resolvedActive && resolvedState?.finishedAtEpochMillis == null) {
@@ -83,9 +91,10 @@ fun ChatImageGenerationGallery(
     val succeeded = resolvedState?.slots.orEmpty().filter {
         it.status == ChatImageSlotStatus.SUCCEEDED && !it.imageUrl.isNullOrBlank()
     }
-    LaunchedEffect(succeeded.map { it.index }) {
-        if (succeeded.isNotEmpty() && succeeded.none { it.index == selectedSlotIndex }) {
-            selectedSlotIndex = succeeded.first().index
+    val availableSucceeded = succeeded.filter { it.imageUrl !in failedImageUrls }
+    LaunchedEffect(availableSucceeded.map { it.index }) {
+        if (availableSucceeded.isNotEmpty() && availableSucceeded.none { it.index == selectedSlotIndex }) {
+            selectedSlotIndex = availableSucceeded.first().index
         }
     }
 
@@ -105,7 +114,12 @@ fun ChatImageGenerationGallery(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
-                text = galleryStatusText(resolvedState, resolvedActive, elapsedMillis),
+                text = galleryStatusText(
+                    state = resolvedState,
+                    active = resolvedActive,
+                    elapsedMillis = elapsedMillis,
+                    legacyFallback = legacyFallback,
+                ),
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -121,8 +135,10 @@ fun ChatImageGenerationGallery(
 
         if (!collapsed) {
             val selected = resolvedState?.slots?.firstOrNull { it.index == selectedSlotIndex }
-                ?.takeIf { it.status == ChatImageSlotStatus.SUCCEEDED }
-                ?: succeeded.firstOrNull()
+                ?.takeIf {
+                    it.status == ChatImageSlotStatus.SUCCEEDED && it.imageUrl !in failedImageUrls
+                }
+                ?: availableSucceeded.firstOrNull()
             AnimatedContent(
                 targetState = selected?.imageUrl,
                 transitionSpec = { androidx.compose.animation.fadeIn(tween(280)) togetherWith androidx.compose.animation.fadeOut(tween(180)) },
@@ -132,14 +148,23 @@ fun ChatImageGenerationGallery(
                     PendingMainImage(
                         elapsedMillis = elapsedMillis,
                         aspectRatio = resolvedState.imageAspectRatio(),
+                        state = resolvedState,
+                        active = resolvedActive,
+                        missingFile = succeeded.isNotEmpty() && availableSucceeded.isEmpty(),
                     )
                 } else {
-                    val previewImages = succeeded.mapNotNull { it.imageUrl }
+                    val previewImages = availableSucceeded.mapNotNull { it.imageUrl }
                     ZoomableAsyncImage(
                         model = imageUrl,
                         contentDescription = stringResource(R.string.chat_image_generation_main_description),
                         previewImages = previewImages,
                         previewIndex = previewImages.indexOf(imageUrl).coerceAtLeast(0),
+                        onLoadSuccess = {
+                            failedImageUrls = failedImageUrls - imageUrl
+                        },
+                        onLoadError = {
+                            failedImageUrls = failedImageUrls + imageUrl
+                        },
                         contentScale = ContentScale.Fit,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -178,23 +203,43 @@ fun ChatImageGenerationGallery(
 }
 
 @Composable
-private fun PendingMainImage(elapsedMillis: Long, aspectRatio: Float) {
+private fun PendingMainImage(
+    elapsedMillis: Long,
+    aspectRatio: Float,
+    state: ChatImageGenerationState?,
+    active: Boolean,
+    missingFile: Boolean,
+) {
+    val failedSlot = state?.slots?.firstOrNull { it.status == ChatImageSlotStatus.FAILED }
+    val cancelled = state?.slots?.any { it.status == ChatImageSlotStatus.CANCELLED } == true
+    val loading = active && state?.isTerminal != true && !missingFile
+    val message = when {
+        missingFile -> stringResource(R.string.chat_image_generation_file_missing)
+        failedSlot?.error?.isNotBlank() == true -> failedSlot.error
+        failedSlot != null -> stringResource(R.string.chat_image_generation_failed)
+        cancelled -> stringResource(R.string.chat_image_generation_cancelled)
+        loading -> stringResource(
+            R.string.chat_image_generation_elapsed,
+            formatElapsed(elapsedMillis),
+        )
+        else -> stringResource(R.string.chat_image_generation_unavailable)
+    }
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(aspectRatio)
+            .then(if (loading) Modifier.aspectRatio(aspectRatio) else Modifier.height(148.dp))
             .clip(RoundedCornerShape(18.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f))
-            .shimmer(isLoading = true),
+            .shimmer(isLoading = loading),
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = stringResource(
-                R.string.chat_image_generation_elapsed,
-                formatElapsed(elapsedMillis),
-            ),
+            text = message,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 4,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(20.dp),
         )
     }
 }
@@ -301,6 +346,7 @@ private fun galleryStatusText(
     state: ChatImageGenerationState?,
     active: Boolean,
     elapsedMillis: Long,
+    legacyFallback: Boolean,
 ): String {
     if (state == null) return stringResource(
         if (active) R.string.chat_image_generation_preparing else R.string.chat_image_generation_unavailable
@@ -308,6 +354,7 @@ private fun galleryStatusText(
     val total = state.slots.size
     val success = state.succeededCount
     return when {
+        legacyFallback -> stringResource(R.string.chat_image_generation_legacy_completed, success)
         !state.isTerminal && active -> stringResource(
             R.string.chat_image_generation_running,
             success,

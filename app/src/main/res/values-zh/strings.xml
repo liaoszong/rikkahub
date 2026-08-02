@@ -409,6 +409,8 @@
   <string name="chat_image_generation_interrupted">图片生成已中断 · %1$d/%2$d · %3$s</string>
   <string name="chat_image_generation_partial">已完成 %1$d/%2$d · %3$d 张失败 · %4$s</string>
   <string name="chat_image_generation_completed">已生成 %1$d 张图片 · %2$s</string>
+  <string name="chat_image_generation_legacy_completed">已生成 %1$d 张图片</string>
+  <string name="chat_image_generation_file_missing">图片记录仍在，但本地文件已缺失。请检查图片库或从备份恢复。</string>
   <string name="chat_image_generation_expand">展开</string>
   <string name="chat_image_generation_collapse">收起</string>
   <string name="chat_image_generation_failed">失败</string>

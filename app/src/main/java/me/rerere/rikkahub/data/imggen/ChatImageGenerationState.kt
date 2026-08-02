@@ -69,3 +69,70 @@ fun UIMessagePart.Text.parseChatImageGenerationState(): ChatImageGenerationState
 fun List<UIMessagePart>.findChatImageGenerationState(): ChatImageGenerationState? =
     filterIsInstance<UIMessagePart.Text>()
         .firstNotNullOfOrNull(UIMessagePart.Text::parseChatImageGenerationState)
+
+/**
+ * Older chat-image tool outputs persisted the final [UIMessagePart.Image] values but
+ * did not include the v1 status JSON. Treat durable image output as stronger evidence
+ * than an absent/stale slot status so upgrades never replace real images with spinners.
+ */
+fun ChatImageGenerationState?.withFallbackImages(
+    toolCallId: String,
+    images: List<UIMessagePart.Image>,
+): ChatImageGenerationState? {
+    val distinctImages = images.distinctBy { image ->
+        image.assetId?.takeIf(String::isNotBlank) ?: image.url
+    }
+    if (distinctImages.isEmpty()) return this
+
+    if (this == null) {
+        return ChatImageGenerationState(
+            requestId = toolCallId,
+            prompt = "",
+            model = "",
+            size = "auto",
+            startedAtEpochMillis = 0L,
+            finishedAtEpochMillis = 0L,
+            slots = distinctImages.mapIndexed { index, image ->
+                ChatImageGenerationSlot(
+                    index = index,
+                    status = ChatImageSlotStatus.SUCCEEDED,
+                    imageUrl = image.url,
+                    requestId = "$toolCallId:$index",
+                    startedAtEpochMillis = 0L,
+                    finishedAtEpochMillis = 0L,
+                )
+            },
+        )
+    }
+
+    val recoveredSlotCount = maxOf(slots.size, distinctImages.size)
+    val recoveredSlots = List(recoveredSlotCount) { index ->
+        val slot = slots.getOrNull(index)
+        val image = distinctImages.getOrNull(index)
+        when {
+            image != null -> (slot ?: ChatImageGenerationSlot(
+                index = index,
+                status = ChatImageSlotStatus.SUCCEEDED,
+                requestId = "$toolCallId:$index",
+            )).copy(
+                status = ChatImageSlotStatus.SUCCEEDED,
+                imageUrl = slot?.imageUrl?.takeIf(String::isNotBlank) ?: image.url,
+                error = null,
+                failureKind = null,
+                finishedAtEpochMillis = slot?.finishedAtEpochMillis ?: finishedAtEpochMillis,
+            )
+            slot != null -> slot
+            else -> error("Unreachable image-generation slot")
+        }
+    }
+    return copy(
+        finishedAtEpochMillis = finishedAtEpochMillis
+            ?: startedAtEpochMillis.takeIf { recoveredSlots.all { slot -> slot.isTerminal } },
+        slots = recoveredSlots,
+    )
+}
+
+private val ChatImageGenerationSlot.isTerminal: Boolean
+    get() = status == ChatImageSlotStatus.SUCCEEDED ||
+        status == ChatImageSlotStatus.FAILED ||
+        status == ChatImageSlotStatus.CANCELLED

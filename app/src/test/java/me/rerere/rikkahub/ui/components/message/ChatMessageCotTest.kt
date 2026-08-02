@@ -65,4 +65,48 @@ class ChatMessageCotTest {
         val gallery = blocks.single() as MessagePartBlock.ImageGenerationBlock
         assertEquals(state, gallery.state)
     }
+
+    @Test
+    fun `legacy image tool output is preserved when status payload is absent`() {
+        val image = UIMessagePart.Image("file:///legacy-generated.png")
+        val tool = UIMessagePart.Tool(
+            toolCallId = "legacy-call",
+            toolName = "generate_image",
+            input = "{}",
+            output = listOf(image),
+        )
+
+        val gallery = listOf<UIMessagePart>(tool)
+            .groupMessageParts(groupImages = true)
+            .single() as MessagePartBlock.ImageGenerationBlock
+
+        assertEquals(null, gallery.state)
+        assertEquals(listOf(image), gallery.fallbackImages)
+    }
+
+    @Test
+    fun `status and final images are recovered across output and progress`() {
+        val state = ChatImageGenerationState(
+            prompt = "cat",
+            model = "gpt-image-2",
+            size = "1024x1024",
+            startedAtEpochMillis = 100,
+            slots = listOf(ChatImageGenerationSlot(0, ChatImageSlotStatus.RUNNING)),
+        )
+        val image = UIMessagePart.Image("file:///final.png")
+        val tool = UIMessagePart.Tool(
+            toolCallId = "call-split",
+            toolName = "generate_image",
+            input = "{}",
+            output = listOf(image),
+            progress = listOf(state.toStatusPart()),
+        )
+
+        val gallery = listOf<UIMessagePart>(tool)
+            .groupMessageParts(groupImages = true)
+            .single() as MessagePartBlock.ImageGenerationBlock
+
+        assertEquals(state, gallery.state)
+        assertEquals(listOf(image), gallery.fallbackImages)
+    }
 }

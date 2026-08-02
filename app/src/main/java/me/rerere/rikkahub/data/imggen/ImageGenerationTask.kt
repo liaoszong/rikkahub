@@ -16,6 +16,7 @@ enum class ImageGenerationFailureKind {
 }
 
 data class ImageGenerationRequest(
+    val requestId: String = "",
     val prompt: String,
     val modelId: String,
     val modelName: String,

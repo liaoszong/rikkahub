@@ -72,6 +72,8 @@ data class ImageGenerationParams(
     val numOfImages: Int = 1,
     val size: String = ImageGenSize.AUTO.value,
     val partialImages: Int = 2,
+    /** Stable identity for one paid provider attempt. Compatible gateways may use it for deduplication. */
+    val requestId: String? = null,
     val customHeaders: List<CustomHeader> = emptyList(),
     val customBody: List<CustomBody> = emptyList(),
 )
@@ -84,6 +86,8 @@ data class ImageEditParams(
     val numOfImages: Int = 1,
     val size: String = ImageGenSize.AUTO.value,
     val partialImages: Int = 2,
+    /** Stable identity for one paid provider attempt. Compatible gateways may use it for deduplication. */
+    val requestId: String? = null,
     val customHeaders: List<CustomHeader> = emptyList(),
     val customBody: List<CustomBody> = emptyList(),
 )

@@ -32,6 +32,8 @@ fun ZoomableAsyncImage(
     alpha: Float = DefaultAlpha,
     previewImages: List<String>? = null,
     previewIndex: Int = 0,
+    onLoadSuccess: (() -> Unit)? = null,
+    onLoadError: (() -> Unit)? = null,
     onClick: (() -> Unit)? = null,
 ) {
     var showImageViewer by remember { mutableStateOf(false) }
@@ -61,9 +63,11 @@ fun ZoomableAsyncImage(
         },
         onSuccess = {
             loading = false
+            onLoadSuccess?.invoke()
         },
         onError = {
             loading = false
+            onLoadError?.invoke()
         },
     )
     if (showImageViewer) {

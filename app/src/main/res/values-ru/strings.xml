@@ -403,6 +403,8 @@
   <string name="imggen_page_save_failed">Не удалось сохранить: %1$s</string>
   <string name="imggen_page_settings_title">Настройки генерации изображений</string>
   <string name="imggen_page_title">Генерация изображений</string>
+  <string name="chat_image_generation_legacy_completed">Создано изображений: %1$d</string>
+  <string name="chat_image_generation_file_missing">Запись об изображении сохранена, но локальный файл отсутствует. Проверьте библиотеку изображений или восстановите файл из резервной копии.</string>
   <string name="language_english">🇺🇸 Английский</string>
   <string name="language_french">🇫🇷 Французский</string>
   <string name="language_german">🇩🇪 Немецкий</string>

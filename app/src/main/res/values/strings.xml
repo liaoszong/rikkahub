@@ -410,6 +410,8 @@
   <string name="chat_image_generation_interrupted">Image generation interrupted · %1$d/%2$d · %3$s</string>
   <string name="chat_image_generation_partial">Completed %1$d/%2$d · %3$d failed · %4$s</string>
   <string name="chat_image_generation_completed">Generated %1$d images · %2$s</string>
+  <string name="chat_image_generation_legacy_completed">Generated %1$d images</string>
+  <string name="chat_image_generation_file_missing">The image record exists, but the local file is missing. Check the image library or restore it from a backup.</string>
   <string name="chat_image_generation_expand">Expand</string>
   <string name="chat_image_generation_collapse">Collapse</string>
   <string name="chat_image_generation_failed">Failed</string>

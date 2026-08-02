@@ -372,7 +372,8 @@ private fun MessagePartsBlock(
                 ChatImageGenerationGallery(
                     toolCallId = block.tool.toolCallId,
                     state = block.state,
-                    active = loading && !block.state.orEmptyTerminal(),
+                    fallbackImages = block.fallbackImages,
+                    active = loading && !block.state.orEmptyTerminal() && block.fallbackImages.isEmpty(),
                 )
             }
 

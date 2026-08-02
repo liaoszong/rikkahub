@@ -1,10 +1,13 @@
 package me.rerere.rikkahub.data.ai.tools.local
 
+import kotlinx.coroutines.runBlocking
+import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.imggen.ChatImageGenerationSlot
 import me.rerere.rikkahub.data.imggen.ChatImageGenerationState
 import me.rerere.rikkahub.data.imggen.ChatImageSlotStatus
 import me.rerere.rikkahub.data.imggen.findChatImageGenerationState
 import me.rerere.rikkahub.data.imggen.toStatusPart
+import me.rerere.rikkahub.data.imggen.withFallbackImages
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -61,5 +64,59 @@ class ImageGenerationToolTest {
         )
 
         assertFalse(state.isTerminal)
+    }
+
+    @Test
+    fun `legacy final image becomes a terminal successful state`() {
+        val recovered = null.withFallbackImages(
+            toolCallId = "legacy-tool",
+            images = listOf(UIMessagePart.Image("file:///legacy.png")),
+        )
+
+        assertTrue(recovered?.isTerminal == true)
+        assertEquals(1, recovered?.succeededCount)
+        assertEquals("file:///legacy.png", recovered?.slots?.single()?.imageUrl)
+    }
+
+    @Test
+    fun `durable image output wins over stale failed slot`() {
+        val stale = ChatImageGenerationState(
+            requestId = "tool-call",
+            prompt = "cat",
+            model = "gpt-image-2",
+            size = "1024x1024",
+            startedAtEpochMillis = 100,
+            finishedAtEpochMillis = 200,
+            slots = listOf(
+                ChatImageGenerationSlot(
+                    index = 0,
+                    status = ChatImageSlotStatus.FAILED,
+                    error = "checkpoint failed",
+                ),
+            ),
+        )
+
+        val recovered = stale.withFallbackImages(
+            toolCallId = "tool-call",
+            images = listOf(UIMessagePart.Image("file:///committed.png")),
+        )
+
+        assertEquals(ChatImageSlotStatus.SUCCEEDED, recovered?.slots?.single()?.status)
+        assertEquals("file:///committed.png", recovered?.slots?.single()?.imageUrl)
+        assertEquals(null, recovered?.slots?.single()?.error)
+    }
+
+    @Test
+    fun `library indexing failure keeps the already committed paid asset successful`() = runBlocking {
+        var deferredMessage: String? = null
+
+        val assetId = registerCommittedImageOrDefer(
+            reservedAssetId = "reserved-asset",
+            register = { error("room unavailable") },
+            onDeferred = { deferredMessage = it.message },
+        )
+
+        assertEquals("reserved-asset", assetId)
+        assertEquals("room unavailable", deferredMessage)
     }
 }

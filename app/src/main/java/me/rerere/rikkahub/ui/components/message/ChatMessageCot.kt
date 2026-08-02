@@ -27,6 +27,7 @@ sealed interface MessagePartBlock {
     data class ImageGenerationBlock(
         val tool: UIMessagePart.Tool,
         val state: ChatImageGenerationState?,
+        val fallbackImages: List<UIMessagePart.Image>,
         val index: Int,
     ) : MessagePartBlock
     data class ContentBlock(val part: UIMessagePart, val index: Int) : MessagePartBlock
@@ -78,7 +79,12 @@ fun List<UIMessagePart>.groupMessageParts(
                     result.add(
                         MessagePartBlock.ImageGenerationBlock(
                             tool = part,
-                            state = (part.output.ifEmpty { part.progress }).findChatImageGenerationState(),
+                            state = (part.output + part.progress).findChatImageGenerationState(),
+                            fallbackImages = (part.output + part.progress)
+                                .filterIsInstance<UIMessagePart.Image>()
+                                .distinctBy { image ->
+                                    image.assetId?.takeIf(String::isNotBlank) ?: image.url
+                                },
                             index = index,
                         )
                     )

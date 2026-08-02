@@ -83,6 +83,7 @@ import me.rerere.common.android.appTempFolder
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.findModelById
+import me.rerere.rikkahub.data.imggen.withFallbackImages
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.ui.components.message.MessagePartBlock
 import me.rerere.rikkahub.ui.components.message.ThinkingStep
@@ -594,7 +595,10 @@ private fun ExportedChatMessage(
                     }
 
                     is MessagePartBlock.ImageGenerationBlock -> {
-                        block.state?.slots
+                        block.state.withFallbackImages(
+                            toolCallId = block.tool.toolCallId,
+                            images = block.fallbackImages,
+                        )?.slots
                             .orEmpty()
                             .mapNotNull { it.imageUrl }
                             .forEach { imageUrl ->

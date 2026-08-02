@@ -39,7 +39,7 @@ data class ChatImageGenerationTaskRecord(
     val failedImageCount: Int = 0,
     /** Deterministic identities reserved before the paid request starts. */
     val reservedOutputAssetIds: List<String> = emptyList(),
-    /** Subset of [reservedOutputAssetIds] whose file and MediaAsset row both committed. */
+    /** Subset of [reservedOutputAssetIds] whose durable file commit completed. */
     val outputAssetIds: List<String> = emptyList(),
     val startedAtEpochMillis: Long,
     val finishedAtEpochMillis: Long? = null,

@@ -46,6 +46,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
+import java.util.concurrent.TimeUnit
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 
@@ -59,6 +60,14 @@ class OpenAIProvider(
 
     private val chatCompletionsAPI = ChatCompletionsAPI(client = client, keyRoulette = keyRoulette)
     private val responseAPI = ResponseAPI(client = client, keyRoulette = keyRoulette)
+
+    /**
+     * Image POSTs are paid, non-idempotent mutations. OkHttp's transparent connection
+     * retry can replay a multipart body after a long idle response and charge twice.
+     * Keep HTTP/2 alive where possible, but surface a broken connection to the durable
+     * task instead of silently issuing a second provider request.
+     */
+    private val imageMutationClient = client.newPaidImageMutationClient()
 
 
     override suspend fun listModels(providerSetting: ProviderSetting.OpenAI): List<Model> =
@@ -263,10 +272,11 @@ class OpenAIProvider(
             .addHeader("Content-Type", "application/json")
             .post(requestBody.toRequestBody("application/json".toMediaType()))
             .configureReferHeaders(providerSetting.baseUrl)
+            .withImageRequestIdentity(params.requestId)
             .build()
 
         val items = withContext(Dispatchers.IO) {
-            val response = client.newCall(request).await()
+            val response = imageMutationClient.newCall(request).await()
             if (!response.isSuccessful) {
                 error("Failed to generate image: ${response.code} ${response.body?.string()}")
             }
@@ -340,10 +350,11 @@ class OpenAIProvider(
             )
             .post(bodyBuilder.build())
             .configureReferHeaders(providerSetting.baseUrl)
+            .withImageRequestIdentity(params.requestId)
             .build()
 
         val items = withContext(Dispatchers.IO) {
-            val response = client.newCall(request).await()
+            val response = imageMutationClient.newCall(request).await()
             if (!response.isSuccessful) {
                 error("Failed to edit image: ${response.code} ${response.body?.string()}")
             }
@@ -483,5 +494,17 @@ class OpenAIProvider(
 
     companion object {
         private val SUPPORTED_EDIT_IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp")
+    }
+}
+
+internal fun OkHttpClient.newPaidImageMutationClient(): OkHttpClient = newBuilder()
+    .retryOnConnectionFailure(false)
+    .pingInterval(20, TimeUnit.SECONDS)
+    .build()
+
+internal fun Request.Builder.withImageRequestIdentity(requestId: String?): Request.Builder = apply {
+    requestId?.trim()?.takeIf(String::isNotEmpty)?.let { stableId ->
+        header("Idempotency-Key", stableId)
+        header("X-RikkaHub-Request-Id", stableId)
     }
 }
