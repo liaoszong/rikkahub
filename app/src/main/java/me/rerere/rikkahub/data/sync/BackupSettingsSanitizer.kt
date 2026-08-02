@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import me.rerere.rikkahub.data.datastore.Settings
 import java.net.URI
+import java.net.URLDecoder
 
 internal object BackupSettingsSanitizer {
     private val sensitiveKeys = setOf(
@@ -98,6 +99,25 @@ internal object BackupSettingsSanitizer {
         "serviceaccountemail",
         "username",
     )
+    private val safeEndpointQueryValueNames = setOf(
+        "alt",
+        "api-version",
+        "deployment",
+        "format",
+        "intent",
+        "lang",
+        "language",
+        "location",
+        "model",
+        "pretty-print",
+        "project",
+        "region",
+        "tenant",
+        "transport",
+        "v",
+        "version",
+    ).mapTo(mutableSetOf()) { it.normalizedSecretKey() }
+    private val localUriSchemes = setOf("android.resource", "content", "data", "file")
 
     fun encode(settings: Settings, json: Json): String {
         val element = json.encodeToJsonElement(Settings.serializer(), settings)
@@ -147,6 +167,8 @@ internal object BackupSettingsSanitizer {
             }
             if (key.isSensitiveKey() || semanticContainerSecret) {
                 JsonPrimitive("")
+            } else if (key.normalizedSecretKey() in endpointScopeKeys) {
+                sanitizeEndpointElement(value)
             } else {
                 sanitizeElement(value, parentKey = key)
             }
@@ -172,6 +194,12 @@ internal object BackupSettingsSanitizer {
         if (
             (restored.requiresExplicitEndpointScope() || local.requiresExplicitEndpointScope()) &&
             (!restored.hasTrustedEndpointScope() || !local.hasTrustedEndpointScope())
+        ) {
+            return restored
+        }
+        if (
+            (restored.requiresExplicitEndpointScope() && restoredScope == null) ||
+            (local.requiresExplicitEndpointScope() && localScope == null)
         ) {
             return restored
         }
@@ -247,8 +275,9 @@ internal object BackupSettingsSanitizer {
             val scope = when {
                 objectValue.isAssistantOwner() -> scopes.assistantScope(objectValue) ?: return null
                 objectValue.isModelOwner() -> scopes.modelScopes[id] ?: return null
-                else -> objectValue.credentialScope()
-            }.orEmpty()
+                objectValue.requiresExplicitEndpointScope() -> objectValue.credentialScope() ?: return null
+                else -> objectValue.credentialScope().orEmpty()
+            }
             return "owner:$type:$id:$scope"
         }
         return objectValue.semanticField()?.let { field ->
@@ -299,8 +328,44 @@ internal object BackupSettingsSanitizer {
                 primitive.content.trim()
             }
             ScopePart(key, value)
-        }.sortedBy(ScopePart::key)
+        }.toMutableList()
+        googleCredentialScopeParts()?.let(scopeParts::addAll) ?: return null
+        scopeParts.sortBy(ScopePart::key)
         return scopeParts.takeIf(List<ScopePart>::isNotEmpty)?.joinToString("|") { it.encoded() }
+    }
+
+    private fun JsonObject.googleCredentialScopeParts(): List<ScopePart>? {
+        if (primitiveContent("type") != "google") return emptyList()
+        val vertexAI = booleanContent("vertexAI", default = false) ?: return null
+        val useServiceAccount = booleanContent("useServiceAccount", default = false) ?: return null
+        val authMode = when {
+            !vertexAI -> "api_key"
+            useServiceAccount -> "vertex_service_account"
+            else -> "vertex_api_key"
+        }
+        val authTarget = when {
+            !vertexAI -> primitiveContent("baseUrl")?.let(::normalizeEndpoint) ?: return null
+            useServiceAccount -> {
+                val projectId = primitiveContent("projectId") ?: return null
+                val location = primitiveContent("location") ?: return null
+                "token=https://oauth2.googleapis.com/token;" +
+                    "resource=https://aiplatform.googleapis.com/v1/projects/$projectId/locations/$location"
+            }
+            else -> "https://aiplatform.googleapis.com/v1"
+        }
+        return listOf(
+            ScopePart("authmode", authMode),
+            ScopePart("authtarget", authTarget),
+            ScopePart("useserviceaccount", useServiceAccount.toString()),
+            ScopePart("vertexai", vertexAI.toString()),
+        )
+    }
+
+    private fun JsonObject.booleanContent(key: String, default: Boolean): Boolean? {
+        val element = this[key] ?: return default
+        val primitive = element as? JsonPrimitive ?: return null
+        if (primitive.isString) return null
+        return primitive.content.toBooleanStrictOrNull()
     }
 
     private fun secretFieldScopeMatches(
@@ -343,6 +408,51 @@ internal object BackupSettingsSanitizer {
             "$scheme://$userInfo$host$port$path$query"
         }.getOrElse { trimmed.trimEnd('/') }
     }
+
+    private fun sanitizeEndpointElement(element: JsonElement): JsonElement {
+        val primitive = element as? JsonPrimitive ?: return JsonPrimitive("")
+        if (!primitive.isString) return JsonPrimitive("")
+        return JsonPrimitive(sanitizeEndpoint(primitive.content))
+    }
+
+    /**
+     * Portable settings must not carry credentials embedded in endpoint strings. Network URL
+     * query values are deny-by-default: only routing parameters with an explicit safe contract
+     * survive. Local file/content/data URIs are not request endpoints and remain byte-for-byte
+     * compatible with existing avatar and attachment settings.
+     */
+    private fun sanitizeEndpoint(value: String): String {
+        val trimmed = value.trim()
+        if (trimmed.isEmpty()) return trimmed
+        val uri = runCatching { URI(trimmed) }.getOrNull() ?: return ""
+        val scheme = uri.scheme?.lowercase()
+        if (scheme in localUriSchemes) return trimmed
+
+        val rawAuthority = uri.rawAuthority ?: return ""
+        val authority = rawAuthority.substringAfterLast('@').takeIf(String::isNotBlank) ?: return ""
+        val safeQuery = uri.rawQuery
+            ?.split('&', ';')
+            ?.asSequence()
+            ?.filter(String::isNotBlank)
+            ?.filter { segment ->
+                segment.substringBefore('=').decodedQueryName().normalizedSecretKey() in
+                    safeEndpointQueryValueNames
+            }
+            ?.joinToString("&")
+            ?.takeIf(String::isNotBlank)
+
+        return buildString {
+            if (scheme != null) append(scheme).append(':')
+            append("//").append(authority)
+            append(uri.rawPath.orEmpty())
+            safeQuery?.let { append('?').append(it) }
+            // Fragments are never sent to an HTTP/WebSocket peer and may contain OAuth tokens.
+        }
+    }
+
+    private fun String.decodedQueryName(): String = runCatching {
+        URLDecoder.decode(this, Charsets.UTF_8.name())
+    }.getOrDefault("")
 
     private fun isDefaultPort(scheme: String, port: Int): Boolean = when (scheme) {
         "http", "ws" -> port == 80

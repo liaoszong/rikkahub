@@ -7,12 +7,15 @@ import me.rerere.ai.provider.CustomBody
 import me.rerere.ai.provider.CustomHeader
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.asr.ASRProviderSetting
 import me.rerere.rikkahub.data.ai.mcp.McpCommonOptions
 import me.rerere.rikkahub.data.ai.mcp.McpOAuthState
 import me.rerere.rikkahub.data.ai.mcp.McpServerConfig
+import me.rerere.rikkahub.data.datastore.DisplaySetting
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.WebDavConfig
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.sync.s3.S3Config
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -112,6 +115,93 @@ class BackupSettingsSanitizerTest {
         listOf("application/json", "RikkaHub/safe", "kept", "0.5").forEach { safeValue ->
             assertTrue("Non-secret value was removed: $safeValue", sanitized.contains(safeValue))
         }
+    }
+
+    @Test
+    fun `portable backup removes URL credentials and keeps only contracted routing query values`() {
+        val localAvatarUrl = "file:///data/user/0/me.rerere.rikkahub/files/avatar.png?keep=local"
+        val encoded = BackupSettingsSanitizer.encode(
+            settings = Settings(
+                asrProviders = listOf(
+                    ASRProviderSetting.OpenAIRealtime(
+                        id = ASR_PROVIDER_ID,
+                        apiKey = "structured-api-secret",
+                        websocketUrl =
+                            "wss://url-user:url-password@asr.example.com/realtime" +
+                                "?intent=transcription&api-version=2026-08-01" +
+                                "&access_token=query-token&api_key=query-api-key" +
+                                "&routing_hint=unknown-query-value#access_token=fragment-token",
+                    )
+                ),
+                displaySetting = DisplaySetting(userAvatar = Avatar.Image(localAvatarUrl)),
+            ),
+            json = json,
+        )
+
+        val decoded = json.decodeFromString(Settings.serializer(), encoded)
+        val provider = decoded.asrProviders.single() as ASRProviderSetting.OpenAIRealtime
+        assertEquals(
+            "wss://asr.example.com/realtime?intent=transcription&api-version=2026-08-01",
+            provider.websocketUrl,
+        )
+        assertTrue(provider.apiKey.isEmpty())
+        assertEquals(localAvatarUrl, (decoded.displaySetting.userAvatar as Avatar.Image).url)
+        listOf(
+            "structured-api-secret",
+            "url-user",
+            "url-password",
+            "query-token",
+            "query-api-key",
+            "unknown-query-value",
+            "fragment-token",
+        ).forEach { secret -> assertFalse("URL credential remained in backup: $secret", encoded.contains(secret)) }
+    }
+
+    @Test
+    fun `legacy restore never writes local or remote URL credentials back into an endpoint`() {
+        val localSettings = Settings(
+            asrProviders = listOf(
+                ASRProviderSetting.OpenAIRealtime(
+                    id = ASR_PROVIDER_ID,
+                    apiKey = "local-structured-secret",
+                    websocketUrl =
+                        "wss://local-user:local-password@asr.example.com/realtime" +
+                            "?intent=transcription&access_token=local-query-secret",
+                )
+            )
+        )
+        val backedUpSettings = Settings(
+            asrProviders = listOf(
+                ASRProviderSetting.OpenAIRealtime(
+                    id = ASR_PROVIDER_ID,
+                    apiKey = "remote-structured-secret",
+                    websocketUrl =
+                        "wss://remote-user:remote-password@asr.example.com/realtime" +
+                            "?intent=transcription&access_token=remote-query-secret",
+                )
+            )
+        )
+
+        val restored = decodeRestoredSettingsPreservingLocalSecrets(
+            restoredSettingsJson = json.encodeToString(backedUpSettings),
+            localSettings = localSettings,
+            json = json,
+        )
+
+        val provider = restored.asrProviders.single() as ASRProviderSetting.OpenAIRealtime
+        assertEquals("wss://asr.example.com/realtime?intent=transcription", provider.websocketUrl)
+        assertTrue(provider.apiKey.isEmpty())
+        val restoredJson = json.encodeToString(restored)
+        listOf(
+            "local-user",
+            "local-password",
+            "local-query-secret",
+            "local-structured-secret",
+            "remote-user",
+            "remote-password",
+            "remote-query-secret",
+            "remote-structured-secret",
+        ).forEach { secret -> assertFalse("URL credential survived restore: $secret", restoredJson.contains(secret)) }
     }
 
     @Test
@@ -383,6 +473,71 @@ class BackupSettingsSanitizerTest {
     }
 
     @Test
+    fun `google credential restore fails closed when auth mode or derived target changes`() {
+        val cases = listOf(
+            "vertex mode" to (
+                googleSettings(vertexAI = false, useServiceAccount = false) to
+                    googleSettings(vertexAI = true, useServiceAccount = false, secretPrefix = "remote")
+                ),
+            "service account mode" to (
+                googleSettings(vertexAI = true, useServiceAccount = false) to
+                    googleSettings(vertexAI = true, useServiceAccount = true, secretPrefix = "remote")
+                ),
+            "service account resource target" to (
+                googleSettings(vertexAI = true, useServiceAccount = true) to
+                    googleSettings(
+                        vertexAI = true,
+                        useServiceAccount = true,
+                        projectId = "other-project",
+                        secretPrefix = "remote",
+                    )
+                ),
+        )
+
+        cases.forEach { (label, settings) ->
+            val (localSettings, backedUpSettings) = settings
+            val restored = decodeRestoredSettingsPreservingLocalSecrets(
+                restoredSettingsJson = json.encodeToString(backedUpSettings),
+                localSettings = localSettings,
+                json = json,
+            )
+
+            val provider = restored.providers.single() as ProviderSetting.Google
+            assertTrue("$label must not restore an API key", provider.apiKey.isEmpty())
+            assertTrue("$label must not restore a private key", provider.privateKey.isEmpty())
+            assertTrue(
+                "$label must not restore a model authorization value",
+                provider.models.single().customHeaders.single().value.isEmpty(),
+            )
+        }
+    }
+
+    @Test
+    fun `google credential restore preserves local secrets only for the same effective auth scope`() {
+        val localSettings = googleSettings(
+            vertexAI = true,
+            useServiceAccount = true,
+            secretPrefix = "local",
+        )
+        val backedUpSettings = googleSettings(
+            vertexAI = true,
+            useServiceAccount = true,
+            secretPrefix = "remote",
+        )
+
+        val restored = decodeRestoredSettingsPreservingLocalSecrets(
+            restoredSettingsJson = json.encodeToString(backedUpSettings),
+            localSettings = localSettings,
+            json = json,
+        )
+
+        val provider = restored.providers.single() as ProviderSetting.Google
+        assertEquals("local-api-key", provider.apiKey)
+        assertEquals("local-private-key", provider.privateKey)
+        assertEquals("local-model-authorization", provider.models.single().customHeaders.single().value)
+    }
+
+    @Test
     fun `restore supplies a missing secret property only for the same owner`() {
         val restored = json.parseToJsonElement(
             """{
@@ -526,6 +681,37 @@ class BackupSettingsSanitizerTest {
         )
     }
 
+    private fun googleSettings(
+        vertexAI: Boolean,
+        useServiceAccount: Boolean,
+        projectId: String = "portable-project",
+        location: String = "us-central1",
+        secretPrefix: String = "local",
+    ): Settings = Settings(
+        chatModelId = GOOGLE_MODEL_ID,
+        providers = listOf(
+            ProviderSetting.Google(
+                id = GOOGLE_PROVIDER_ID,
+                apiKey = "$secretPrefix-api-key",
+                baseUrl = "https://generativelanguage.googleapis.com/v1beta",
+                vertexAI = vertexAI,
+                useServiceAccount = useServiceAccount,
+                privateKey = "$secretPrefix-private-key",
+                serviceAccountEmail = "backup@portable-project.iam.gserviceaccount.com",
+                projectId = projectId,
+                location = location,
+                models = listOf(
+                    Model(
+                        id = GOOGLE_MODEL_ID,
+                        customHeaders = listOf(
+                            CustomHeader("Authorization", "$secretPrefix-model-authorization")
+                        ),
+                    )
+                ),
+            )
+        ),
+    )
+
     private fun <T> List<T>.orderedSecretFirst(secretFirst: Boolean): List<T> =
         if (secretFirst) asReversed() else this
 
@@ -534,7 +720,10 @@ class BackupSettingsSanitizerTest {
         val UNRELATED_PROVIDER_ID = Uuid.parse("00000000-0000-0000-0000-000000000102")
         val REMOTE_ONLY_PROVIDER_ID = Uuid.parse("00000000-0000-0000-0000-000000000103")
         val MODEL_ID = Uuid.parse("00000000-0000-0000-0000-000000000201")
+        val GOOGLE_PROVIDER_ID = Uuid.parse("00000000-0000-0000-0000-000000000202")
+        val GOOGLE_MODEL_ID = Uuid.parse("00000000-0000-0000-0000-000000000203")
         val ASSISTANT_ID = Uuid.parse("00000000-0000-0000-0000-000000000301")
         val MCP_ID = Uuid.parse("00000000-0000-0000-0000-000000000401")
+        val ASR_PROVIDER_ID = Uuid.parse("00000000-0000-0000-0000-000000000501")
     }
 }
