@@ -31,6 +31,9 @@ data class Conversation(
     val workspaceCwd: String? = null,
     // 所属文件夹（助手内分组），null 表示未归入任何文件夹
     val folderId: Uuid? = null,
+    /** Optimistic-lock revision of the durable conversation row; never exported or synced. */
+    @Transient
+    val storageRevision: Long = 0,
     @Transient
     val newConversation: Boolean = false
 ) {

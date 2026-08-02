@@ -1008,14 +1008,12 @@ class ChatService(
             return // 新会话且为空时不保存
         }
 
-        val updatedConversation = conversation.copy()
-        updateConversation(conversationId, updatedConversation)
-
-        if (!exists) {
-            conversationRepo.insertConversation(updatedConversation)
+        val persistedConversation = if (!exists) {
+            conversationRepo.insertConversation(conversation)
         } else {
-            conversationRepo.updateConversation(updatedConversation)
+            conversationRepo.updateConversation(conversation)
         }
+        updateConversation(conversationId, persistedConversation)
     }
 
     // ---- 翻译消息 ----

@@ -24,8 +24,6 @@ import me.rerere.rikkahub.data.db.entity.ConversationV2Values
 import me.rerere.rikkahub.data.db.entity.MessageBranchGroupEntity
 import me.rerere.rikkahub.data.db.entity.MessageFtsOutboxEntity
 import me.rerere.rikkahub.data.db.entity.MessagePartEntity
-import java.nio.charset.StandardCharsets
-import java.security.MessageDigest
 import java.util.UUID
 import kotlin.uuid.Uuid
 
@@ -49,6 +47,9 @@ class ConversationV2BackfillCoordinator(
     suspend fun installLegacyInvalidationTriggers() {
         database.withTransaction {
             val db = database.openHelper.writableDatabase
+            INVALIDATION_TRIGGER_NAMES.forEach { triggerName ->
+                db.execSQL("DROP TRIGGER IF EXISTS $triggerName")
+            }
             db.execSQL(LEGACY_NODE_INSERT_TRIGGER)
             db.execSQL(LEGACY_NODE_UPDATE_TRIGGER)
             db.execSQL(LEGACY_NODE_DELETE_TRIGGER)
@@ -191,7 +192,7 @@ class ConversationV2BackfillCoordinator(
                     workerId = workerId,
                     sourceRevision = state.revision,
                     sourceDigest = sourceDigest,
-                    groupCount = headers.size,
+                    groupCount = null,
                     now = nowMillis(),
                     leaseUntil = nowMillis() + LEASE_DURATION_MS,
                 )
@@ -219,13 +220,13 @@ class ConversationV2BackfillCoordinator(
         val prepared = prepareNode(
             conversationId = conversationId,
             header = header,
-            legacyOrder = journal.nextNodeIndex,
+            legacyOrder = journal.writtenGroupCount,
             rawMessages = rawMessages,
             parentMessageId = journal.previousSelectedMessageId,
             seenMessageIds = seenMessageIds,
         )
 
-        graphDAO.insertBranchGroup(prepared.group)
+        prepared.group?.let { graphDAO.insertBranchGroup(it) }
         if (prepared.messages.isNotEmpty()) graphDAO.insertMessages(prepared.messages)
         if (prepared.parts.isNotEmpty()) graphDAO.insertParts(prepared.parts)
         val flags = decodeFlags(journal.inferenceFlagsJson).apply { addAll(prepared.inferenceFlags) }
@@ -234,7 +235,7 @@ class ConversationV2BackfillCoordinator(
             workerId = workerId,
             nextNodeIndex = journal.nextNodeIndex + 1,
             previousSelectedMessageId = prepared.selectedMessageId ?: journal.previousSelectedMessageId,
-            writtenGroupCount = journal.writtenGroupCount + 1,
+            writtenGroupCount = journal.writtenGroupCount + if (prepared.group == null) 0 else 1,
             writtenMessageCount = journal.writtenMessageCount + prepared.messages.size,
             writtenPartCount = journal.writtenPartCount + prepared.parts.size,
             inferenceFlagsJson = encodeFlags(flags),
@@ -401,16 +402,16 @@ class ConversationV2BackfillCoordinator(
         val parts = mutableListOf<MessagePartEntity>()
         val seenMessageIds = mutableSetOf<String>()
         var parentMessageId: String? = null
-        headers.forEachIndexed { index, header ->
+        headers.forEach { header ->
             val prepared = prepareNode(
                 conversationId = conversationId,
                 header = header,
-                legacyOrder = index,
+                legacyOrder = groups.size,
                 rawMessages = readLegacyMessages(header),
                 parentMessageId = parentMessageId,
                 seenMessageIds = seenMessageIds,
             )
-            groups += prepared.group
+            prepared.group?.let { group -> groups += group }
             messages += prepared.messages
             parts += prepared.parts
             prepared.selectedMessageId?.let { parentMessageId = it }
@@ -471,7 +472,16 @@ class ConversationV2BackfillCoordinator(
         }
 
         val flags = mutableSetOf(INFERENCE_PARENT_PATH, INFERENCE_STATE)
-        if (rawMessageArray.isEmpty()) flags += INFERENCE_EMPTY_NODE
+        if (rawMessageArray.isEmpty()) {
+            flags += INFERENCE_EMPTY_BRANCH_GROUP_DROPPED
+            return PreparedNode(
+                group = null,
+                messages = emptyList(),
+                parts = emptyList(),
+                selectedMessageId = null,
+                inferenceFlags = flags,
+            )
+        }
         val messages = mutableListOf<ConversationMessageEntity>()
         val parts = mutableListOf<MessagePartEntity>()
         rawMessageArray.forEachIndexed { variantIndex, element ->
@@ -611,12 +621,10 @@ class ConversationV2BackfillCoordinator(
                 val payloadDigest = sha256Hex(canonicalPayload)
                 parts += MessagePartEntity(
                     conversationId = conversationId,
-                    partId = stableLegacyPartId(
+                    partId = stableConversationPartId(
                         conversationId = conversationId,
                         messageId = effectiveMessageId,
                         ordinal = ordinal,
-                        kind = kind,
-                        canonicalPayloadDigest = payloadDigest,
                     ),
                     messageId = effectiveMessageId,
                     ordinal = ordinal,
@@ -635,7 +643,7 @@ class ConversationV2BackfillCoordinator(
                 branchGroupId = header.id,
                 legacyNodeIndex = header.nodeIndex,
                 legacyOrder = legacyOrder,
-                createdAt = messages.firstOrNull()?.createdAt ?: EMPTY_GROUP_CREATED_AT,
+                createdAt = messages.first().createdAt,
                 legacyInferred = true,
             ),
             messages = messages,
@@ -683,9 +691,15 @@ class ConversationV2BackfillCoordinator(
         conversationId: String,
         headers: List<LegacyMessageNodeHeader>,
     ): String {
-        val digest = LegacySourceDigest(conversationId, headers.size)
+        val digest = ConversationV2LegacySourceDigest(conversationId, headers.size)
         headers.forEach { header ->
-            digest.addNode(header, readLegacyMessages(header))
+            digest.addNode(
+                nodeId = header.id,
+                nodeIndex = header.nodeIndex,
+                selectIndex = header.selectIndex,
+                messageLength = header.messageLength,
+                rawMessages = readLegacyMessages(header),
+            )
         }
         return digest.finish()
     }
@@ -768,7 +782,7 @@ class ConversationV2BackfillCoordinator(
     private enum class BackfillOutcome { READY, ALREADY_READY, QUARANTINED, IN_PROGRESS, FAILED, LEASE_LOST }
 
     private data class PreparedNode(
-        val group: MessageBranchGroupEntity,
+        val group: MessageBranchGroupEntity?,
         val messages: List<ConversationMessageEntity>,
         val parts: List<MessagePartEntity>,
         val selectedMessageId: String?,
@@ -794,45 +808,6 @@ class ConversationV2BackfillCoordinator(
     private class LegacySourceChangedException(nodeId: String) :
         IllegalStateException("Legacy node $nodeId changed while being read")
 
-    private class LegacySourceDigest(conversationId: String, nodeCount: Int) {
-        private val digest = MessageDigest.getInstance("SHA-256")
-
-        init {
-            add("domain", "rikkahub-conversation-v2-legacy-source-v1")
-            add("conversation_id", conversationId)
-            add("node_count", nodeCount.toString())
-        }
-
-        fun addNode(header: LegacyMessageNodeHeader, rawMessages: String) {
-            add("node.id", header.id)
-            add("node.index", header.nodeIndex.toString())
-            add("node.select_index", header.selectIndex.toString())
-            add("node.message_length", header.messageLength.toString())
-            add("node.messages", rawMessages)
-        }
-
-        fun finish(): String = digest.digest().joinToString("") { byte ->
-            "%02x".format(byte.toInt() and 0xff)
-        }
-
-        private fun add(name: String, value: String) {
-            update(name.toByteArray(StandardCharsets.UTF_8))
-            update(value.toByteArray(StandardCharsets.UTF_8))
-        }
-
-        private fun update(bytes: ByteArray) {
-            digest.update(
-                byteArrayOf(
-                    (bytes.size ushr 24).toByte(),
-                    (bytes.size ushr 16).toByte(),
-                    (bytes.size ushr 8).toByte(),
-                    bytes.size.toByte(),
-                ),
-            )
-            digest.update(bytes)
-        }
-    }
-
     private companion object {
         const val DEFAULT_MAX_CONVERSATIONS = 64
         const val LEASE_BATCH_SIZE = 8
@@ -841,13 +816,11 @@ class ConversationV2BackfillCoordinator(
         const val MESSAGE_CHUNK_SIZE = 256 * 1024
         const val MAX_QUARANTINE_PAYLOAD_CHARS = 64 * 1024
         const val MAX_ERROR_DETAIL_CHARS = 1_000
-        const val EMPTY_GROUP_CREATED_AT = "1970-01-01T00:00:00"
         const val LEGACY_LOCAL_DATE_TIME_FALLBACK = "1970-01-01T00:00:00"
         const val LEGACY_INSTANT_FALLBACK = "1970-01-01T00:00:00Z"
 
         const val INFERENCE_PARENT_PATH = "LEGACY_SELECTED_PATH_PARENT_INFERRED"
         const val INFERENCE_STATE = "MESSAGE_STATE_INFERRED"
-        const val INFERENCE_EMPTY_NODE = "EMPTY_NODE_PRESERVED"
         const val INFERENCE_MESSAGE_ID_REPAIRED = "MESSAGE_ID_REPAIRED"
         const val INFERENCE_DUPLICATE_MESSAGE_ID = "DUPLICATE_MESSAGE_ID"
         const val INFERENCE_MESSAGE_CREATED_AT = "MESSAGE_CREATED_AT_REPAIRED"
@@ -885,6 +858,7 @@ class ConversationV2BackfillCoordinator(
             CREATE TRIGGER IF NOT EXISTS conversation_v2_invalidate_legacy_conversation_write
             AFTER UPDATE OF nodes, revision, storage_version ON ConversationEntity
             WHEN NEW.storage_version = 1
+                AND COALESCE(NEW.last_writer_replica_id, '') != '$CONVERSATION_V2_INTERNAL_WRITER_MARKER'
                 AND (OLD.storage_version = 2 OR NEW.revision <= OLD.revision)
             BEGIN
                 UPDATE ConversationEntity
@@ -916,10 +890,16 @@ class ConversationV2BackfillCoordinator(
             """
             CREATE TRIGGER IF NOT EXISTS $name
             $timing ON message_node
+            WHEN COALESCE((
+                SELECT last_writer_replica_id
+                FROM ConversationEntity
+                WHERE id = $conversationExpression
+            ), '') != '$CONVERSATION_V2_INTERNAL_WRITER_MARKER'
             BEGIN
                 UPDATE ConversationEntity
                 SET storage_version = 1, active_leaf_message_id = NULL,
-                    revision = revision + 1
+                    revision = revision + 1,
+                    last_writer_replica_id = '$CONVERSATION_V2_INTERNAL_WRITER_MARKER'
                 WHERE id = $conversationExpression AND storage_version = 2;
                 UPDATE conversation_migration_journal
                 SET phase = 'PENDING', legacy_source_digest = NULL,
@@ -932,8 +912,20 @@ class ConversationV2BackfillCoordinator(
                     last_error_detail = NULL, lease_owner = NULL, lease_until = NULL,
                     updated_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000
                 WHERE conversation_id = $conversationExpression;
+                UPDATE ConversationEntity
+                SET last_writer_replica_id = NULL
+                WHERE id = $conversationExpression
+                    AND last_writer_replica_id = '$CONVERSATION_V2_INTERNAL_WRITER_MARKER';
             END
             """.trimIndent()
+
+        val INVALIDATION_TRIGGER_NAMES = listOf(
+            "conversation_v2_invalidate_message_node_insert",
+            "conversation_v2_invalidate_message_node_update",
+            "conversation_v2_invalidate_message_node_delete",
+            "conversation_v2_invalidate_legacy_conversation_write",
+            "conversation_v2_invalidate_storage_downgrade",
+        )
     }
 }
 

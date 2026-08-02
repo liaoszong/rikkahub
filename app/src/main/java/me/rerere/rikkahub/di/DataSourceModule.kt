@@ -24,7 +24,9 @@ import me.rerere.rikkahub.data.api.SponsorAPI
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.db.AppDatabase
 import me.rerere.rikkahub.data.db.conversation.ConversationV2BackfillCoordinator
+import me.rerere.rikkahub.data.db.conversation.ConversationV2Codec
 import me.rerere.rikkahub.data.db.conversation.ConversationV2ShadowProjector
+import me.rerere.rikkahub.data.db.conversation.ConversationV2Writer
 import me.rerere.rikkahub.data.db.fts.MessageFtsManager
 import me.rerere.rikkahub.data.db.fts.SimpleDictManager
 import me.rerere.rikkahub.data.db.migrations.Migration_6_7
@@ -168,6 +170,22 @@ val dataSourceModule = module {
         ConversationV2ShadowProjector(
             graphDAO = get<AppDatabase>().conversationGraphDao(),
             migrationDAO = get<AppDatabase>().conversationMigrationDao(),
+            json = get(),
+        )
+    }
+
+    single { ConversationV2Codec(get()) }
+
+    single {
+        ConversationV2Writer(
+            database = get(),
+            conversationDAO = get<AppDatabase>().conversationDao(),
+            messageNodeDAO = get<AppDatabase>().messageNodeDao(),
+            graphDAO = get<AppDatabase>().conversationGraphDao(),
+            migrationDAO = get<AppDatabase>().conversationMigrationDao(),
+            ftsOutboxDAO = get<AppDatabase>().messageFtsOutboxDao(),
+            projector = get(),
+            codec = get(),
             json = get(),
         )
     }

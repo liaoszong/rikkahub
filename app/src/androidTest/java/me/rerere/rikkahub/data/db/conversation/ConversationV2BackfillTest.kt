@@ -44,7 +44,7 @@ class ConversationV2BackfillTest {
     }
 
     @Test
-    fun backfillRepairsScopedDuplicateIdsPreservesEmptyGroupsAndVerifiesProjection() = runBlocking {
+    fun backfillRepairsScopedDuplicateIdsDropsEmptyGroupsAndVerifiesProjection() = runBlocking {
         val conversationId = "10000000-0000-0000-0000-000000000001"
         val rootA = "20000000-0000-0000-0000-000000000001"
         val rootB = "20000000-0000-0000-0000-000000000002"
@@ -82,14 +82,17 @@ class ConversationV2BackfillTest {
         assertEquals(journal?.legacyProjectionDigest, journal?.v2ProjectionDigest)
         assertNotNull(journal?.legacySourceDigest)
         assertTrue(journal?.inferenceFlagsJson.orEmpty().contains("DUPLICATE_MESSAGE_ID"))
-        assertTrue(journal?.inferenceFlagsJson.orEmpty().contains("EMPTY_NODE_PRESERVED"))
+        assertTrue(journal?.inferenceFlagsJson.orEmpty().contains("EMPTY_BRANCH_GROUP_DROPPED"))
+        assertEquals(3, journal?.nextNodeIndex)
+        assertEquals(2, journal?.expectedGroupCount)
+        assertEquals(2, journal?.writtenGroupCount)
 
         val graphMessages = database.conversationGraphDao().getMessages(conversationId)
         val repaired = graphMessages.single { it.legacyMessageId == rootA }
         assertNotEquals(rootA, repaired.messageId)
         assertEquals(rootB, repaired.parentMessageId)
         assertEquals(repaired.messageId, state?.activeLeafMessageId)
-        assertEquals(3, database.conversationGraphDao().countBranchGroups(conversationId))
+        assertEquals(2, database.conversationGraphDao().countBranchGroups(conversationId))
         assertEquals(3, database.conversationGraphDao().countMessages(conversationId))
         assertEquals(3, database.conversationGraphDao().countParts(conversationId))
 
@@ -99,10 +102,8 @@ class ConversationV2BackfillTest {
             JsonInstant,
         ).loadReady(conversationId)
         assertNotNull(projection)
-        assertEquals(3, projection?.nodes?.size)
+        assertEquals(2, projection?.nodes?.size)
         assertEquals(1, projection?.nodes?.first()?.selectedIndex)
-        assertTrue(projection?.nodes?.get(1)?.messages?.isEmpty() == true)
-        assertEquals(0, projection?.nodes?.get(1)?.selectedIndex)
         assertEquals("duplicate-id-child", projection?.nodes?.last()?.messages?.single()?.text())
 
         originalPayloads.forEach { (nodeId, raw) -> assertEquals(raw, legacyPayload(nodeId)) }

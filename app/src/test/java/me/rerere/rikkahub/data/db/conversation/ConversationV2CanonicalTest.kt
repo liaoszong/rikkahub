@@ -19,19 +19,17 @@ class ConversationV2CanonicalTest {
     }
 
     @Test
-    fun stablePartIdentityIncludesEveryRequiredScopeComponent() {
-        val base = stableLegacyPartId("conversation-a", "message-a", 0, "image", "digest-a")
+    fun stablePartIdentityUsesOnlyDurableScopeComponents() {
+        val base = stableConversationPartId("conversation-a", "message-a", 0)
         val variants = setOf(
             base,
-            stableLegacyPartId("conversation-b", "message-a", 0, "image", "digest-a"),
-            stableLegacyPartId("conversation-a", "message-b", 0, "image", "digest-a"),
-            stableLegacyPartId("conversation-a", "message-a", 1, "image", "digest-a"),
-            stableLegacyPartId("conversation-a", "message-a", 0, "text", "digest-a"),
-            stableLegacyPartId("conversation-a", "message-a", 0, "image", "digest-b"),
+            stableConversationPartId("conversation-b", "message-a", 0),
+            stableConversationPartId("conversation-a", "message-b", 0),
+            stableConversationPartId("conversation-a", "message-a", 1),
         )
 
-        assertEquals(6, variants.size)
-        assertEquals(base, stableLegacyPartId("conversation-a", "message-a", 0, "image", "digest-a"))
+        assertEquals(4, variants.size)
+        assertEquals(base, stableConversationPartId("conversation-a", "message-a", 0))
         assertTrue(runCatching { java.util.UUID.fromString(base) }.isSuccess)
     }
 }

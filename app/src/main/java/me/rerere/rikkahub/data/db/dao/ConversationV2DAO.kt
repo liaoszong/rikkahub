@@ -5,6 +5,7 @@ import androidx.room.ColumnInfo
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Upsert
 import me.rerere.rikkahub.data.db.entity.ConversationMessageEntity
 import me.rerere.rikkahub.data.db.entity.ConversationMigrationJournalEntity
 import me.rerere.rikkahub.data.db.entity.ConversationMigrationQuarantineEntity
@@ -22,6 +23,15 @@ interface ConversationGraphDAO {
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertParts(parts: List<MessagePartEntity>)
+
+    @Upsert
+    suspend fun upsertBranchGroups(groups: List<MessageBranchGroupEntity>)
+
+    @Upsert
+    suspend fun upsertMessages(messages: List<ConversationMessageEntity>)
+
+    @Upsert
+    suspend fun upsertParts(parts: List<MessagePartEntity>)
 
     @Query(
         "SELECT * FROM conversation_message " +
@@ -97,6 +107,30 @@ interface ConversationGraphDAO {
     suspend fun deleteBranchGroups(conversationId: String)
 
     @Query(
+        "DELETE FROM message_part WHERE conversation_id = :conversationId " +
+            "AND part_id IN (:partIds)",
+    )
+    suspend fun deletePartsById(conversationId: String, partIds: List<String>)
+
+    @Query(
+        "UPDATE conversation_message SET parent_message_id = NULL " +
+            "WHERE conversation_id = :conversationId AND parent_message_id IN (:parentMessageIds)",
+    )
+    suspend fun clearParentReferences(conversationId: String, parentMessageIds: List<String>)
+
+    @Query(
+        "DELETE FROM conversation_message WHERE conversation_id = :conversationId " +
+            "AND message_id IN (:messageIds)",
+    )
+    suspend fun deleteMessagesById(conversationId: String, messageIds: List<String>)
+
+    @Query(
+        "DELETE FROM message_branch_group WHERE conversation_id = :conversationId " +
+            "AND branch_group_id IN (:branchGroupIds)",
+    )
+    suspend fun deleteBranchGroupsById(conversationId: String, branchGroupIds: List<String>)
+
+    @Query(
         "UPDATE ConversationEntity SET revision = revision + 1, update_at = :updateAt, " +
             "last_writer_replica_id = :writerReplicaId " +
             "WHERE id = :conversationId AND revision = :expectedRevision AND deleted_at IS NULL",
@@ -113,6 +147,9 @@ interface ConversationGraphDAO {
 interface ConversationMigrationDAO {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertJournal(journal: ConversationMigrationJournalEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertJournal(journal: ConversationMigrationJournalEntity)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertQuarantine(record: ConversationMigrationQuarantineEntity)
@@ -193,7 +230,7 @@ interface ConversationMigrationDAO {
         workerId: String,
         sourceRevision: Long,
         sourceDigest: String,
-        groupCount: Int,
+        groupCount: Int?,
         now: Long,
         leaseUntil: Long,
     ): Int

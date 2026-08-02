@@ -11,13 +11,14 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.data.db.AppDatabase
+import me.rerere.rikkahub.data.db.conversation.ConversationV2ShadowProjector
+import me.rerere.rikkahub.data.db.conversation.ConversationV2Writer
 import me.rerere.rikkahub.data.db.fts.MessageFtsManager
 import me.rerere.rikkahub.data.db.fts.MessageSearchSort
 import me.rerere.rikkahub.data.db.dao.ConversationDAO
 import me.rerere.rikkahub.data.db.dao.FavoriteDAO
 import me.rerere.rikkahub.data.db.dao.MessageNodeDAO
 import me.rerere.rikkahub.data.db.entity.ConversationEntity
-import me.rerere.rikkahub.data.db.entity.MessageNodeEntity
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
@@ -32,6 +33,8 @@ class ConversationRepository(
     private val database: AppDatabase,
     private val filesManager: FilesManager,
     private val messageFtsManager: MessageFtsManager,
+    private val conversationV2Writer: ConversationV2Writer,
+    private val conversationV2Projector: ConversationV2ShadowProjector,
 ) {
     companion object {
         private const val PAGE_SIZE = 20
@@ -40,12 +43,12 @@ class ConversationRepository(
     }
 
     suspend fun getRecentConversations(assistantId: Uuid, limit: Int = 10): List<Conversation> {
-        return conversationDAO.getRecentConversationsOfAssistant(
+        val conversationIds = conversationDAO.getRecentConversationsOfAssistant(
             assistantId = assistantId.toString(),
             limit = limit
-        ).map { entity ->
-            val nodes = loadMessageNodes(entity.id)
-            conversationEntityToConversation(entity, nodes)
+        ).map(ConversationEntity::id)
+        return conversationIds.mapNotNull { conversationId ->
+            loadFullConversation(conversationId)
         }
     }
 
@@ -268,11 +271,7 @@ class ConversationRepository(
         }
 
     suspend fun getConversationById(uuid: Uuid): Conversation? {
-        val entity = conversationDAO.getConversationById(uuid.toString())
-        return if (entity != null) {
-            val nodes = loadMessageNodes(entity.id)
-            conversationEntityToConversation(entity, nodes)
-        } else null
+        return loadFullConversation(uuid.toString())
     }
 
     suspend fun existsConversationById(uuid: Uuid): Boolean {
@@ -283,26 +282,18 @@ class ConversationRepository(
         return conversationDAO.countAll()
     }
 
-    suspend fun insertConversation(conversation: Conversation) {
-        database.withTransaction {
-            conversationDAO.insert(
-                conversationToConversationEntity(conversation)
-            )
-            saveMessageNodes(conversation.id.toString(), conversation.messageNodes)
-        }
-        messageFtsManager.indexConversation(conversation)
+    suspend fun insertConversation(conversation: Conversation): Conversation {
+        requireNoBase64(conversation)
+        val persisted = conversationV2Writer.insert(conversation)
+        messageFtsManager.indexConversation(persisted)
+        return persisted
     }
 
-    suspend fun updateConversation(conversation: Conversation) {
-        database.withTransaction {
-            conversationDAO.update(
-                conversationToConversationEntity(conversation)
-            )
-            // 删除旧的节点，插入新的节点
-            messageNodeDAO.deleteByConversation(conversation.id.toString())
-            saveMessageNodes(conversation.id.toString(), conversation.messageNodes)
-        }
-        messageFtsManager.indexConversation(conversation)
+    suspend fun updateConversation(conversation: Conversation): Conversation {
+        requireNoBase64(conversation)
+        val persisted = conversationV2Writer.update(conversation)
+        messageFtsManager.indexConversation(persisted)
+        return persisted
     }
 
     suspend fun deleteConversation(conversation: Conversation) {
@@ -332,9 +323,7 @@ class ConversationRepository(
         val allIds = conversationDAO.getAllIds()
         val total = allIds.size
         allIds.forEachIndexed { index, id ->
-            val entity = conversationDAO.getConversationById(id) ?: return@forEachIndexed
-            val nodes = loadMessageNodes(entity.id)
-            val conversation = conversationEntityToConversation(entity, nodes)
+            val conversation = loadFullConversation(id) ?: return@forEachIndexed
             messageFtsManager.indexConversation(conversation)
             onProgress(index + 1, total)
         }
@@ -347,7 +336,7 @@ class ConversationRepository(
     }
 
     fun conversationToConversationEntity(conversation: Conversation): ConversationEntity {
-        require(conversation.messageNodes.none { it.messages.any { message -> message.hasBase64Part() } })
+        requireNoBase64(conversation)
         return ConversationEntity(
             id = conversation.id.toString(),
             title = conversation.title,
@@ -362,6 +351,7 @@ class ConversationRepository(
             lorebookIds = JsonInstant.encodeToString(conversation.lorebookIds),
             workspaceCwd = conversation.workspaceCwd ?: "",
             folderId = conversation.folderId?.toString() ?: "",
+            revision = conversation.storageRevision,
         )
     }
 
@@ -383,6 +373,7 @@ class ConversationRepository(
             lorebookIds = JsonInstant.decodeFromString(conversationEntity.lorebookIds),
             workspaceCwd = conversationEntity.workspaceCwd.ifEmpty { null },
             folderId = conversationEntity.folderId.ifEmpty { null }?.let { Uuid.parse(it) },
+            storageRevision = conversationEntity.revision,
         )
     }
 
@@ -423,46 +414,40 @@ class ConversationRepository(
             updateAt = Instant.ofEpochMilli(entity.updateAt),
             messageNodes = emptyList(),
             folderId = entity.folderId.ifEmpty { null }?.let { Uuid.parse(it) },
+            storageRevision = entity.revision,
         )
     }
 
-    private suspend fun loadMessageNodes(conversationId: String): List<MessageNode> {
+    private suspend fun loadFullConversation(conversationId: String): Conversation? = database.withTransaction {
+        val entity = conversationDAO.getConversationById(conversationId) ?: return@withTransaction null
         val favoriteNodeIds = favoriteDAO
             .getFavoriteNodeIdsOfConversation(conversationId)
             .mapNotNull { runCatching { Uuid.parse(it) }.getOrNull() }
             .toSet()
-
-        return database.withTransaction {
-            messageNodeDAO.getNodeHeadersOfConversation(conversationId).map { header ->
-                val serializedMessages = readChunkedText(MESSAGE_CHUNK_SIZE) { start, length ->
-                    messageNodeDAO.getMessagesChunk(header.id, start, length)
-                } ?: throw ConversationReadIntegrityException(
-                    conversationId = conversationId,
-                    nodeId = header.id,
-                )
-                val messages = JsonInstant.decodeFromString<List<UIMessage>>(serializedMessages)
-                val nodeId = Uuid.parse(header.id)
-                MessageNode(
-                    id = nodeId,
-                    messages = messages,
-                    selectIndex = header.selectIndex,
-                    isFavorite = favoriteNodeIds.contains(nodeId)
-                )
-            }
-        }
+        val v2Projection = conversationV2Projector.loadReady(conversationId)
+        val nodes = (v2Projection?.asLegacyMessageNodes() ?: loadLegacyMessageNodes(conversationId))
+            .map { node -> node.copy(isFavorite = node.id in favoriteNodeIds) }
+        conversationEntityToConversation(entity, nodes)
     }
 
-    private suspend fun saveMessageNodes(conversationId: String, nodes: List<MessageNode>) {
-        val entities = nodes.mapIndexed { index, node ->
-            MessageNodeEntity(
-                id = node.id.toString(),
+    private suspend fun loadLegacyMessageNodes(conversationId: String): List<MessageNode> =
+        messageNodeDAO.getNodeHeadersOfConversation(conversationId).map { header ->
+            val serializedMessages = readChunkedText(MESSAGE_CHUNK_SIZE) { start, length ->
+                messageNodeDAO.getMessagesChunk(header.id, start, length)
+            } ?: throw ConversationReadIntegrityException(
                 conversationId = conversationId,
-                nodeIndex = index,
-                messages = JsonInstant.encodeToString(node.messages),
-                selectIndex = node.selectIndex
+                nodeId = header.id,
+            )
+            val messages = JsonInstant.decodeFromString<List<UIMessage>>(serializedMessages)
+            MessageNode(
+                id = Uuid.parse(header.id),
+                messages = messages,
+                selectIndex = header.selectIndex,
             )
         }
-        messageNodeDAO.insertAll(entities)
+
+    private fun requireNoBase64(conversation: Conversation) {
+        require(conversation.messageNodes.none { node -> node.messages.any { it.hasBase64Part() } })
     }
 }
 
@@ -504,6 +489,7 @@ data class LightConversationEntity(
     val createAt: Long,
     val updateAt: Long,
     val folderId: String = "",
+    val revision: Long = 0,
 )
 
 data class ConversationPageResult(
