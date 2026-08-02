@@ -346,21 +346,24 @@ class ConversationV2BackfillCoordinator(
                 throw LeaseLostException()
             }
             val now = nowMillis()
-            ftsOutboxDAO.enqueue(
+            val previousOrder = ftsOutboxDAO.getMaxEventOrder(conversationId)
+            val eventOrder = previousOrder?.let { maxOf(now, Math.addExact(it, 1L)) } ?: now
+            val inserted = ftsOutboxDAO.enqueue(
                 MessageFtsOutboxEntity(
                     eventId = deterministicConversationV2Id(
                         "fts-backfill",
                         conversationId,
-                        journal.sourceRevision.toString(),
+                        eventOrder.toString(),
                         ConversationV2Values.OUTBOX_UPSERT,
                     ),
                     conversationId = conversationId,
                     targetRevision = journal.sourceRevision,
                     operation = ConversationV2Values.OUTBOX_UPSERT,
-                    createdAt = now,
-                    updatedAt = now,
+                    createdAt = eventOrder,
+                    updatedAt = eventOrder,
                 ),
             )
+            check(inserted != -1L) { "Unable to enqueue FTS backfill for $conversationId" }
             if (migrationDAO.markReady(conversationId, workerId, v2Digest, now) != 1) {
                 throw LeaseLostException()
             }

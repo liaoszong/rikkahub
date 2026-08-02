@@ -14,6 +14,7 @@ import me.rerere.rikkahub.data.db.AppDatabase
 import me.rerere.rikkahub.data.db.conversation.ConversationV2ShadowProjector
 import me.rerere.rikkahub.data.db.conversation.ConversationV2Writer
 import me.rerere.rikkahub.data.db.fts.MessageFtsManager
+import me.rerere.rikkahub.data.db.fts.MessageFtsOutboxProcessor
 import me.rerere.rikkahub.data.db.fts.MessageSearchSort
 import me.rerere.rikkahub.data.db.dao.ConversationDAO
 import me.rerere.rikkahub.data.db.dao.FavoriteDAO
@@ -33,6 +34,7 @@ class ConversationRepository(
     private val database: AppDatabase,
     private val filesManager: FilesManager,
     private val messageFtsManager: MessageFtsManager,
+    private val messageFtsOutboxProcessor: MessageFtsOutboxProcessor,
     private val conversationV2Writer: ConversationV2Writer,
     private val conversationV2Projector: ConversationV2ShadowProjector,
 ) {
@@ -285,14 +287,14 @@ class ConversationRepository(
     suspend fun insertConversation(conversation: Conversation): Conversation {
         requireNoBase64(conversation)
         val persisted = conversationV2Writer.insert(conversation)
-        messageFtsManager.indexConversation(persisted)
+        messageFtsOutboxProcessor.requestDrain()
         return persisted
     }
 
     suspend fun updateConversation(conversation: Conversation): Conversation {
         requireNoBase64(conversation)
         val persisted = conversationV2Writer.update(conversation)
-        messageFtsManager.indexConversation(persisted)
+        messageFtsOutboxProcessor.requestDrain()
         return persisted
     }
 
@@ -303,14 +305,11 @@ class ConversationRepository(
         } else {
             conversation
         }
-        messageFtsManager.deleteConversation(conversation.id.toString())
-        database.withTransaction {
-            // message_node 会通过 CASCADE 自动删除
-            conversationDAO.delete(
-                conversationToConversationEntity(conversation)
-            )
+        val deleted = conversationV2Writer.delete(conversation.id.toString())
+        if (deleted) {
+            messageFtsOutboxProcessor.requestDrain()
+            filesManager.deleteChatFiles(fullConversation.files)
         }
-        filesManager.deleteChatFiles(fullConversation.files)
     }
 
     suspend fun searchMessages(
@@ -319,14 +318,7 @@ class ConversationRepository(
     ) = messageFtsManager.search(keyword, sort)
 
     suspend fun rebuildAllIndexes(onProgress: (current: Int, total: Int) -> Unit = { _, _ -> }) {
-        messageFtsManager.deleteAll()
-        val allIds = conversationDAO.getAllIds()
-        val total = allIds.size
-        allIds.forEachIndexed { index, id ->
-            val conversation = loadFullConversation(id) ?: return@forEachIndexed
-            messageFtsManager.indexConversation(conversation)
-            onProgress(index + 1, total)
-        }
+        messageFtsOutboxProcessor.rebuildAll(onProgress)
     }
 
     suspend fun deleteConversationOfAssistant(assistantId: Uuid) {

@@ -145,7 +145,7 @@ interface ConversationGraphDAO {
 
 @Dao
 interface ConversationMigrationDAO {
-    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertJournal(journal: ConversationMigrationJournalEntity): Long
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -375,16 +375,126 @@ data class LegacyMessageNodeHeader(
 
 @Dao
 interface MessageFtsOutboxDAO {
-    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun enqueue(event: MessageFtsOutboxEntity): Long
 
     @Query("SELECT * FROM message_fts_outbox WHERE event_id = :eventId")
     suspend fun getEvent(eventId: String): MessageFtsOutboxEntity?
 
     @Query(
+        "SELECT * FROM message_fts_outbox WHERE conversation_id = :conversationId " +
+            "ORDER BY created_at DESC, event_id DESC LIMIT 1",
+    )
+    suspend fun getLatestEvent(conversationId: String): MessageFtsOutboxEntity?
+
+    @Query("SELECT MAX(created_at) FROM message_fts_outbox WHERE conversation_id = :conversationId")
+    suspend fun getMaxEventOrder(conversationId: String): Long?
+
+    @Query(
         "SELECT * FROM message_fts_outbox " +
             "WHERE state = 'PENDING' AND next_attempt_at <= :now " +
-            "ORDER BY target_revision DESC, created_at LIMIT :limit",
+            "ORDER BY created_at DESC, event_id DESC LIMIT :limit",
     )
     suspend fun getReadyEvents(now: Long, limit: Int): List<MessageFtsOutboxEntity>
+
+    @Query(
+        "SELECT * FROM message_fts_outbox AS candidate " +
+            "WHERE ((candidate.state = 'PENDING' AND candidate.next_attempt_at <= :now) " +
+            "OR (candidate.state = 'PROCESSING' AND COALESCE(candidate.lease_until, 0) <= :now)) " +
+            "AND NOT EXISTS (" +
+            "SELECT 1 FROM message_fts_outbox AS newer " +
+            "WHERE newer.conversation_id = candidate.conversation_id " +
+            "AND (newer.created_at > candidate.created_at " +
+            "OR (newer.created_at = candidate.created_at AND newer.event_id > candidate.event_id))" +
+            ") AND NOT EXISTS (" +
+            "SELECT 1 FROM message_fts_outbox AS active " +
+            "WHERE active.conversation_id = candidate.conversation_id " +
+            "AND active.event_id != candidate.event_id " +
+            "AND active.state = 'PROCESSING' AND COALESCE(active.lease_until, 0) > :now" +
+            ") ORDER BY candidate.created_at, candidate.event_id LIMIT :limit",
+    )
+    suspend fun getClaimCandidates(now: Long, limit: Int): List<MessageFtsOutboxEntity>
+
+    @Query(
+        "UPDATE message_fts_outbox SET state = 'PROCESSING', lease_owner = :owner, " +
+            "lease_until = :leaseUntil, updated_at = :now " +
+            "WHERE event_id = :eventId " +
+            "AND ((state = 'PENDING' AND next_attempt_at <= :now) " +
+            "OR (state = 'PROCESSING' AND COALESCE(lease_until, 0) <= :now)) " +
+            "AND NOT EXISTS (" +
+            "SELECT 1 FROM message_fts_outbox AS newer " +
+            "WHERE newer.conversation_id = message_fts_outbox.conversation_id " +
+            "AND (newer.created_at > message_fts_outbox.created_at " +
+            "OR (newer.created_at = message_fts_outbox.created_at " +
+            "AND newer.event_id > message_fts_outbox.event_id))" +
+            ") AND NOT EXISTS (" +
+            "SELECT 1 FROM message_fts_outbox AS active " +
+            "WHERE active.conversation_id = message_fts_outbox.conversation_id " +
+            "AND active.event_id != message_fts_outbox.event_id " +
+            "AND active.state = 'PROCESSING' AND COALESCE(active.lease_until, 0) > :now" +
+            ")",
+    )
+    suspend fun claim(
+        eventId: String,
+        owner: String,
+        now: Long,
+        leaseUntil: Long,
+    ): Int
+
+    @Query(
+        "UPDATE message_fts_outbox SET state = 'DONE', lease_owner = NULL, lease_until = NULL, " +
+            "last_error = NULL, updated_at = :now WHERE event_id = :eventId " +
+            "AND state = 'PROCESSING' AND lease_owner = :owner",
+    )
+    suspend fun completeClaim(
+        eventId: String,
+        owner: String,
+        now: Long,
+    ): Int
+
+    @Query(
+        "DELETE FROM message_fts_outbox WHERE conversation_id = :conversationId " +
+            "AND (created_at < :completedEventOrder " +
+            "OR (created_at = :completedEventOrder AND event_id < :completedEventId))",
+    )
+    suspend fun deleteSuperseded(
+        conversationId: String,
+        completedEventOrder: Long,
+        completedEventId: String,
+    ): Int
+
+    @Query(
+        "UPDATE message_fts_outbox SET state = 'PENDING', attempts = attempts + 1, " +
+            "next_attempt_at = :retryAt, lease_owner = NULL, lease_until = NULL, " +
+            "last_error = :errorCode, updated_at = :now " +
+            "WHERE event_id = :eventId AND state = 'PROCESSING' AND lease_owner = :owner",
+    )
+    suspend fun retry(
+        eventId: String,
+        owner: String,
+        retryAt: Long,
+        errorCode: String,
+        now: Long,
+    ): Int
+
+    @Query(
+        "SELECT MIN(CASE " +
+            "WHEN EXISTS (SELECT 1 FROM message_fts_outbox AS active " +
+            "WHERE active.conversation_id = candidate.conversation_id " +
+            "AND active.event_id != candidate.event_id AND active.state = 'PROCESSING' " +
+            "AND COALESCE(active.lease_until, 0) > :now) " +
+            "THEN (SELECT MIN(active.lease_until) FROM message_fts_outbox AS active " +
+            "WHERE active.conversation_id = candidate.conversation_id " +
+            "AND active.event_id != candidate.event_id AND active.state = 'PROCESSING' " +
+            "AND COALESCE(active.lease_until, 0) > :now) " +
+            "WHEN candidate.state = 'PROCESSING' THEN COALESCE(candidate.lease_until, 0) " +
+            "ELSE candidate.next_attempt_at END) FROM message_fts_outbox AS candidate " +
+            "WHERE candidate.state != 'DONE' AND NOT EXISTS (" +
+            "SELECT 1 FROM message_fts_outbox AS newer " +
+            "WHERE newer.conversation_id = candidate.conversation_id " +
+            "AND (newer.created_at > candidate.created_at " +
+            "OR (newer.created_at = candidate.created_at AND newer.event_id > candidate.event_id))" +
+            ")",
+    )
+    suspend fun getNextWakeAt(now: Long): Long?
 }

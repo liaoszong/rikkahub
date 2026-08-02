@@ -1,6 +1,7 @@
 package me.rerere.rikkahub.data.db.fts
 
 import android.util.Log
+import androidx.room.withTransaction
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import me.rerere.ai.ui.UIMessage
@@ -32,33 +33,68 @@ class MessageFtsManager(private val database: AppDatabase) {
     private val db get() = database.openHelper.writableDatabase
 
     suspend fun indexConversation(conversation: Conversation) = withContext(Dispatchers.IO) {
-        val conversationId = conversation.id.toString()
+        database.withTransaction {
+            replaceConversationInTransaction(
+                conversationId = conversation.id.toString(),
+                title = conversation.title,
+                updateAtMillis = conversation.updateAt.toEpochMilli(),
+                nodes = conversation.messageNodes,
+            )
+        }
+    }
+
+    internal fun replaceConversationInTransaction(
+        conversationId: String,
+        title: String,
+        updateAtMillis: Long,
+        nodes: List<MessageNode>,
+    ) {
+        check(db.inTransaction()) { "FTS projection updates must be transactional" }
         db.execSQL("DELETE FROM message_fts WHERE conversation_id = ?", arrayOf(conversationId))
-        conversation.messageNodes.forEach { node ->
-            node.messages.forEach { message ->
-                val text = message.extractFtsText()
-                if (text.isNotBlank()) {
-                    db.execSQL(
-                        "INSERT INTO message_fts(text, node_id, message_id, conversation_id, title, update_at) VALUES (?, ?, ?, ?, ?, ?)",
-                        arrayOf(
-                            text,
-                            node.id.toString(),
-                            message.id.toString(),
-                            conversationId,
-                            conversation.title,
-                            conversation.updateAt.toEpochMilli().toString(),
-                        )
-                    )
+        val statement = db.compileStatement(
+            "INSERT INTO message_fts(text, node_id, message_id, conversation_id, title, update_at) " +
+                "VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        try {
+            nodes.forEach { node ->
+                node.messages.forEach { message ->
+                    val text = message.extractFtsText()
+                    if (text.isNotBlank()) {
+                        statement.clearBindings()
+                        statement.bindString(1, text)
+                        statement.bindString(2, node.id.toString())
+                        statement.bindString(3, message.id.toString())
+                        statement.bindString(4, conversationId)
+                        statement.bindString(5, title)
+                        statement.bindString(6, updateAtMillis.toString())
+                        statement.executeInsert()
+                    }
                 }
             }
+        } finally {
+            statement.close()
         }
     }
 
     suspend fun deleteConversation(conversationId: String) = withContext(Dispatchers.IO) {
+        database.withTransaction {
+            deleteConversationInTransaction(conversationId)
+        }
+    }
+
+    internal fun deleteConversationInTransaction(conversationId: String) {
+        check(db.inTransaction()) { "FTS projection deletes must be transactional" }
         db.execSQL("DELETE FROM message_fts WHERE conversation_id = ?", arrayOf(conversationId))
     }
 
     suspend fun deleteAll() = withContext(Dispatchers.IO) {
+        database.withTransaction {
+            deleteAllInTransaction()
+        }
+    }
+
+    internal fun deleteAllInTransaction() {
+        check(db.inTransaction()) { "FTS projection deletes must be transactional" }
         db.execSQL("DELETE FROM message_fts")
     }
 

@@ -5,6 +5,7 @@ import androidx.room.RoomDatabase
 import androidx.sqlite.db.SupportSQLiteDatabase
 import android.content.Context
 import io.ktor.client.HttpClient
+import me.rerere.rikkahub.AppScope
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.http.HttpHeaders
 import io.pebbletemplates.pebble.PebbleEngine
@@ -28,6 +29,7 @@ import me.rerere.rikkahub.data.db.conversation.ConversationV2Codec
 import me.rerere.rikkahub.data.db.conversation.ConversationV2ShadowProjector
 import me.rerere.rikkahub.data.db.conversation.ConversationV2Writer
 import me.rerere.rikkahub.data.db.fts.MessageFtsManager
+import me.rerere.rikkahub.data.db.fts.MessageFtsOutboxProcessor
 import me.rerere.rikkahub.data.db.fts.SimpleDictManager
 import me.rerere.rikkahub.data.db.migrations.Migration_6_7
 import me.rerere.rikkahub.data.db.migrations.Migration_11_12
@@ -208,6 +210,17 @@ val dataSourceModule = module {
 
     single {
         MessageFtsManager(get())
+    }
+
+    single {
+        MessageFtsOutboxProcessor(
+            database = get(),
+            outboxDAO = get<AppDatabase>().messageFtsOutboxDao(),
+            conversationDAO = get<AppDatabase>().conversationDao(),
+            projector = get(),
+            ftsManager = get(),
+            appScope = get<AppScope>(),
+        )
     }
 
     single { McpManager(settingsStore = get(), appScope = get(), filesManager = get(), appEventBus = get()) }

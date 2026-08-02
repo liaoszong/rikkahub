@@ -106,6 +106,19 @@ class ConversationV2Writer internal constructor(
         }
     }
 
+    suspend fun delete(conversationId: String): Boolean = database.withTransaction {
+        val state = migrationDAO.getConversationState(conversationId) ?: return@withTransaction false
+        val targetRevision = Math.addExact(state.revision, 1L)
+        enqueueFtsEvent(
+            namespace = "fts-delete",
+            conversationId = conversationId,
+            targetRevision = targetRevision,
+            operation = ConversationV2Values.OUTBOX_DELETE,
+        )
+        conversationDAO.deleteById(conversationId)
+        true
+    }
+
     private suspend fun updateReady(
         conversation: Conversation,
         encoded: EncodedConversationV2,
@@ -299,17 +312,39 @@ class ConversationV2Writer internal constructor(
                 updatedAt = nowMillis(),
             ),
         )
+        enqueueFtsEvent(
+            namespace = "fts-live-write",
+            conversationId = conversationId,
+            targetRevision = revision,
+            operation = ConversationV2Values.OUTBOX_UPSERT,
+        )
+    }
+
+    private suspend fun enqueueFtsEvent(
+        namespace: String,
+        conversationId: String,
+        targetRevision: Long,
+        operation: String,
+    ) {
         val now = nowMillis()
-        ftsOutboxDAO.enqueue(
+        val previousOrder = ftsOutboxDAO.getMaxEventOrder(conversationId)
+        val eventOrder = previousOrder?.let { maxOf(now, Math.addExact(it, 1L)) } ?: now
+        val inserted = ftsOutboxDAO.enqueue(
             MessageFtsOutboxEntity(
-                eventId = deterministicConversationV2Id("fts-live-write", conversationId, revision.toString()),
+                eventId = deterministicConversationV2Id(
+                    namespace,
+                    conversationId,
+                    eventOrder.toString(),
+                    operation,
+                ),
                 conversationId = conversationId,
-                targetRevision = revision,
-                operation = ConversationV2Values.OUTBOX_UPSERT,
-                createdAt = now,
-                updatedAt = now,
+                targetRevision = targetRevision,
+                operation = operation,
+                createdAt = eventOrder,
+                updatedAt = eventOrder,
             ),
         )
+        check(inserted != -1L) { "Unable to enqueue FTS projection event for $conversationId" }
     }
 
     private suspend fun clearInternalMarker(conversationId: String) {

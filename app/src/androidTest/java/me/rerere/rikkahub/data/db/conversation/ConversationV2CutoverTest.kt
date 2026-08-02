@@ -23,6 +23,7 @@ import me.rerere.rikkahub.data.db.entity.ConversationV2Values
 import me.rerere.rikkahub.data.db.entity.FavoriteEntity
 import me.rerere.rikkahub.data.db.entity.MessageNodeEntity
 import me.rerere.rikkahub.data.db.fts.MessageFtsManager
+import me.rerere.rikkahub.data.db.fts.MessageFtsOutboxProcessor
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
@@ -84,13 +85,25 @@ class ConversationV2CutoverTest {
             json = JsonInstant,
             nowMillis = { ++clock },
         )
+        val ftsManager = MessageFtsManager(database)
+        val ftsProcessor = MessageFtsOutboxProcessor(
+            database = database,
+            outboxDAO = database.messageFtsOutboxDao(),
+            conversationDAO = database.conversationDao(),
+            projector = projector,
+            ftsManager = ftsManager,
+            appScope = appScope,
+            nowMillis = { ++clock },
+            workerId = "cutover-test",
+        )
         repository = ConversationRepository(
             conversationDAO = database.conversationDao(),
             messageNodeDAO = database.messageNodeDao(),
             favoriteDAO = database.favoriteDao(),
             database = database,
             filesManager = FilesManager(context, FilesRepository(database.managedFileDao()), appScope),
-            messageFtsManager = MessageFtsManager(database),
+            messageFtsManager = ftsManager,
+            messageFtsOutboxProcessor = ftsProcessor,
             conversationV2Writer = writer,
             conversationV2Projector = projector,
         )

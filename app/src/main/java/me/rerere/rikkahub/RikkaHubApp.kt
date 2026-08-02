@@ -34,6 +34,7 @@ import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.imggen.MediaAssetRecovery
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.db.conversation.ConversationV2BackfillCoordinator
+import me.rerere.rikkahub.data.db.fts.MessageFtsOutboxProcessor
 import me.rerere.rikkahub.service.WebServerService
 import me.rerere.rikkahub.utils.CrashHandler
 import me.rerere.rikkahub.utils.DatabaseUtil
@@ -86,7 +87,10 @@ class RikkaHubApp : Application() {
         // install crash handler
         CrashHandler.install(this)
 
-        // Build the verified ConversationStore v2 shadow without switching production reads/writes yet.
+        // Resume durable search projection work before creating any new outbox events.
+        get<MessageFtsOutboxProcessor>().start()
+
+        // Finish restartable ConversationStore v2 migrations left by older installations.
         backfillConversationStoreV2()
 
         // Init QuickJS native library
@@ -205,6 +209,7 @@ class RikkaHubApp : Application() {
             runCatching {
                 get<ConversationV2BackfillCoordinator>().runPending()
             }.onSuccess { result ->
+                get<MessageFtsOutboxProcessor>().requestDrain()
                 if (result.inspected > 0) {
                     Log.i(
                         TAG,
