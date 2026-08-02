@@ -219,18 +219,28 @@ class FilesManager(
         }
 
     fun deleteChatFiles(uris: List<Uri>) {
-        val relativePaths = mutableSetOf<String>()
-        uris.filter { it.toString().startsWith("file:") }.forEach { uri ->
-            val file = uri.toFile()
-            getRelativePathInFilesDir(file)?.let { relativePaths.add(it) }
-            if (file.exists()) {
-                file.delete()
-            }
-        }
-        if (relativePaths.isNotEmpty()) {
-            appScope.launch(Dispatchers.IO) {
-                relativePaths.forEach { path ->
-                    repository.deleteByPath(path)
+        val candidates = uris.mapNotNull { uri ->
+            resolveChatFileDeletionCandidate(
+                filesDir = context.filesDir,
+                uriScheme = uri.scheme,
+                uriPath = uri.path,
+            )
+        }.distinctBy(ChatFileDeletionCandidate::relativePath)
+        if (candidates.isEmpty()) return
+
+        appScope.launch(Dispatchers.IO) {
+            candidates.forEach { candidate ->
+                val managedFile = repository.getByPath(candidate.relativePath)
+                    ?: return@forEach
+                if (deleteManagedChatFileIfAuthorized(
+                        filesDir = context.filesDir,
+                        candidate = candidate,
+                        managedFile = managedFile,
+                    )
+                ) {
+                    repository.deleteById(managedFile.id)
+                } else {
+                    Log.w(TAG, "Refused or failed to delete managed chat file ${candidate.relativePath}")
                 }
             }
         }
@@ -573,9 +583,6 @@ class FilesManager(
     private fun buildRelativePath(folder: String, file: File): String =
         FileUtils.buildRelativePath(folder, file)
 
-    private fun getRelativePathInFilesDir(file: File): String? =
-        FileUtils.getRelativePathInFilesDir(context.filesDir, file)
-
     fun getFileNameFromUri(uri: Uri): String? =
         FileUtils.getFileNameFromUri(context, uri)
 
@@ -634,6 +641,83 @@ object FileFolders {
     const val SKILLS = "skills"
     const val FONTS = "fonts"
     const val TOOL_OUTPUTS = "tool_outputs"
+}
+
+internal data class ChatFileDeletionCandidate(
+    val file: File,
+    val relativePath: String,
+    val folder: String,
+)
+
+private val CHAT_FILE_DELETABLE_FOLDERS = setOf(
+    FileFolders.UPLOAD,
+    FileFolders.TOOL_OUTPUTS,
+)
+
+private val CHAT_FILE_PROTECTED_GALLERY_FOLDERS = setOf(
+    FileFolders.CHAT_GENERATED_IMAGES,
+    FileFolders.LEGACY_GENERATED_IMAGES,
+)
+
+/**
+ * Resolves a message-owned file reference without trusting the serialized URI path.
+ * Gallery folders are deliberately excluded: removing a conversation reference must
+ * not destroy a durable library asset.
+ */
+internal fun resolveChatFileDeletionCandidate(
+    filesDir: File,
+    uriScheme: String?,
+    uriPath: String?,
+): ChatFileDeletionCandidate? {
+    if (!uriScheme.equals("file", ignoreCase = true) || uriPath.isNullOrBlank()) return null
+
+    val root = runCatching { filesDir.canonicalFile }.getOrNull() ?: return null
+    val candidate = runCatching { File(uriPath).canonicalFile }.getOrNull() ?: return null
+    if (candidate == root || !candidate.toPath().startsWith(root.toPath())) return null
+
+    val relativePath = runCatching {
+        candidate.relativeTo(root).path.replace(File.separatorChar, '/')
+    }.getOrNull()?.takeIf { it.contains('/') } ?: return null
+    val folder = relativePath.substringBefore('/')
+    if (folder in CHAT_FILE_PROTECTED_GALLERY_FOLDERS || folder !in CHAT_FILE_DELETABLE_FOLDERS) {
+        return null
+    }
+
+    val allowedRoot = runCatching { File(root, folder).canonicalFile }.getOrNull() ?: return null
+    if (candidate == allowedRoot || !candidate.toPath().startsWith(allowedRoot.toPath())) return null
+    return ChatFileDeletionCandidate(
+        file = candidate,
+        relativePath = relativePath,
+        folder = folder,
+    )
+}
+
+/**
+ * Deletes only a file whose canonical path and persisted ManagedFile identity agree.
+ * Returning true also covers an already-missing file so its stale DB row can be removed.
+ */
+internal fun deleteManagedChatFileIfAuthorized(
+    filesDir: File,
+    candidate: ChatFileDeletionCandidate,
+    managedFile: ManagedFileEntity?,
+): Boolean {
+    if (managedFile == null || managedFile.id <= 0L) return false
+    if (managedFile.folder != candidate.folder || managedFile.relativePath != candidate.relativePath) return false
+
+    val revalidated = resolveChatFileDeletionCandidate(
+        filesDir = filesDir,
+        uriScheme = "file",
+        uriPath = candidate.file.path,
+    ) ?: return false
+    if (revalidated.relativePath != candidate.relativePath || revalidated.file != candidate.file) return false
+
+    val managedTarget = runCatching {
+        File(filesDir.canonicalFile, managedFile.relativePath).canonicalFile
+    }.getOrNull() ?: return false
+    if (managedTarget != revalidated.file) return false
+    if (!revalidated.file.exists()) return true
+    if (!revalidated.file.isFile) return false
+    return revalidated.file.delete() && !revalidated.file.exists()
 }
 
 suspend fun FilesManager.saveUploadFromUri(
