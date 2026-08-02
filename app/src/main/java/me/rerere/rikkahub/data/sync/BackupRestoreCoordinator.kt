@@ -157,7 +157,13 @@ object PendingRestoreManager {
         val previousSettings = settingsStore.settingsFlowRaw.first()
         try {
             val migrated = SettingsJsonMigrator.migrate(settingsFile.readText())
-            settingsStore.update(json.decodeFromString<Settings>(migrated))
+            settingsStore.update(
+                decodeRestoredSettingsPreservingLocalSecrets(
+                    restoredSettingsJson = migrated,
+                    localSettings = previousSettings,
+                    json = json,
+                )
+            )
             pending.deleteRecursively()
             Log.i(RESTORE_TAG, "Pending restore committed")
         } catch (error: Throwable) {
@@ -226,6 +232,17 @@ object PendingRestoreManager {
     }
 
     private fun restoreJson() = Json { ignoreUnknownKeys = true }
+}
+
+internal fun decodeRestoredSettingsPreservingLocalSecrets(
+    restoredSettingsJson: String,
+    localSettings: Settings,
+    json: Json,
+): Settings {
+    val restored = json.parseToJsonElement(restoredSettingsJson)
+    val local = json.encodeToJsonElement(Settings.serializer(), localSettings)
+    val merged = BackupSettingsSanitizer.mergeLocalSecrets(restored, local)
+    return json.decodeFromJsonElement(Settings.serializer(), merged)
 }
 
 internal sealed interface RestoreFileOperation {
