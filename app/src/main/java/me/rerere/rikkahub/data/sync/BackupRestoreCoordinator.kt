@@ -10,7 +10,6 @@ import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.migration.SettingsJsonMigrator
 import me.rerere.rikkahub.data.db.AppDatabase
-import me.rerere.rikkahub.data.files.FileFolders
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -192,7 +191,7 @@ object PendingRestoreManager {
                     DATABASE_ENTRY -> context.getDatabasePath("rikka_hub")
                     DATABASE_WAL_ENTRY -> File(context.getDatabasePath("rikka_hub").parentFile, "rikka_hub-wal")
                     DATABASE_SHM_ENTRY -> File(context.getDatabasePath("rikka_hub").parentFile, "rikka_hub-shm")
-                    else -> SafeBackupArchive.resolveWithin(context.filesDir, entry.name)
+                    else -> resolveRestorableAppFile(context.filesDir, entry.name)
                 }
                 RestoreFileOperation.Replace(source, target)
             }
@@ -350,11 +349,6 @@ private const val DATABASE_SHM_ENTRY = "rikka_hub-shm"
 private const val MANIFEST_FILE = "manifest.json"
 private const val PHASE_FILE = "phase"
 private val DATABASE_ENTRIES = setOf(DATABASE_ENTRY, DATABASE_WAL_ENTRY, DATABASE_SHM_ENTRY)
-
-private fun isRestorableAppFile(name: String): Boolean =
-    name.startsWith("${FileFolders.UPLOAD}/") ||
-        name.startsWith("${FileFolders.SKILLS}/") ||
-        name.startsWith("${FileFolders.FONTS}/")
 
 private fun validateSqlite(file: File) {
     check(file.isFile && file.length() >= 100) { "Database snapshot is empty or truncated" }

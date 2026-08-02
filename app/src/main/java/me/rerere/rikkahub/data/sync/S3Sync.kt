@@ -6,7 +6,6 @@ import io.ktor.client.HttpClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
-import me.rerere.rikkahub.data.files.FileFolders
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.sync.s3.S3Client
 import me.rerere.rikkahub.data.sync.s3.S3Config
@@ -137,41 +136,10 @@ class S3Sync(
 
             // Backup app files
             if (config.items.contains(S3Config.BackupItem.FILES)) {
-                val uploadFolder = File(context.filesDir, FileFolders.UPLOAD)
-                if (uploadFolder.exists() && uploadFolder.isDirectory) {
-                    Log.i(TAG, "prepareBackupFile: Backing up files from ${uploadFolder.absolutePath}")
-                    uploadFolder.listFiles()?.forEach { file ->
-                        if (file.isFile) {
-                            addFileToZip(zipOut, file, "${FileFolders.UPLOAD}/${file.name}")
-                        }
-                    }
-                } else {
-                    Log.w(TAG, "prepareBackupFile: Upload folder does not exist or is not a directory")
-                }
-
-                val skillsFolder = File(context.filesDir, FileFolders.SKILLS)
-                if (skillsFolder.exists() && skillsFolder.isDirectory) {
-                    Log.i(TAG, "prepareBackupFile: Backing up skills from ${skillsFolder.absolutePath}")
-                    addDirectoryToZip(
-                        zipOut = zipOut,
-                        rootDir = skillsFolder,
-                        currentDir = skillsFolder,
-                        entryPrefix = "${FileFolders.SKILLS}/"
-                    )
-                } else {
-                    Log.w(TAG, "prepareBackupFile: Skills folder does not exist or is not a directory")
-                }
-
-                val fontsFolder = File(context.filesDir, FileFolders.FONTS)
-                if (fontsFolder.exists() && fontsFolder.isDirectory) {
-                    Log.i(TAG, "prepareBackupFile: Backing up fonts from ${fontsFolder.absolutePath}")
-                    fontsFolder.listFiles()?.forEach { file ->
-                        if (file.isFile) {
-                            addFileToZip(zipOut, file, "${FileFolders.FONTS}/${file.name}")
-                        }
-                    }
-                } else {
-                    Log.w(TAG, "prepareBackupFile: Fonts folder does not exist or is not a directory")
+                val appFiles = s3BackupAppFiles(context.filesDir)
+                Log.i(TAG, "prepareBackupFile: Backing up ${appFiles.size} app files")
+                appFiles.forEach { appFile ->
+                    addFileToZip(zipOut, appFile.source, appFile.archivePath)
                 }
             }
         }
@@ -193,27 +161,6 @@ class S3Sync(
         }
     }
 
-    private fun addDirectoryToZip(
-        zipOut: ZipOutputStream,
-        rootDir: File,
-        currentDir: File,
-        entryPrefix: String,
-    ) {
-        currentDir.listFiles()?.forEach { file ->
-            if (file.isDirectory) {
-                addDirectoryToZip(
-                    zipOut = zipOut,
-                    rootDir = rootDir,
-                    currentDir = file,
-                    entryPrefix = entryPrefix,
-                )
-            } else if (file.isFile) {
-                val relativePath = file.relativeTo(rootDir).invariantSeparatorsPath
-                addFileToZip(zipOut, file, "$entryPrefix$relativePath")
-            }
-        }
-    }
-
     private fun addVirtualFileToZip(zipOut: ZipOutputStream, name: String, content: String) {
         val zipEntry = ZipEntry(name)
         zipOut.putNextEntry(zipEntry)
@@ -222,6 +169,9 @@ class S3Sync(
         Log.i(TAG, "addVirtualFileToZip: $name (${content.length} bytes)")
     }
 }
+
+internal fun s3BackupAppFiles(filesDir: File): List<BackupAppFile> =
+    collectBackupAppFiles(filesDir)
 
 data class S3BackupItem(
     val key: String,
