@@ -50,8 +50,9 @@ flowchart LR
 | 领域 | 稳定 ID | 当前来源 | pale.6 规则 |
 |---|---|---|---|
 | Conversation | `conversationId` | 已有 UUID | 永不因导入、重命名或移动文件夹改变 |
-| MessageNode | `nodeId` | 已有 UUID | 顺序由 `node_index/order_key` 表达，ID 不含顺序 |
-| Message | `messageId` | 已有 UUID | 分支切换只改变 selected ID，不复制身份 |
+| MessageNode | `(conversationId, nodeId)` | 已有 UUID，但仅保证会话内稳定 | 顺序由 `node_index/order_key` 表达，ID 不含顺序；数据库使用复合身份 |
+| Message | `(conversationId, messageId)` | 已有 UUID，但 Fork/导入可跨会话重复 | 分支切换不复制身份；Fork 新建 messageId 并记录来源会话/消息复合身份 |
+| MessagePart | `(conversationId, partId)` | v28 新增 | 新值随机 UUID；旧数据的确定性 ID 必须包含 conversationId |
 | MediaAsset | `assetId` | v26 已有 String | 新值为 UUID；`legacy-*` 原样保留 |
 | ManagedFile | `fileId` | v27 新增 | 本机受管理文件身份；路径可变 |
 | MediaReplica | `replicaId` | v27 新增 | 一条物理/远端副本一 ID |
@@ -115,14 +116,14 @@ Room 26→27 只建表并复制可证明的关系，不在 SQL migration 中读�
 当前 `MessageNode[] + selectIndex` 只是“按位置分组的备选消息”，不保存真实父子边，可能拼出不同分支的混合上下文。v2 建立真实消息树：
 
 - `conversation`：增加 `revision`、`active_leaf_message_id`、`storage_version`、`deleted_at`、`last_writer_replica_id`。
-- `message`：`message_id`、conversation、`parent_message_id`、`branch_group_id`、`origin_message_id`、request、role、draft/streaming/completed/interrupted/failed、model/provider response ID、时间戳、revision。
+- `message`：`conversation_id + message_id` 复合主键、同会话 parent、`branch_group_id`、`origin_conversation_id + origin_message_id`、request、role、draft/streaming/completed/interrupted/failed、model/provider response ID、时间戳、revision。不能假设 UIMessage ID 全局唯一：旧 Fork 会复用 ID，Chatbox 导入也可能跨会话碰撞。
 - `message_part`：稳定 `part_id`、message、ordinal、kind、schema version、payload JSON、asset/tool invocation ID。
 - `conversation_migration_journal`：legacy digest、阶段、游标、错误与推断标志。
 - FTS 改为同事务 outbox + 幂等 worker，不能在 Room commit 后无保护地先删再重建。
 
-`conversation.active_leaf_message_id` 是当前分支唯一真值，当前上下文沿 parent 链推导。已完成消息/part 不原地改写；edit/regenerate 创建 sibling，Fork 使用新 conversation ID 并明确 `origin_message_id`。所有 mutation 使用 `WHERE revision = expectedRevision` 的 CAS；进程内 Mutex 只是优化，Room revision 才能防止 Chat/Web/标题/建议/文件夹并发互相覆盖。
+`conversation.active_leaf_message_id` 是当前分支唯一真值，当前上下文沿同一 conversation 的 parent 链推导。已完成消息/part 不原地改写；edit/regenerate 创建 sibling，Fork 为 conversation/message/part 全部生成新 ID，并明确 `origin_conversation_id + origin_message_id`。所有 mutation 使用 `WHERE revision = expectedRevision` 的 CAS；进程内 Mutex 只是优化，Room revision 才能防止 Chat/Web/标题/建议/文件夹并发互相覆盖。
 
-26/27 的旧结构无法恢复真实历史父边：迁移按当时选中路径推断 parent，旧 node ID 作为 branch group，旧 UIMessage ID 保留为 message ID并标记 `legacy_inferred`；新 part ID 以 message ID + ordinal + kind + payload digest 确定性生成。非法 JSON、未知 part 或 selectIndex 越界进入 quarantine/只读恢复，不能静默丢弃，也不能因一条损坏删除整场会话。
+26/27 的旧结构无法恢复真实历史父边：迁移按当时选中路径推断 parent，旧 node ID 作为 branch group；旧 UIMessage ID 在同一会话内唯一时保留，重复/非法 ID 才按 conversation/node/ordinal/payload digest 派生并标记 `legacy_inferred`。旧 part ID 以 conversation ID + message ID + ordinal + kind + canonical payload digest 确定性生成。非法 JSON、未知 part 或 selectIndex 越界进入 quarantine/只读恢复，不能静默丢弃，也不能因一条损坏删除整场会话。
 
 迁移先 additive shadow tables + 可重入 backfill/聚合 digest 对账，验证后再把 reader 切到 v2；停止旧 JSON 双写必须晚于完整迁移与真机升级验证。
 
