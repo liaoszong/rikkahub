@@ -19,6 +19,7 @@ import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.sync.s3.S3Config
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
@@ -118,8 +119,7 @@ class BackupSettingsSanitizerTest {
     }
 
     @Test
-    fun `portable backup removes URL credentials and keeps only contracted routing query values`() {
-        val localAvatarUrl = "file:///data/user/0/me.rerere.rikkahub/files/avatar.png?keep=local"
+    fun `portable backup removes URL credentials and all network query values`() {
         val encoded = BackupSettingsSanitizer.encode(
             settings = Settings(
                 asrProviders = listOf(
@@ -133,28 +133,47 @@ class BackupSettingsSanitizerTest {
                                 "&routing_hint=unknown-query-value#access_token=fragment-token",
                     )
                 ),
-                displaySetting = DisplaySetting(userAvatar = Avatar.Image(localAvatarUrl)),
             ),
             json = json,
         )
 
         val decoded = json.decodeFromString(Settings.serializer(), encoded)
         val provider = decoded.asrProviders.single() as ASRProviderSetting.OpenAIRealtime
-        assertEquals(
-            "wss://asr.example.com/realtime?intent=transcription&api-version=2026-08-01",
-            provider.websocketUrl,
-        )
+        assertEquals("wss://asr.example.com/realtime", provider.websocketUrl)
         assertTrue(provider.apiKey.isEmpty())
-        assertEquals(localAvatarUrl, (decoded.displaySetting.userAvatar as Avatar.Image).url)
         listOf(
             "structured-api-secret",
             "url-user",
             "url-password",
+            "transcription",
+            "2026-08-01",
             "query-token",
             "query-api-key",
             "unknown-query-value",
             "fragment-token",
         ).forEach { secret -> assertFalse("URL credential remained in backup: $secret", encoded.contains(secret)) }
+    }
+
+    @Test
+    fun `portable backup preserves supported local URIs byte for byte`() {
+        val localUris = listOf(
+            "file:///storage/emulated/0/Rikka%20Hub/avatar.png?variant=original#preview",
+            "content://me.rerere.rikkahub.files/avatar/42?documentId=A%2FB#preview",
+            "data:image/svg+xml;charset=utf-8,%3Csvg%20id%3D%22avatar%22%2F%3E",
+            "android.resource://me.rerere.rikkahub/drawable/avatar?density=xxhdpi#preview",
+        )
+
+        localUris.forEach { localUri ->
+            val encoded = BackupSettingsSanitizer.encode(
+                settings = Settings(
+                    displaySetting = DisplaySetting(userAvatar = Avatar.Image(localUri)),
+                ),
+                json = json,
+            )
+            val decoded = json.decodeFromString(Settings.serializer(), encoded)
+
+            assertEquals(localUri, (decoded.displaySetting.userAvatar as Avatar.Image).url)
+        }
     }
 
     @Test
@@ -189,7 +208,7 @@ class BackupSettingsSanitizerTest {
         )
 
         val provider = restored.asrProviders.single() as ASRProviderSetting.OpenAIRealtime
-        assertEquals("wss://asr.example.com/realtime?intent=transcription", provider.websocketUrl)
+        assertEquals("wss://asr.example.com/realtime", provider.websocketUrl)
         assertTrue(provider.apiKey.isEmpty())
         val restoredJson = json.encodeToString(restored)
         listOf(
@@ -202,6 +221,37 @@ class BackupSettingsSanitizerTest {
             "remote-query-secret",
             "remote-structured-secret",
         ).forEach { secret -> assertFalse("URL credential survived restore: $secret", restoredJson.contains(secret)) }
+    }
+
+    @Test
+    fun `portable backup preserves nullable oauth endpoint semantics`() {
+        val encoded = BackupSettingsSanitizer.encode(
+            settings = oauthSettings(secretPrefix = "remote"),
+            json = json,
+        )
+
+        val decoded = json.decodeFromString(Settings.serializer(), encoded)
+        val oauth = decoded.mcpServers.single().commonOptions.oauth!!
+        assertNull(oauth.authorizationEndpoint)
+        assertNull(oauth.tokenEndpoint)
+        assertNull(oauth.registrationEndpoint)
+    }
+
+    @Test
+    fun `formal restore preserves nullable oauth endpoints and merges local tokens`() {
+        val restored = decodeRestoredSettingsPreservingLocalSecrets(
+            restoredSettingsJson = json.encodeToString(oauthSettings(secretPrefix = "remote")),
+            localSettings = oauthSettings(secretPrefix = "local"),
+            json = json,
+        )
+
+        val oauth = restored.mcpServers.single().commonOptions.oauth!!
+        assertNull(oauth.authorizationEndpoint)
+        assertNull(oauth.tokenEndpoint)
+        assertNull(oauth.registrationEndpoint)
+        assertEquals("local-client-secret", oauth.clientSecret)
+        assertEquals("local-access-token", oauth.accessToken)
+        assertEquals("local-refresh-token", oauth.refreshToken)
     }
 
     @Test
@@ -680,6 +730,28 @@ class BackupSettingsSanitizerTest {
             ),
         )
     }
+
+    private fun oauthSettings(secretPrefix: String): Settings = Settings(
+        mcpServers = listOf(
+            McpServerConfig.StreamableHTTPServer(
+                id = MCP_ID,
+                url = "https://mcp.example.com/api",
+                commonOptions = McpCommonOptions(
+                    oauth = McpOAuthState(
+                        enabled = true,
+                        clientId = "portable-client",
+                        clientSecret = "$secretPrefix-client-secret",
+                        authorizationEndpoint = null,
+                        tokenEndpoint = null,
+                        registrationEndpoint = null,
+                        scope = "read",
+                        accessToken = "$secretPrefix-access-token",
+                        refreshToken = "$secretPrefix-refresh-token",
+                    ),
+                ),
+            )
+        ),
+    )
 
     private fun googleSettings(
         vertexAI: Boolean,

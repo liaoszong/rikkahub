@@ -9,7 +9,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import me.rerere.rikkahub.data.datastore.Settings
 import java.net.URI
-import java.net.URLDecoder
 
 internal object BackupSettingsSanitizer {
     private val sensitiveKeys = setOf(
@@ -99,24 +98,6 @@ internal object BackupSettingsSanitizer {
         "serviceaccountemail",
         "username",
     )
-    private val safeEndpointQueryValueNames = setOf(
-        "alt",
-        "api-version",
-        "deployment",
-        "format",
-        "intent",
-        "lang",
-        "language",
-        "location",
-        "model",
-        "pretty-print",
-        "project",
-        "region",
-        "tenant",
-        "transport",
-        "v",
-        "version",
-    ).mapTo(mutableSetOf()) { it.normalizedSecretKey() }
     private val localUriSchemes = setOf("android.resource", "content", "data", "file")
 
     fun encode(settings: Settings, json: Json): String {
@@ -329,6 +310,9 @@ internal object BackupSettingsSanitizer {
             }
             ScopePart(key, value)
         }.toMutableList()
+        // Google is intentionally over-bound to the generic endpoint/literal parts above in
+        // addition to its effective auth target below. An unused setting change may therefore
+        // decline a safe restore, but future routing changes cannot silently widen credential reuse.
         googleCredentialScopeParts()?.let(scopeParts::addAll) ?: return null
         scopeParts.sortBy(ScopePart::key)
         return scopeParts.takeIf(List<ScopePart>::isNotEmpty)?.joinToString("|") { it.encoded() }
@@ -410,6 +394,7 @@ internal object BackupSettingsSanitizer {
     }
 
     private fun sanitizeEndpointElement(element: JsonElement): JsonElement {
+        if (element == JsonNull) return JsonNull
         val primitive = element as? JsonPrimitive ?: return JsonPrimitive("")
         if (!primitive.isString) return JsonPrimitive("")
         return JsonPrimitive(sanitizeEndpoint(primitive.content))
@@ -417,42 +402,26 @@ internal object BackupSettingsSanitizer {
 
     /**
      * Portable settings must not carry credentials embedded in endpoint strings. Network URL
-     * query values are deny-by-default: only routing parameters with an explicit safe contract
-     * survive. Local file/content/data URIs are not request endpoints and remain byte-for-byte
-     * compatible with existing avatar and attachment settings.
+     * user-info, query, and fragment components are never portable. Local URI schemes are not
+     * request endpoints and remain byte-for-byte compatible with existing settings.
      */
     private fun sanitizeEndpoint(value: String): String {
         val trimmed = value.trim()
         if (trimmed.isEmpty()) return trimmed
         val uri = runCatching { URI(trimmed) }.getOrNull() ?: return ""
         val scheme = uri.scheme?.lowercase()
-        if (scheme in localUriSchemes) return trimmed
+        if (scheme in localUriSchemes) return value
 
         val rawAuthority = uri.rawAuthority ?: return ""
         val authority = rawAuthority.substringAfterLast('@').takeIf(String::isNotBlank) ?: return ""
-        val safeQuery = uri.rawQuery
-            ?.split('&', ';')
-            ?.asSequence()
-            ?.filter(String::isNotBlank)
-            ?.filter { segment ->
-                segment.substringBefore('=').decodedQueryName().normalizedSecretKey() in
-                    safeEndpointQueryValueNames
-            }
-            ?.joinToString("&")
-            ?.takeIf(String::isNotBlank)
 
         return buildString {
             if (scheme != null) append(scheme).append(':')
             append("//").append(authority)
             append(uri.rawPath.orEmpty())
-            safeQuery?.let { append('?').append(it) }
-            // Fragments are never sent to an HTTP/WebSocket peer and may contain OAuth tokens.
+            // Query values and fragments can both carry credentials, so neither is portable.
         }
     }
-
-    private fun String.decodedQueryName(): String = runCatching {
-        URLDecoder.decode(this, Charsets.UTF_8.name())
-    }.getOrDefault("")
 
     private fun isDefaultPort(scheme: String, port: Int): Boolean = when (scheme) {
         "http", "ws" -> port == 80
