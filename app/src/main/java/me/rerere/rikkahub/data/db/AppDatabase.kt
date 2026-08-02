@@ -7,14 +7,20 @@ import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import me.rerere.ai.core.TokenUsage
 import me.rerere.rikkahub.data.db.dao.ConversationDAO
+import me.rerere.rikkahub.data.db.dao.ConversationGraphDAO
+import me.rerere.rikkahub.data.db.dao.ConversationMigrationDAO
 import me.rerere.rikkahub.data.db.dao.FavoriteDAO
 import me.rerere.rikkahub.data.db.dao.FolderDAO
 import me.rerere.rikkahub.data.db.dao.GenMediaDAO
 import me.rerere.rikkahub.data.db.dao.ManagedFileDAO
 import me.rerere.rikkahub.data.db.dao.MemoryDAO
 import me.rerere.rikkahub.data.db.dao.MessageNodeDAO
+import me.rerere.rikkahub.data.db.dao.MessageFtsOutboxDAO
 import me.rerere.rikkahub.data.db.dao.WorkspaceDAO
 import me.rerere.rikkahub.data.db.entity.ConversationEntity
+import me.rerere.rikkahub.data.db.entity.ConversationMessageEntity
+import me.rerere.rikkahub.data.db.entity.ConversationMigrationJournalEntity
+import me.rerere.rikkahub.data.db.entity.ConversationMigrationQuarantineEntity
 import me.rerere.rikkahub.data.db.entity.FavoriteEntity
 import me.rerere.rikkahub.data.db.entity.FolderEntity
 import me.rerere.rikkahub.data.db.entity.ManagedFileEntity
@@ -26,7 +32,10 @@ import me.rerere.rikkahub.data.db.entity.MediaRelationEntity
 import me.rerere.rikkahub.data.db.entity.MediaReplicaEntity
 import me.rerere.rikkahub.data.db.entity.MemoryEntity
 import me.rerere.rikkahub.data.db.entity.MessageMediaRefEntity
+import me.rerere.rikkahub.data.db.entity.MessageBranchGroupEntity
+import me.rerere.rikkahub.data.db.entity.MessageFtsOutboxEntity
 import me.rerere.rikkahub.data.db.entity.MessageNodeEntity
+import me.rerere.rikkahub.data.db.entity.MessagePartEntity
 import me.rerere.rikkahub.data.db.entity.WorkspaceEntity
 import me.rerere.rikkahub.data.db.migrations.Migration_16_17
 import me.rerere.rikkahub.data.db.migrations.Migration_22_23
@@ -36,6 +45,12 @@ import me.rerere.rikkahub.utils.JsonInstant
 @Database(
     entities = [
         ConversationEntity::class,
+        MessageBranchGroupEntity::class,
+        ConversationMessageEntity::class,
+        MessagePartEntity::class,
+        ConversationMigrationJournalEntity::class,
+        ConversationMigrationQuarantineEntity::class,
+        MessageFtsOutboxEntity::class,
         MemoryEntity::class,
         MediaAssetEntity::class,
         MessageNodeEntity::class,
@@ -50,7 +65,7 @@ import me.rerere.rikkahub.utils.JsonInstant
         WorkspaceEntity::class,
         FolderEntity::class,
     ],
-    version = 27,
+    version = 28,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
@@ -75,6 +90,12 @@ import me.rerere.rikkahub.utils.JsonInstant
 @TypeConverters(TokenUsageConverter::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun conversationDao(): ConversationDAO
+
+    abstract fun conversationGraphDao(): ConversationGraphDAO
+
+    abstract fun conversationMigrationDao(): ConversationMigrationDAO
+
+    abstract fun messageFtsOutboxDao(): MessageFtsOutboxDAO
 
     abstract fun memoryDao(): MemoryDAO
 

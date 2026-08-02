@@ -2,9 +2,15 @@ package me.rerere.rikkahub.data.db.entity
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity
+@Entity(
+    indices = [
+        Index(value = ["deleted_at", "is_pinned", "update_at"]),
+        Index(value = ["storage_version"]),
+    ],
+)
 data class ConversationEntity(
     @PrimaryKey
     val id: String,
@@ -32,4 +38,14 @@ data class ConversationEntity(
     val workspaceCwd: String = "",
     @ColumnInfo("folder_id", defaultValue = "")
     val folderId: String = "",
+    @ColumnInfo("revision", defaultValue = "0")
+    val revision: Long = 0,
+    @ColumnInfo("active_leaf_message_id")
+    val activeLeafMessageId: String? = null,
+    @ColumnInfo("storage_version", defaultValue = "1")
+    val storageVersion: Int = 1,
+    @ColumnInfo("deleted_at")
+    val deletedAt: Long? = null,
+    @ColumnInfo("last_writer_replica_id")
+    val lastWriterReplicaId: String? = null,
 )
