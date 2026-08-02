@@ -44,6 +44,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.Icon
@@ -55,6 +59,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -80,12 +85,12 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.util.fastCoerceAtLeast
 import androidx.compose.ui.zIndex
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeSource
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.R
@@ -103,11 +108,15 @@ import me.rerere.rikkahub.ui.hooks.ImeLazyListAutoScroller
 import me.rerere.rikkahub.ui.theme.ChatFontProvider
 import me.rerere.rikkahub.utils.plus
 import kotlin.math.roundToInt
+import kotlin.math.abs
 import kotlin.uuid.Uuid
 
 private const val TAG = "ChatList"
 private const val LoadingIndicatorKey = "LoadingIndicator"
 private const val ScrollBottomKey = "ScrollBottomKey"
+private const val FastScrollEnterDpPerSecond = 2_200f
+private const val FastScrollExitDpPerSecond = 1_300f
+private const val FastScrollHoldNanos = 140_000_000L
 
 @Composable
 fun ChatList(
@@ -210,10 +219,10 @@ private fun ChatListNormal(
 ) {
     val scope = rememberCoroutineScope()
     val loadingState by rememberUpdatedState(loading)
-    var isRecentScroll by remember { mutableStateOf(false) }
     val conversationUpdated by rememberUpdatedState(conversation)
     val density = LocalDensity.current
     val activity = LocalContext.current as? me.rerere.rikkahub.RouteActivity
+    val fastScrollDetector = rememberFastScrollDetector(state)
 
     DisposableEffect(Unit) {
         val listener: (Boolean) -> Boolean = { isVolumeUp ->
@@ -289,18 +298,6 @@ private fun ChatListNormal(
             }
         }
 
-        // 判断最近是否滚动
-        LaunchedEffect(state.isScrollInProgress) {
-            if (state.isScrollInProgress) {
-                isRecentScroll = true
-                delay(1500)
-                isRecentScroll = false
-            } else {
-                delay(1500)
-                isRecentScroll = false
-            }
-        }
-
         ChatFontProvider(displaySetting = settings.displaySetting) {
             LazyColumn(
                 state = state,
@@ -309,6 +306,7 @@ private fun ChatListNormal(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier
                     .fillMaxSize()
+                    .nestedScroll(fastScrollDetector.connection)
                     .hazeSource(state = hazeState)
                     .padding(top = innerPadding.calculateTopPadding()),
             ) {
@@ -510,7 +508,8 @@ private fun ChatListNormal(
 
             // 消息快速跳转
             MessageJumper(
-                show = isRecentScroll && !state.isScrollInProgress && settings.displaySetting.showMessageJumper && !captureProgress,
+                show = fastScrollDetector.visible,
+                enabled = settings.displaySetting.showMessageJumper && !captureProgress,
                 onLeft = settings.displaySetting.messageJumperOnLeft,
                 scope = scope,
                 state = state
@@ -747,13 +746,14 @@ private fun ChatSuggestionsRow(
 
 @Composable
 private fun BoxScope.MessageJumper(
-    show: Boolean,
+    show: State<Boolean>,
+    enabled: Boolean,
     onLeft: Boolean,
     scope: CoroutineScope,
     state: LazyListState
 ) {
     AnimatedVisibility(
-        visible = show,
+        visible = show.value && enabled,
         modifier = Modifier.align(if (onLeft) Alignment.CenterStart else Alignment.CenterEnd),
         enter = slideInHorizontally(
             initialOffsetX = { if (onLeft) -it * 2 else it * 2 },
@@ -845,5 +845,131 @@ private fun BoxScope.MessageJumper(
                 )
             }
         }
+    }
+}
+
+private data class FastScrollDetector(
+    val visible: State<Boolean>,
+    val connection: NestedScrollConnection,
+)
+
+@Composable
+private fun rememberFastScrollDetector(state: LazyListState): FastScrollDetector {
+    val density = LocalDensity.current.density
+    val visible = remember { mutableStateOf(false) }
+    val tracker = remember(density) {
+        FastScrollVelocityTracker(
+            enterThresholdPxPerSecond = FastScrollEnterDpPerSecond * density,
+            exitThresholdPxPerSecond = FastScrollExitDpPerSecond * density,
+            holdDurationNanos = FastScrollHoldNanos,
+        )
+    }
+    val connection = remember(tracker, visible) {
+        object : NestedScrollConnection {
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource,
+            ): Offset {
+                visible.updateIfChanged(
+                    tracker.onScroll(
+                        deltaPx = consumed.y,
+                        eventNanos = System.nanoTime(),
+                    ),
+                )
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                visible.updateIfChanged(
+                    tracker.onFling(
+                        velocityPxPerSecond = available.y,
+                        eventNanos = System.nanoTime(),
+                    ),
+                )
+                return Velocity.Zero
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                tracker.reset()
+                visible.updateIfChanged(false)
+                return Velocity.Zero
+            }
+        }
+    }
+
+    LaunchedEffect(state, tracker) {
+        snapshotFlow { state.isScrollInProgress }.collect { isScrolling ->
+            if (!isScrolling) {
+                tracker.reset()
+                visible.updateIfChanged(false)
+            }
+        }
+    }
+
+    return remember(visible, connection) {
+        FastScrollDetector(visible = visible, connection = connection)
+    }
+}
+
+private fun androidx.compose.runtime.MutableState<Boolean>.updateIfChanged(value: Boolean) {
+    if (this.value != value) this.value = value
+}
+
+internal class FastScrollVelocityTracker(
+    private val enterThresholdPxPerSecond: Float,
+    private val exitThresholdPxPerSecond: Float,
+    private val holdDurationNanos: Long,
+) {
+    init {
+        require(enterThresholdPxPerSecond > exitThresholdPxPerSecond)
+        require(exitThresholdPxPerSecond > 0f)
+        require(holdDurationNanos >= 0L)
+    }
+
+    private var lastSampleNanos: Long? = null
+    private var keepVisibleUntilNanos: Long = Long.MIN_VALUE
+    var isFast: Boolean = false
+        private set
+
+    fun onScroll(deltaPx: Float, eventNanos: Long): Boolean {
+        val previousSample = lastSampleNanos
+        lastSampleNanos = eventNanos
+        if (previousSample == null || eventNanos <= previousSample) return isFast
+
+        val elapsedNanos = (eventNanos - previousSample).coerceIn(
+            MinimumSampleNanos,
+            MaximumSampleNanos,
+        )
+        val velocity = abs(deltaPx) * NanosPerSecond / elapsedNanos
+        isFast = when {
+            velocity >= enterThresholdPxPerSecond -> true
+            isFast && velocity >= exitThresholdPxPerSecond -> true
+            isFast && eventNanos <= keepVisibleUntilNanos -> true
+            else -> false
+        }
+        if (isFast && velocity >= exitThresholdPxPerSecond) {
+            keepVisibleUntilNanos = eventNanos + holdDurationNanos
+        }
+        return isFast
+    }
+
+    fun onFling(velocityPxPerSecond: Float, eventNanos: Long): Boolean {
+        lastSampleNanos = eventNanos
+        isFast = abs(velocityPxPerSecond) >= enterThresholdPxPerSecond
+        keepVisibleUntilNanos = if (isFast) eventNanos + holdDurationNanos else Long.MIN_VALUE
+        return isFast
+    }
+
+    fun reset() {
+        lastSampleNanos = null
+        keepVisibleUntilNanos = Long.MIN_VALUE
+        isFast = false
+    }
+
+    private companion object {
+        const val NanosPerSecond = 1_000_000_000f
+        const val MinimumSampleNanos = 1_000_000L
+        const val MaximumSampleNanos = 80_000_000L
     }
 }
