@@ -238,7 +238,9 @@ internal fun decodeRestoredSettingsPreservingLocalSecrets(
     localSettings: Settings,
     json: Json,
 ): Settings {
-    val restored = json.parseToJsonElement(restoredSettingsJson)
+    // Legacy and hand-authored backups may predate portable-backup redaction. Treat every restored
+    // settings document as untrusted and apply the current policy before considering local secrets.
+    val restored = BackupSettingsSanitizer.sanitize(json.parseToJsonElement(restoredSettingsJson))
     val local = json.encodeToJsonElement(Settings.serializer(), localSettings)
     val merged = BackupSettingsSanitizer.mergeLocalSecrets(restored, local)
     return json.decodeFromJsonElement(Settings.serializer(), merged)
