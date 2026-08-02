@@ -19,7 +19,13 @@ import me.rerere.rikkahub.data.db.entity.FavoriteEntity
 import me.rerere.rikkahub.data.db.entity.FolderEntity
 import me.rerere.rikkahub.data.db.entity.ManagedFileEntity
 import me.rerere.rikkahub.data.db.entity.MediaAssetEntity
+import me.rerere.rikkahub.data.db.entity.MediaAssetBlobEntity
+import me.rerere.rikkahub.data.db.entity.MediaBlobEntity
+import me.rerere.rikkahub.data.db.entity.MediaMigrationJournalEntity
+import me.rerere.rikkahub.data.db.entity.MediaRelationEntity
+import me.rerere.rikkahub.data.db.entity.MediaReplicaEntity
 import me.rerere.rikkahub.data.db.entity.MemoryEntity
+import me.rerere.rikkahub.data.db.entity.MessageMediaRefEntity
 import me.rerere.rikkahub.data.db.entity.MessageNodeEntity
 import me.rerere.rikkahub.data.db.entity.WorkspaceEntity
 import me.rerere.rikkahub.data.db.migrations.Migration_16_17
@@ -34,11 +40,17 @@ import me.rerere.rikkahub.utils.JsonInstant
         MediaAssetEntity::class,
         MessageNodeEntity::class,
         ManagedFileEntity::class,
+        MediaBlobEntity::class,
+        MediaAssetBlobEntity::class,
+        MediaReplicaEntity::class,
+        MediaRelationEntity::class,
+        MessageMediaRefEntity::class,
+        MediaMigrationJournalEntity::class,
         FavoriteEntity::class,
         WorkspaceEntity::class,
         FolderEntity::class,
     ],
-    version = 26,
+    version = 27,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),

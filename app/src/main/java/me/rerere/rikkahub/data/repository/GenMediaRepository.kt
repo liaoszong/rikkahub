@@ -5,9 +5,18 @@ import androidx.paging.PagingSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.data.db.dao.GenMediaDAO
+import me.rerere.rikkahub.data.db.dao.MediaAssetGraphWrite
 import me.rerere.rikkahub.data.db.entity.GenMediaEntity
 import me.rerere.rikkahub.data.db.entity.ManagedFileEntity
+import me.rerere.rikkahub.data.db.entity.MediaAssetBlobEntity
 import me.rerere.rikkahub.data.db.entity.MediaAssetEntity
+import me.rerere.rikkahub.data.db.entity.MediaBlobEntity
+import me.rerere.rikkahub.data.db.entity.MediaMigrationJournalEntity
+import me.rerere.rikkahub.data.db.entity.MediaRelationEntity
+import me.rerere.rikkahub.data.db.entity.MediaReplicaEntity
+import me.rerere.rikkahub.data.db.entity.MediaV2Values
+import me.rerere.rikkahub.data.db.entity.MessageMediaRefEntity
+import me.rerere.pale.media.MediaStableIds
 import java.io.File
 import java.io.FileInputStream
 import java.security.MessageDigest
@@ -56,7 +65,8 @@ class GenMediaRepository(
         require(file.name == managedFile.relativePath.substringAfterLast('/')) {
             "Managed file identity does not match the inspected file"
         }
-        require(registration.assetId.isNotBlank()) { "Media asset id cannot be blank" }
+        MediaStableIds.requireValid(registration.assetId, "Media asset id")
+        MediaStableIds.requireValid(managedFile.fileId, "Managed file id")
         require(registration.modelId.isNotBlank()) { "Generated media model id cannot be blank" }
         require(registration.origin in MediaAssetOrigins.ALL) {
             "Unsupported media origin: ${registration.origin}"
@@ -75,36 +85,40 @@ class GenMediaRepository(
             sizeBytes = inspected.sizeBytes,
             updatedAt = now,
         )
-        filesRepository?.update(updatedManagedFile)
-
-        dao.insertOrGet(
-            MediaAssetEntity(
-                path = managedFile.relativePath,
-                modelId = registration.modelId,
-                modelDisplayName = registration.modelDisplayName,
-                providerId = registration.providerId,
-                prompt = registration.prompt,
-                createAt = registration.createdAt,
-                type = if (registration.origin == MediaAssetEntity.ORIGIN_AI_EDITED) {
-                    MediaAssetEntity.TYPE_IMAGE_EDIT
-                } else {
-                    MediaAssetEntity.TYPE_IMAGE_GENERATION
-                },
-                sourcePaths = registration.sourcePaths.takeIf { it.isNotEmpty() }?.joinToString("\n"),
-                assetId = registration.assetId,
-                managedFileId = managedFile.id,
-                origin = registration.origin,
-                mimeType = inspected.mimeType,
-                sizeBytes = inspected.sizeBytes,
-                width = inspected.width,
-                height = inspected.height,
-                sha256 = inspected.sha256,
-                storageState = storageState,
-                conversationId = registration.conversationId,
-                messageNodeId = registration.messageNodeId,
-                toolCallId = registration.toolCallId,
-                parentAssetId = registration.parentAssetId,
-                updatedAt = now,
+        val asset = MediaAssetEntity(
+            path = managedFile.relativePath,
+            modelId = registration.modelId,
+            modelDisplayName = registration.modelDisplayName,
+            providerId = registration.providerId,
+            prompt = registration.prompt,
+            createAt = registration.createdAt,
+            type = if (registration.origin == MediaAssetEntity.ORIGIN_AI_EDITED) {
+                MediaAssetEntity.TYPE_IMAGE_EDIT
+            } else {
+                MediaAssetEntity.TYPE_IMAGE_GENERATION
+            },
+            sourcePaths = registration.sourcePaths.takeIf { it.isNotEmpty() }?.joinToString("\n"),
+            assetId = registration.assetId,
+            displayName = updatedManagedFile.displayName,
+            managedFileId = updatedManagedFile.id,
+            origin = registration.origin,
+            mimeType = inspected.mimeType,
+            sizeBytes = inspected.sizeBytes,
+            width = inspected.width,
+            height = inspected.height,
+            sha256 = inspected.sha256,
+            storageState = storageState,
+            conversationId = registration.conversationId,
+            messageNodeId = registration.messageNodeId,
+            toolCallId = registration.toolCallId,
+            parentAssetId = registration.parentAssetId,
+            updatedAt = now,
+        )
+        dao.registerAssetGraph(
+            buildGraphWrite(
+                managedFile = updatedManagedFile,
+                asset = asset,
+                includeMigrationJournal = inspected.sha256 == null,
             ),
         )
     }
@@ -135,16 +149,22 @@ class GenMediaRepository(
                 val inspected = metadataProbe.inspect(file, asset.mimeType)
                 val now = System.currentTimeMillis()
                 val managedFile = ensureManagedFile(asset, file, inspected, now)
-                dao.update(
-                    asset.copy(
-                        managedFileId = managedFile?.id ?: asset.managedFileId,
-                        mimeType = inspected.mimeType,
-                        sizeBytes = inspected.sizeBytes,
-                        width = inspected.width,
-                        height = inspected.height,
-                        sha256 = inspected.sha256,
-                        storageState = inspected.storageState,
-                        updatedAt = now,
+                val reconciled = asset.copy(
+                    displayName = managedFile?.displayName ?: asset.displayName,
+                    managedFileId = managedFile?.id ?: asset.managedFileId,
+                    mimeType = inspected.mimeType,
+                    sizeBytes = inspected.sizeBytes,
+                    width = inspected.width,
+                    height = inspected.height,
+                    sha256 = inspected.sha256,
+                    storageState = inspected.storageState,
+                    updatedAt = now,
+                )
+                dao.reconcileAssetGraph(
+                    buildGraphWrite(
+                        managedFile = managedFile,
+                        asset = reconciled,
+                        includeMigrationJournal = true,
                     ),
                 )
                 if (inspected.storageState == MediaAssetEntity.STORAGE_MISSING) {
@@ -221,13 +241,11 @@ class GenMediaRepository(
         val existing = asset.managedFileId?.let { managedFileId -> repository.getById(managedFileId) }
             ?: repository.getByPath(asset.path)
         if (existing != null) {
-            val updated = existing.copy(
+            return existing.copy(
                 mimeType = metadata.mimeType,
                 sizeBytes = metadata.sizeBytes,
                 updatedAt = now,
             )
-            repository.update(updated)
-            return updated
         }
         if (!file.isFile) return null
         val folder = asset.path.substringBefore('/', missingDelimiterValue = "images")
@@ -243,6 +261,195 @@ class GenMediaRepository(
             ),
         )
     }
+
+    private suspend fun buildGraphWrite(
+        managedFile: ManagedFileEntity?,
+        asset: MediaAssetEntity,
+        includeMigrationJournal: Boolean,
+    ): MediaAssetGraphWrite {
+        val verifiedBlobId = MediaStableIds.blobIdForSha256(asset.sha256)
+        val verifiedSha256 = verifiedBlobId?.substringAfter("sha256:")
+        val blobId = verifiedBlobId ?: MediaStableIds.derived("media-blob", asset.assetId)
+        val blobState = asset.storageState.toBlobState()
+        val blob = MediaBlobEntity(
+            blobId = blobId,
+            sha256 = verifiedSha256,
+            mimeType = asset.mimeType,
+            sizeBytes = asset.sizeBytes,
+            width = asset.width,
+            height = asset.height,
+            storageState = blobState,
+            createdAt = asset.createAt,
+            verifiedAt = asset.updatedAt.takeIf {
+                verifiedSha256 != null && blobState == MediaV2Values.BLOB_AVAILABLE
+            },
+        )
+        val assetBlob = MediaAssetBlobEntity(
+            assetId = asset.assetId,
+            blobId = blobId,
+            role = MediaV2Values.BLOB_ROLE_ORIGINAL,
+            createdAt = asset.updatedAt,
+        )
+        val replica = managedFile?.let { file ->
+            MediaReplicaEntity(
+                replicaId = MediaStableIds.derived("media-replica", file.fileId),
+                blobId = blobId,
+                kind = MediaV2Values.REPLICA_LOCAL_MANAGED,
+                managedFileId = file.fileId,
+                state = blobState,
+                verifiedAt = asset.updatedAt.takeIf {
+                    verifiedSha256 != null && blobState == MediaV2Values.BLOB_AVAILABLE
+                },
+                createdAt = file.createdAt,
+                updatedAt = file.updatedAt,
+            )
+        }
+
+        val relations = mutableListOf<MediaRelationEntity>()
+        asset.parentAssetId
+            ?.takeIf { parentId -> parentId != asset.assetId && dao.getByAssetId(parentId) != null }
+            ?.let { parentId ->
+                relations += relation(
+                    asset = asset,
+                    relatedAssetId = parentId,
+                    kind = MediaV2Values.RELATION_EDIT_OF,
+                    ordinal = 0,
+                )
+            }
+        val sourcePaths = asset.sourcePaths
+            ?.lineSequence()
+            ?.map(String::trim)
+            ?.filter(String::isNotEmpty)
+            ?.distinct()
+            ?.toList()
+            .orEmpty()
+        var referenceOrdinal = 0
+        sourcePaths.forEach { sourcePath ->
+            val sourceAssetId = dao.getByPath(sourcePath)?.assetId
+            if (sourceAssetId != null && sourceAssetId != asset.assetId) {
+                relations += relation(
+                    asset = asset,
+                    relatedAssetId = sourceAssetId,
+                    kind = MediaV2Values.RELATION_REFERENCE_INPUT,
+                    ordinal = referenceOrdinal++,
+                )
+            }
+        }
+        val reference = asset.toLegacyMessageReference()
+        val journals = if (includeMigrationJournal) {
+            buildList {
+                add(
+                    migrationJournal(
+                        scopeKind = "asset",
+                        scopeKey = asset.assetId,
+                        stage = MediaV2Values.STAGE_BLOB_BACKFILL,
+                        state = if (verifiedSha256 == null) {
+                            MediaV2Values.JOURNAL_PENDING
+                        } else {
+                            MediaV2Values.JOURNAL_COMPLETE
+                        },
+                        detail = if (verifiedSha256 == null) "sha256_verification_required" else null,
+                        updatedAt = asset.updatedAt,
+                    ),
+                )
+                add(
+                    migrationJournal(
+                        scopeKind = "asset",
+                        scopeKey = asset.assetId,
+                        stage = MediaV2Values.STAGE_REFERENCE_BACKFILL,
+                        state = if (reference == null) {
+                            MediaV2Values.JOURNAL_PENDING
+                        } else {
+                            MediaV2Values.JOURNAL_COMPLETE
+                        },
+                        detail = if (reference == null) "message_scan_required" else null,
+                        updatedAt = asset.updatedAt,
+                    ),
+                )
+                managedFile?.let { file ->
+                    add(
+                        migrationJournal(
+                            scopeKind = "file",
+                            scopeKey = file.fileId,
+                            stage = MediaV2Values.STAGE_FILE_RELOCATION,
+                            state = MediaV2Values.JOURNAL_PENDING,
+                            detail = "lazy_verification_and_relocation_required",
+                            updatedAt = asset.updatedAt,
+                        ),
+                    )
+                }
+            }
+        } else {
+            emptyList()
+        }
+        return MediaAssetGraphWrite(
+            managedFile = managedFile,
+            asset = asset,
+            blob = blob,
+            assetBlob = assetBlob,
+            replica = replica,
+            relations = relations,
+            reference = reference,
+            journals = journals,
+        )
+    }
+
+    private fun relation(
+        asset: MediaAssetEntity,
+        relatedAssetId: String,
+        kind: String,
+        ordinal: Int,
+    ) = MediaRelationEntity(
+        relationId = MediaStableIds.derived(
+            "media-relation",
+            asset.assetId,
+            relatedAssetId,
+            kind,
+            ordinal.toString(),
+        ),
+        assetId = asset.assetId,
+        relatedAssetId = relatedAssetId,
+        relationKind = kind,
+        ordinal = ordinal,
+        createdAt = asset.updatedAt,
+    )
+
+    private fun MediaAssetEntity.toLegacyMessageReference(): MessageMediaRefEntity? {
+        if (conversationId == null && messageNodeId == null && toolCallId == null) return null
+        return MessageMediaRefEntity(
+            refId = MediaStableIds.derived("media-ref", assetId, "legacy-context"),
+            ownerKey = buildString {
+                append("legacy-v1|")
+                append(conversationId.orEmpty())
+                append('|')
+                append(messageNodeId.orEmpty())
+                append('|')
+                append(toolCallId.orEmpty())
+            },
+            assetId = assetId,
+            conversationId = conversationId,
+            messageNodeId = messageNodeId,
+            toolCallId = toolCallId,
+            createdAt = updatedAt,
+        )
+    }
+
+    private fun migrationJournal(
+        scopeKind: String,
+        scopeKey: String,
+        stage: String,
+        state: String,
+        detail: String?,
+        updatedAt: Long,
+    ) = MediaMigrationJournalEntity(
+        journalId = MediaStableIds.derived("media-journal", scopeKind, scopeKey, stage),
+        scopeKind = scopeKind,
+        scopeKey = scopeKey,
+        stage = stage,
+        state = state,
+        detail = detail,
+        updatedAt = updatedAt,
+    )
 }
 
 data class GeneratedMediaAssetRegistration(
@@ -349,6 +556,13 @@ private fun inferImageMimeType(fileName: String): String = when (fileName.substr
     "webp" -> "image/webp"
     "gif" -> "image/gif"
     else -> "application/octet-stream"
+}
+
+private fun String.toBlobState(): String = when (this) {
+    MediaAssetEntity.STORAGE_AVAILABLE -> MediaV2Values.BLOB_AVAILABLE
+    MediaAssetEntity.STORAGE_MISSING -> MediaV2Values.BLOB_MISSING
+    MediaAssetEntity.STORAGE_CORRUPT -> MediaV2Values.BLOB_CORRUPT
+    else -> MediaV2Values.BLOB_STAGING
 }
 
 private fun ManagedFileEntity.recoverableAssetId(): String {

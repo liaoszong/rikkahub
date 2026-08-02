@@ -1,0 +1,1461 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 27,
+    "identityHash": "a602ab2bd29dde073469cb4c30ee7779",
+    "entities": [
+      {
+        "tableName": "ConversationEntity",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `assistant_id` TEXT NOT NULL DEFAULT '0950e2dc-9bd5-4801-afa3-aa887aa36b4e', `title` TEXT NOT NULL, `nodes` TEXT NOT NULL, `create_at` INTEGER NOT NULL, `update_at` INTEGER NOT NULL, `suggestions` TEXT NOT NULL DEFAULT '[]', `is_pinned` INTEGER NOT NULL DEFAULT 0, `custom_system_prompt` TEXT NOT NULL DEFAULT '', `mode_injection_ids` TEXT NOT NULL DEFAULT '[]', `lorebook_ids` TEXT NOT NULL DEFAULT '[]', `workspace_cwd` TEXT NOT NULL DEFAULT '', `folder_id` TEXT NOT NULL DEFAULT '', PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "assistantId",
+            "columnName": "assistant_id",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'0950e2dc-9bd5-4801-afa3-aa887aa36b4e'"
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "nodes",
+            "columnName": "nodes",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createAt",
+            "columnName": "create_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updateAt",
+            "columnName": "update_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "chatSuggestions",
+            "columnName": "suggestions",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'[]'"
+          },
+          {
+            "fieldPath": "isPinned",
+            "columnName": "is_pinned",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "customSystemPrompt",
+            "columnName": "custom_system_prompt",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "modeInjectionIds",
+            "columnName": "mode_injection_ids",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'[]'"
+          },
+          {
+            "fieldPath": "lorebookIds",
+            "columnName": "lorebook_ids",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'[]'"
+          },
+          {
+            "fieldPath": "workspaceCwd",
+            "columnName": "workspace_cwd",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "folderId",
+            "columnName": "folder_id",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "MemoryEntity",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `assistant_id` TEXT NOT NULL, `content` TEXT NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "assistantId",
+            "columnName": "assistant_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "content",
+            "columnName": "content",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "GenMediaEntity",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `path` TEXT NOT NULL, `model_id` TEXT NOT NULL, `model_display_name` TEXT, `provider_id` TEXT, `prompt` TEXT NOT NULL, `create_at` INTEGER NOT NULL, `type` TEXT NOT NULL DEFAULT 'image_generation', `source_paths` TEXT, `asset_id` TEXT NOT NULL, `media_kind` TEXT NOT NULL DEFAULT 'image', `display_name` TEXT NOT NULL DEFAULT '', `lifecycle` TEXT NOT NULL DEFAULT 'active', `privacy_scope` TEXT NOT NULL DEFAULT 'private', `retention_policy` TEXT NOT NULL DEFAULT 'library', `deleted_at` INTEGER, `managed_file_id` INTEGER, `origin` TEXT NOT NULL, `mime_type` TEXT NOT NULL, `size_bytes` INTEGER NOT NULL, `width` INTEGER, `height` INTEGER, `sha256` TEXT, `storage_state` TEXT NOT NULL, `visibility` TEXT NOT NULL, `conversation_id` TEXT, `message_node_id` TEXT, `tool_call_id` TEXT, `parent_asset_id` TEXT, `updated_at` INTEGER NOT NULL, `hidden_at` INTEGER, `metadata_version` INTEGER NOT NULL, FOREIGN KEY(`managed_file_id`) REFERENCES `managed_files`(`id`) ON UPDATE CASCADE ON DELETE SET NULL , FOREIGN KEY(`parent_asset_id`) REFERENCES `GenMediaEntity`(`asset_id`) ON UPDATE CASCADE ON DELETE SET NULL )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "path",
+            "columnName": "path",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "modelId",
+            "columnName": "model_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "modelDisplayName",
+            "columnName": "model_display_name",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "providerId",
+            "columnName": "provider_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "prompt",
+            "columnName": "prompt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createAt",
+            "columnName": "create_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'image_generation'"
+          },
+          {
+            "fieldPath": "sourcePaths",
+            "columnName": "source_paths",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "assetId",
+            "columnName": "asset_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mediaKind",
+            "columnName": "media_kind",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'image'"
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "display_name",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "lifecycle",
+            "columnName": "lifecycle",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'active'"
+          },
+          {
+            "fieldPath": "privacyScope",
+            "columnName": "privacy_scope",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'private'"
+          },
+          {
+            "fieldPath": "retentionPolicy",
+            "columnName": "retention_policy",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'library'"
+          },
+          {
+            "fieldPath": "deletedAt",
+            "columnName": "deleted_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "managedFileId",
+            "columnName": "managed_file_id",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "origin",
+            "columnName": "origin",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mimeType",
+            "columnName": "mime_type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sizeBytes",
+            "columnName": "size_bytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "width",
+            "columnName": "width",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "height",
+            "columnName": "height",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "sha256",
+            "columnName": "sha256",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "storageState",
+            "columnName": "storage_state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "visibility",
+            "columnName": "visibility",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "messageNodeId",
+            "columnName": "message_node_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "toolCallId",
+            "columnName": "tool_call_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "parentAssetId",
+            "columnName": "parent_asset_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hiddenAt",
+            "columnName": "hidden_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "metadataVersion",
+            "columnName": "metadata_version",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_GenMediaEntity_path",
+            "unique": true,
+            "columnNames": [
+              "path"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_GenMediaEntity_path` ON `${TABLE_NAME}` (`path`)"
+          },
+          {
+            "name": "index_GenMediaEntity_asset_id",
+            "unique": true,
+            "columnNames": [
+              "asset_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_GenMediaEntity_asset_id` ON `${TABLE_NAME}` (`asset_id`)"
+          },
+          {
+            "name": "index_GenMediaEntity_managed_file_id",
+            "unique": true,
+            "columnNames": [
+              "managed_file_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_GenMediaEntity_managed_file_id` ON `${TABLE_NAME}` (`managed_file_id`)"
+          },
+          {
+            "name": "index_GenMediaEntity_parent_asset_id",
+            "unique": false,
+            "columnNames": [
+              "parent_asset_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_GenMediaEntity_parent_asset_id` ON `${TABLE_NAME}` (`parent_asset_id`)"
+          },
+          {
+            "name": "index_GenMediaEntity_conversation_id",
+            "unique": false,
+            "columnNames": [
+              "conversation_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_GenMediaEntity_conversation_id` ON `${TABLE_NAME}` (`conversation_id`)"
+          },
+          {
+            "name": "index_GenMediaEntity_tool_call_id",
+            "unique": false,
+            "columnNames": [
+              "tool_call_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_GenMediaEntity_tool_call_id` ON `${TABLE_NAME}` (`tool_call_id`)"
+          },
+          {
+            "name": "index_GenMediaEntity_visibility_create_at",
+            "unique": false,
+            "columnNames": [
+              "visibility",
+              "create_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_GenMediaEntity_visibility_create_at` ON `${TABLE_NAME}` (`visibility`, `create_at`)"
+          },
+          {
+            "name": "index_GenMediaEntity_storage_state",
+            "unique": false,
+            "columnNames": [
+              "storage_state"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_GenMediaEntity_storage_state` ON `${TABLE_NAME}` (`storage_state`)"
+          },
+          {
+            "name": "index_GenMediaEntity_media_kind_lifecycle_create_at",
+            "unique": false,
+            "columnNames": [
+              "media_kind",
+              "lifecycle",
+              "create_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_GenMediaEntity_media_kind_lifecycle_create_at` ON `${TABLE_NAME}` (`media_kind`, `lifecycle`, `create_at`)"
+          },
+          {
+            "name": "index_GenMediaEntity_retention_policy_lifecycle",
+            "unique": false,
+            "columnNames": [
+              "retention_policy",
+              "lifecycle"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_GenMediaEntity_retention_policy_lifecycle` ON `${TABLE_NAME}` (`retention_policy`, `lifecycle`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "managed_files",
+            "onDelete": "SET NULL",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "managed_file_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "GenMediaEntity",
+            "onDelete": "SET NULL",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "parent_asset_id"
+            ],
+            "referencedColumns": [
+              "asset_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "message_node",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `node_index` INTEGER NOT NULL, `messages` TEXT NOT NULL, `select_index` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`conversation_id`) REFERENCES `ConversationEntity`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "nodeIndex",
+            "columnName": "node_index",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "messages",
+            "columnName": "messages",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "selectIndex",
+            "columnName": "select_index",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_message_node_conversation_id",
+            "unique": false,
+            "columnNames": [
+              "conversation_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_message_node_conversation_id` ON `${TABLE_NAME}` (`conversation_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "ConversationEntity",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "conversation_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "managed_files",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `file_id` TEXT NOT NULL DEFAULT '', `folder` TEXT NOT NULL, `relative_path` TEXT NOT NULL, `display_name` TEXT NOT NULL, `mime_type` TEXT NOT NULL, `size_bytes` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fileId",
+            "columnName": "file_id",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "folder",
+            "columnName": "folder",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "relativePath",
+            "columnName": "relative_path",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "display_name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mimeType",
+            "columnName": "mime_type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sizeBytes",
+            "columnName": "size_bytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_managed_files_file_id",
+            "unique": true,
+            "columnNames": [
+              "file_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_managed_files_file_id` ON `${TABLE_NAME}` (`file_id`)"
+          },
+          {
+            "name": "index_managed_files_relative_path",
+            "unique": true,
+            "columnNames": [
+              "relative_path"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_managed_files_relative_path` ON `${TABLE_NAME}` (`relative_path`)"
+          },
+          {
+            "name": "index_managed_files_folder",
+            "unique": false,
+            "columnNames": [
+              "folder"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_managed_files_folder` ON `${TABLE_NAME}` (`folder`)"
+          }
+        ]
+      },
+      {
+        "tableName": "media_blob",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`blob_id` TEXT NOT NULL, `sha256` TEXT, `mime_type` TEXT NOT NULL, `size_bytes` INTEGER NOT NULL, `width` INTEGER, `height` INTEGER, `duration_ms` INTEGER, `storage_state` TEXT NOT NULL, `created_at` INTEGER NOT NULL, `verified_at` INTEGER, PRIMARY KEY(`blob_id`))",
+        "fields": [
+          {
+            "fieldPath": "blobId",
+            "columnName": "blob_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sha256",
+            "columnName": "sha256",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "mimeType",
+            "columnName": "mime_type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sizeBytes",
+            "columnName": "size_bytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "width",
+            "columnName": "width",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "height",
+            "columnName": "height",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "durationMs",
+            "columnName": "duration_ms",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "storageState",
+            "columnName": "storage_state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "verifiedAt",
+            "columnName": "verified_at",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "blob_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_media_blob_sha256",
+            "unique": true,
+            "columnNames": [
+              "sha256"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_media_blob_sha256` ON `${TABLE_NAME}` (`sha256`)"
+          },
+          {
+            "name": "index_media_blob_storage_state",
+            "unique": false,
+            "columnNames": [
+              "storage_state"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_media_blob_storage_state` ON `${TABLE_NAME}` (`storage_state`)"
+          }
+        ]
+      },
+      {
+        "tableName": "media_asset_blob",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`asset_id` TEXT NOT NULL, `blob_id` TEXT NOT NULL, `role` TEXT NOT NULL, `created_at` INTEGER NOT NULL, PRIMARY KEY(`asset_id`, `blob_id`, `role`), FOREIGN KEY(`asset_id`) REFERENCES `GenMediaEntity`(`asset_id`) ON UPDATE CASCADE ON DELETE CASCADE , FOREIGN KEY(`blob_id`) REFERENCES `media_blob`(`blob_id`) ON UPDATE CASCADE ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "assetId",
+            "columnName": "asset_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "blobId",
+            "columnName": "blob_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "role",
+            "columnName": "role",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "asset_id",
+            "blob_id",
+            "role"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_media_asset_blob_blob_id",
+            "unique": false,
+            "columnNames": [
+              "blob_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_media_asset_blob_blob_id` ON `${TABLE_NAME}` (`blob_id`)"
+          },
+          {
+            "name": "index_media_asset_blob_asset_id_role",
+            "unique": true,
+            "columnNames": [
+              "asset_id",
+              "role"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_media_asset_blob_asset_id_role` ON `${TABLE_NAME}` (`asset_id`, `role`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "GenMediaEntity",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "asset_id"
+            ],
+            "referencedColumns": [
+              "asset_id"
+            ]
+          },
+          {
+            "table": "media_blob",
+            "onDelete": "NO ACTION",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "blob_id"
+            ],
+            "referencedColumns": [
+              "blob_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "media_replica",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`replica_id` TEXT NOT NULL, `blob_id` TEXT NOT NULL, `kind` TEXT NOT NULL, `managed_file_id` TEXT, `remote_locator` TEXT, `etag` TEXT, `state` TEXT NOT NULL, `encrypted` INTEGER NOT NULL, `verified_at` INTEGER, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`replica_id`), FOREIGN KEY(`blob_id`) REFERENCES `media_blob`(`blob_id`) ON UPDATE CASCADE ON DELETE NO ACTION , FOREIGN KEY(`managed_file_id`) REFERENCES `managed_files`(`file_id`) ON UPDATE CASCADE ON DELETE SET NULL )",
+        "fields": [
+          {
+            "fieldPath": "replicaId",
+            "columnName": "replica_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "blobId",
+            "columnName": "blob_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "managedFileId",
+            "columnName": "managed_file_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "remoteLocator",
+            "columnName": "remote_locator",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "etag",
+            "columnName": "etag",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "encrypted",
+            "columnName": "encrypted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "verifiedAt",
+            "columnName": "verified_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "replica_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_media_replica_blob_id",
+            "unique": false,
+            "columnNames": [
+              "blob_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_media_replica_blob_id` ON `${TABLE_NAME}` (`blob_id`)"
+          },
+          {
+            "name": "index_media_replica_managed_file_id",
+            "unique": true,
+            "columnNames": [
+              "managed_file_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_media_replica_managed_file_id` ON `${TABLE_NAME}` (`managed_file_id`)"
+          },
+          {
+            "name": "index_media_replica_remote_locator",
+            "unique": true,
+            "columnNames": [
+              "remote_locator"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_media_replica_remote_locator` ON `${TABLE_NAME}` (`remote_locator`)"
+          },
+          {
+            "name": "index_media_replica_kind_state",
+            "unique": false,
+            "columnNames": [
+              "kind",
+              "state"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_media_replica_kind_state` ON `${TABLE_NAME}` (`kind`, `state`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "media_blob",
+            "onDelete": "NO ACTION",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "blob_id"
+            ],
+            "referencedColumns": [
+              "blob_id"
+            ]
+          },
+          {
+            "table": "managed_files",
+            "onDelete": "SET NULL",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "managed_file_id"
+            ],
+            "referencedColumns": [
+              "file_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "media_relation",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`relation_id` TEXT NOT NULL, `asset_id` TEXT NOT NULL, `related_asset_id` TEXT NOT NULL, `relation_kind` TEXT NOT NULL, `ordinal` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, PRIMARY KEY(`relation_id`), FOREIGN KEY(`asset_id`) REFERENCES `GenMediaEntity`(`asset_id`) ON UPDATE CASCADE ON DELETE CASCADE , FOREIGN KEY(`related_asset_id`) REFERENCES `GenMediaEntity`(`asset_id`) ON UPDATE CASCADE ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "relationId",
+            "columnName": "relation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "assetId",
+            "columnName": "asset_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "relatedAssetId",
+            "columnName": "related_asset_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "relationKind",
+            "columnName": "relation_kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ordinal",
+            "columnName": "ordinal",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "relation_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_media_relation_asset_id_relation_kind_ordinal",
+            "unique": true,
+            "columnNames": [
+              "asset_id",
+              "relation_kind",
+              "ordinal"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_media_relation_asset_id_relation_kind_ordinal` ON `${TABLE_NAME}` (`asset_id`, `relation_kind`, `ordinal`)"
+          },
+          {
+            "name": "index_media_relation_asset_id_related_asset_id_relation_kind",
+            "unique": true,
+            "columnNames": [
+              "asset_id",
+              "related_asset_id",
+              "relation_kind"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_media_relation_asset_id_related_asset_id_relation_kind` ON `${TABLE_NAME}` (`asset_id`, `related_asset_id`, `relation_kind`)"
+          },
+          {
+            "name": "index_media_relation_related_asset_id",
+            "unique": false,
+            "columnNames": [
+              "related_asset_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_media_relation_related_asset_id` ON `${TABLE_NAME}` (`related_asset_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "GenMediaEntity",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "asset_id"
+            ],
+            "referencedColumns": [
+              "asset_id"
+            ]
+          },
+          {
+            "table": "GenMediaEntity",
+            "onDelete": "NO ACTION",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "related_asset_id"
+            ],
+            "referencedColumns": [
+              "asset_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "message_media_ref",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`ref_id` TEXT NOT NULL, `owner_key` TEXT NOT NULL, `asset_id` TEXT NOT NULL, `conversation_id` TEXT, `message_node_id` TEXT, `message_id` TEXT, `part_id` TEXT, `tool_call_id` TEXT, `created_at` INTEGER NOT NULL, PRIMARY KEY(`ref_id`), FOREIGN KEY(`asset_id`) REFERENCES `GenMediaEntity`(`asset_id`) ON UPDATE CASCADE ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "refId",
+            "columnName": "ref_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ownerKey",
+            "columnName": "owner_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "assetId",
+            "columnName": "asset_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "messageNodeId",
+            "columnName": "message_node_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "messageId",
+            "columnName": "message_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "partId",
+            "columnName": "part_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "toolCallId",
+            "columnName": "tool_call_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "ref_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_message_media_ref_owner_key_asset_id",
+            "unique": true,
+            "columnNames": [
+              "owner_key",
+              "asset_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_message_media_ref_owner_key_asset_id` ON `${TABLE_NAME}` (`owner_key`, `asset_id`)"
+          },
+          {
+            "name": "index_message_media_ref_asset_id",
+            "unique": false,
+            "columnNames": [
+              "asset_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_message_media_ref_asset_id` ON `${TABLE_NAME}` (`asset_id`)"
+          },
+          {
+            "name": "index_message_media_ref_conversation_id",
+            "unique": false,
+            "columnNames": [
+              "conversation_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_message_media_ref_conversation_id` ON `${TABLE_NAME}` (`conversation_id`)"
+          },
+          {
+            "name": "index_message_media_ref_message_node_id",
+            "unique": false,
+            "columnNames": [
+              "message_node_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_message_media_ref_message_node_id` ON `${TABLE_NAME}` (`message_node_id`)"
+          },
+          {
+            "name": "index_message_media_ref_message_id",
+            "unique": false,
+            "columnNames": [
+              "message_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_message_media_ref_message_id` ON `${TABLE_NAME}` (`message_id`)"
+          },
+          {
+            "name": "index_message_media_ref_tool_call_id",
+            "unique": false,
+            "columnNames": [
+              "tool_call_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_message_media_ref_tool_call_id` ON `${TABLE_NAME}` (`tool_call_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "GenMediaEntity",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "asset_id"
+            ],
+            "referencedColumns": [
+              "asset_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "media_migration_journal",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`journal_id` TEXT NOT NULL, `scope_kind` TEXT NOT NULL, `scope_key` TEXT NOT NULL, `stage` TEXT NOT NULL, `state` TEXT NOT NULL, `detail` TEXT, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`journal_id`))",
+        "fields": [
+          {
+            "fieldPath": "journalId",
+            "columnName": "journal_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scopeKind",
+            "columnName": "scope_kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scopeKey",
+            "columnName": "scope_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stage",
+            "columnName": "stage",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "detail",
+            "columnName": "detail",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "journal_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_media_migration_journal_scope_kind_scope_key_stage",
+            "unique": true,
+            "columnNames": [
+              "scope_kind",
+              "scope_key",
+              "stage"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_media_migration_journal_scope_kind_scope_key_stage` ON `${TABLE_NAME}` (`scope_kind`, `scope_key`, `stage`)"
+          },
+          {
+            "name": "index_media_migration_journal_state_updated_at",
+            "unique": false,
+            "columnNames": [
+              "state",
+              "updated_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_media_migration_journal_state_updated_at` ON `${TABLE_NAME}` (`state`, `updated_at`)"
+          }
+        ]
+      },
+      {
+        "tableName": "favorites",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `type` TEXT NOT NULL, `ref_key` TEXT NOT NULL, `ref_json` TEXT NOT NULL, `snapshot_json` TEXT NOT NULL, `meta_json` TEXT, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "refKey",
+            "columnName": "ref_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "refJson",
+            "columnName": "ref_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "snapshotJson",
+            "columnName": "snapshot_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "metaJson",
+            "columnName": "meta_json",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_favorites_ref_key",
+            "unique": true,
+            "columnNames": [
+              "ref_key"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_favorites_ref_key` ON `${TABLE_NAME}` (`ref_key`)"
+          },
+          {
+            "name": "index_favorites_type",
+            "unique": false,
+            "columnNames": [
+              "type"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_favorites_type` ON `${TABLE_NAME}` (`type`)"
+          },
+          {
+            "name": "index_favorites_created_at",
+            "unique": false,
+            "columnNames": [
+              "created_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_favorites_created_at` ON `${TABLE_NAME}` (`created_at`)"
+          }
+        ]
+      },
+      {
+        "tableName": "workspaces",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `root` TEXT NOT NULL, `shell_status` TEXT NOT NULL, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `last_access_at` INTEGER, `tool_approvals` TEXT NOT NULL DEFAULT '{}', PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "root",
+            "columnName": "root",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "shellStatus",
+            "columnName": "shell_status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastAccessAt",
+            "columnName": "last_access_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "toolApprovals",
+            "columnName": "tool_approvals",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'{}'"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_workspaces_root",
+            "unique": true,
+            "columnNames": [
+              "root"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_workspaces_root` ON `${TABLE_NAME}` (`root`)"
+          },
+          {
+            "name": "index_workspaces_updated_at",
+            "unique": false,
+            "columnNames": [
+              "updated_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_workspaces_updated_at` ON `${TABLE_NAME}` (`updated_at`)"
+          }
+        ]
+      },
+      {
+        "tableName": "conversation_folder",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `assistant_id` TEXT NOT NULL, `name` TEXT NOT NULL, `sort_index` INTEGER NOT NULL DEFAULT 0, `create_at` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "assistantId",
+            "columnName": "assistant_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sortIndex",
+            "columnName": "sort_index",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "createAt",
+            "columnName": "create_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_conversation_folder_assistant_id",
+            "unique": false,
+            "columnNames": [
+              "assistant_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_conversation_folder_assistant_id` ON `${TABLE_NAME}` (`assistant_id`)"
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'a602ab2bd29dde073469cb4c30ee7779')"
+    ]
+  }
+}

@@ -9,6 +9,7 @@ import me.rerere.rikkahub.data.db.entity.ManagedFileEntity
 import me.rerere.rikkahub.data.db.entity.MediaAssetEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -48,7 +49,7 @@ class MediaAssetRepositoryTest {
                         sizeBytes = 3,
                         width = 1,
                         height = 1,
-                        sha256 = "digest",
+                        sha256 = SHA_A,
                         storageState = MediaAssetEntity.STORAGE_AVAILABLE,
                     )
                 },
@@ -105,7 +106,7 @@ class MediaAssetRepositoryTest {
                         sizeBytes = 3,
                         width = 64,
                         height = 32,
-                        sha256 = "digest",
+                        sha256 = SHA_A,
                         storageState = MediaAssetEntity.STORAGE_AVAILABLE,
                     )
                 },
@@ -132,8 +133,16 @@ class MediaAssetRepositoryTest {
             assertEquals("tool-call-id", first.toolCallId)
             assertEquals(64, first.width)
             assertEquals(32, first.height)
-            assertEquals("digest", first.sha256)
+            assertEquals(SHA_A, first.sha256)
             assertEquals(1, database.genMediaDao().getAllMediaIncludingHidden().size)
+            assertEquals(1, database.genMediaDao().countBlobs())
+            assertEquals(1, database.genMediaDao().countAssetBlobs())
+            assertEquals(1, database.genMediaDao().countReplicas())
+            assertEquals(1, database.genMediaDao().countMessageRefs())
+            assertEquals(
+                managed.fileId,
+                database.genMediaDao().getReplicaByManagedFileId(managed.fileId)?.managedFileId,
+            )
         } finally {
             directory.deleteRecursively()
             database.close()
@@ -181,7 +190,7 @@ class MediaAssetRepositoryTest {
                         sizeBytes = 400,
                         width = 20,
                         height = 10,
-                        sha256 = "legacy-digest",
+                        sha256 = SHA_B,
                         storageState = MediaAssetEntity.STORAGE_AVAILABLE,
                     )
                 },
@@ -200,13 +209,143 @@ class MediaAssetRepositoryTest {
             val repaired = database.genMediaDao().getByAssetId("legacy-asset")
             assertNotNull(repaired)
             assertEquals(managed.id, repaired?.managedFileId)
-            assertEquals(400, repaired?.sizeBytes)
-            assertEquals("legacy-digest", repaired?.sha256)
+            assertEquals(400L, repaired?.sizeBytes)
+            assertEquals(SHA_B, repaired?.sha256)
             assertEquals(managed.id, files.getByPath(managed.relativePath)?.id)
-            assertEquals(400, files.getByPath(managed.relativePath)?.sizeBytes)
+            assertEquals(400L, files.getByPath(managed.relativePath)?.sizeBytes)
         } finally {
             file.delete()
             database.close()
         }
+    }
+
+    @Test
+    fun sharedDigestUsesOneBlobWhileKeepingDistinctReplicasReferencesAndLineage() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(
+            ApplicationProvider.getApplicationContext(),
+            AppDatabase::class.java,
+        ).build()
+        val directory = ApplicationProvider.getApplicationContext<android.content.Context>()
+            .cacheDir.resolve("media-shared-blob-${System.nanoTime()}").apply { mkdirs() }
+        val firstFile = directory.resolve("first.png").apply { writeBytes(byteArrayOf(1)) }
+        val secondFile = directory.resolve("second.png").apply { writeBytes(byteArrayOf(1)) }
+        try {
+            val files = FilesRepository(database.managedFileDao())
+            val firstManaged = files.insert(managed("chat_generated_images/first.png", "first.png"))
+            val secondManaged = files.insert(managed("chat_generated_images/second.png", "second.png"))
+            val repository = GenMediaRepository(
+                dao = database.genMediaDao(),
+                filesRepository = files,
+                metadataProbe = MediaAssetMetadataProbe { _, _ ->
+                    MediaAssetFileMetadata(
+                        mimeType = "image/png",
+                        sizeBytes = 1,
+                        width = 1,
+                        height = 1,
+                        sha256 = SHA_A,
+                        storageState = MediaAssetEntity.STORAGE_AVAILABLE,
+                    )
+                },
+            )
+            repository.registerGeneratedAsset(
+                firstManaged,
+                firstFile,
+                registration("asset-first"),
+            )
+            repository.registerGeneratedAsset(
+                secondManaged,
+                secondFile,
+                registration("asset-second").copy(
+                    origin = MediaAssetEntity.ORIGIN_AI_EDITED,
+                    parentAssetId = "asset-first",
+                    sourcePaths = listOf(firstManaged.relativePath),
+                ),
+            )
+
+            assertEquals(1, database.genMediaDao().countBlobs())
+            assertEquals(2, database.genMediaDao().countAssetBlobs())
+            assertEquals(2, database.genMediaDao().countReplicas())
+            assertEquals(2, database.genMediaDao().countMessageRefs())
+            assertEquals(2, database.genMediaDao().countRelations())
+        } finally {
+            directory.deleteRecursively()
+            database.close()
+        }
+    }
+
+    @Test
+    fun reconciliationRebindsSyntheticBlobToVerifiedDigestWithoutChangingReplicaIdentity() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(
+            ApplicationProvider.getApplicationContext(),
+            AppDatabase::class.java,
+        ).build()
+        val directory = ApplicationProvider.getApplicationContext<android.content.Context>()
+            .cacheDir.resolve("media-blob-resolution-${System.nanoTime()}").apply { mkdirs() }
+        val file = directory.resolve("result.png").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        var verifiedSha: String? = null
+        try {
+            val files = FilesRepository(database.managedFileDao())
+            val managed = files.insert(managed("chat_generated_images/result.png", "result.png"))
+            val repository = GenMediaRepository(
+                dao = database.genMediaDao(),
+                filesRepository = files,
+                metadataProbe = MediaAssetMetadataProbe { _, _ ->
+                    MediaAssetFileMetadata(
+                        mimeType = "image/png",
+                        sizeBytes = 3,
+                        width = verifiedSha?.let { 1 },
+                        height = verifiedSha?.let { 1 },
+                        sha256 = verifiedSha,
+                        storageState = if (verifiedSha == null) {
+                            MediaAssetEntity.STORAGE_NEEDS_METADATA
+                        } else {
+                            MediaAssetEntity.STORAGE_AVAILABLE
+                        },
+                    )
+                },
+            )
+            repository.registerGeneratedAsset(managed, file, registration("asset-resolution"))
+            val synthetic = database.genMediaDao().getAssetBlob("asset-resolution", "original")
+            assertNull(synthetic?.let { database.genMediaDao().getBlob(it.blobId)?.sha256 })
+            val replicaId = database.genMediaDao().getReplicaByManagedFileId(managed.fileId)?.replicaId
+
+            verifiedSha = SHA_B
+            val reconciliation = repository.reconcileLocalMetadata(resolveFile = { file })
+
+            assertEquals(1, reconciliation.repaired)
+            assertEquals(1, database.genMediaDao().countBlobs())
+            assertEquals("sha256:$SHA_B", database.genMediaDao().getAssetBlob("asset-resolution", "original")?.blobId)
+            val replica = database.genMediaDao().getReplicaByManagedFileId(managed.fileId)
+            assertEquals(replicaId, replica?.replicaId)
+            assertEquals("sha256:$SHA_B", replica?.blobId)
+        } finally {
+            directory.deleteRecursively()
+            database.close()
+        }
+    }
+
+    private fun managed(relativePath: String, displayName: String) = ManagedFileEntity(
+        folder = "chat_generated_images",
+        relativePath = relativePath,
+        displayName = displayName,
+        mimeType = "image/png",
+        sizeBytes = 1,
+        createdAt = 10,
+        updatedAt = 10,
+    )
+
+    private fun registration(assetId: String) = GeneratedMediaAssetRegistration(
+        assetId = assetId,
+        modelId = "model-id",
+        prompt = "prompt",
+        createdAt = 12,
+        conversationId = "conversation-id",
+        messageNodeId = "node-id",
+        toolCallId = "tool-call-id",
+    )
+
+    private companion object {
+        val SHA_A = "a".repeat(64)
+        val SHA_B = "b".repeat(64)
     }
 }

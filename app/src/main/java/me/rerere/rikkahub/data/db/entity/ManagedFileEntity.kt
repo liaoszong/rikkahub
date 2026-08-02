@@ -4,10 +4,12 @@ import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import me.rerere.pale.media.MediaStableIds
 
 @Entity(
     tableName = "managed_files",
     indices = [
+        Index(value = ["file_id"], unique = true),
         Index(value = ["relative_path"], unique = true),
         Index(value = ["folder"])
     ]
@@ -15,6 +17,8 @@ import androidx.room.PrimaryKey
 data class ManagedFileEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
+    @ColumnInfo(name = "file_id", defaultValue = "''")
+    val fileId: String = MediaStableIds.newId(),
     @ColumnInfo("folder")
     val folder: String,
     @ColumnInfo("relative_path")

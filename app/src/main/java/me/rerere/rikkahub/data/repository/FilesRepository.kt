@@ -7,16 +7,17 @@ import me.rerere.rikkahub.data.db.entity.ManagedFileEntity
 class FilesRepository(
     private val dao: ManagedFileDAO,
 ) {
-    suspend fun insert(file: ManagedFileEntity): ManagedFileEntity {
-        val id = dao.insert(file)
-        return file.copy(id = id)
-    }
+    suspend fun insert(file: ManagedFileEntity): ManagedFileEntity = dao.insertOrGet(file)
 
     suspend fun update(file: ManagedFileEntity) {
-        dao.update(file)
+        require(dao.update(file) == 1) {
+            "Managed file update rejected because its row or stable identity changed: ${file.id}"
+        }
     }
 
     suspend fun getById(id: Long): ManagedFileEntity? = dao.getById(id)
+
+    suspend fun getByFileId(fileId: String): ManagedFileEntity? = dao.getByFileId(fileId)
 
     suspend fun getByPath(relativePath: String): ManagedFileEntity? = dao.getByPath(relativePath)
 

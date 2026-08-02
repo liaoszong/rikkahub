@@ -42,6 +42,8 @@ import java.util.UUID
         Index(value = ["tool_call_id"]),
         Index(value = ["visibility", "create_at"]),
         Index(value = ["storage_state"]),
+        Index(value = ["media_kind", "lifecycle", "create_at"]),
+        Index(value = ["retention_policy", "lifecycle"]),
     ],
 )
 data class MediaAssetEntity(
@@ -65,6 +67,18 @@ data class MediaAssetEntity(
     val sourcePaths: String? = null,
     @ColumnInfo("asset_id")
     val assetId: String = UUID.randomUUID().toString(),
+    @ColumnInfo(name = "media_kind", defaultValue = "'image'")
+    val mediaKind: String = MEDIA_KIND_IMAGE,
+    @ColumnInfo(name = "display_name", defaultValue = "''")
+    val displayName: String = "",
+    @ColumnInfo(name = "lifecycle", defaultValue = "'active'")
+    val lifecycle: String = LIFECYCLE_ACTIVE,
+    @ColumnInfo(name = "privacy_scope", defaultValue = "'private'")
+    val privacyScope: String = PRIVACY_PRIVATE,
+    @ColumnInfo(name = "retention_policy", defaultValue = "'library'")
+    val retentionPolicy: String = RETENTION_LIBRARY,
+    @ColumnInfo("deleted_at")
+    val deletedAt: Long? = null,
     @ColumnInfo("managed_file_id")
     val managedFileId: Long? = null,
     @ColumnInfo("origin")
@@ -99,7 +113,22 @@ data class MediaAssetEntity(
     val metadataVersion: Int = METADATA_VERSION,
 ) {
     companion object {
-        const val METADATA_VERSION = 1
+        const val METADATA_VERSION = 2
+
+        const val MEDIA_KIND_IMAGE = "image"
+
+        const val LIFECYCLE_RESERVED = "reserved"
+        const val LIFECYCLE_ACTIVE = "active"
+        const val LIFECYCLE_DELETE_PENDING = "delete_pending"
+        const val LIFECYCLE_DELETED = "deleted"
+
+        const val PRIVACY_PRIVATE = "private"
+        const val PRIVACY_SYNC_ALLOWED = "sync_allowed"
+        const val PRIVACY_SHARE_ALLOWED = "share_allowed"
+
+        const val RETENTION_CONVERSATION = "conversation"
+        const val RETENTION_LIBRARY = "library"
+        const val RETENTION_TEMPORARY = "temporary"
 
         const val TYPE_IMAGE_GENERATION = "image_generation"
         const val TYPE_IMAGE_EDIT = "image_edit"
