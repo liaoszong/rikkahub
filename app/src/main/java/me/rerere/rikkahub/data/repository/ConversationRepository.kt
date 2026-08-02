@@ -481,8 +481,15 @@ internal suspend fun readChunkedText(
     while (true) {
         val chunk = loadChunk(start, chunkSize) ?: return null
         result.append(chunk)
-        if (chunk.length < chunkSize) return result.toString()
-        start += chunk.length
+        // SQLite substr(TEXT, start, length) counts Unicode code points, while
+        // String.length counts UTF-16 code units. Advancing by String.length
+        // skips characters whenever a chunk contains supplementary code points.
+        val consumedCodePoints = chunk.codePointCount(0, chunk.length)
+        check(consumedCodePoints <= chunkSize) {
+            "Chunk loader returned $consumedCodePoints code points for a $chunkSize-code-point request"
+        }
+        if (consumedCodePoints < chunkSize) return result.toString()
+        start = Math.addExact(start, consumedCodePoints)
     }
 }
 
