@@ -25,8 +25,8 @@ android {
         applicationId = "me.rerere.rikkahub"
         minSdk = 26
         targetSdk = 37
-        versionCode = 175
-        versionName = "2.4.5-pale.3"
+        versionCode = 176
+        versionName = "2.4.5-pale.4"
 
         buildConfigField("String", "UPDATE_FEED_URL", "\"https://updates.paleink.cc/api/v1/stable.json\"")
         buildConfigField("String", "UPDATE_SOURCE", "\"paleink/rikkahub\"")
