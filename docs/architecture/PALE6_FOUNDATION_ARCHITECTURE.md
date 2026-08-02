@@ -164,7 +164,9 @@ stateDiagram-v2
 
 `COMMITTING` 表示付费输出已经到达，只允许向前补文件/Room/message/citation，禁止再次调用 Provider。普通模型、标题/建议、MCP/Workspace/本地工具与图片都必须进入同一 ledger；图片多图是 group request + 每槽 child request。
 
-图片 SharedPreferences durable records 在首次 v29 启动导入：终态保留为历史；active/running 一律转 interrupted；已落盘结果进入 Media reconcile。导入完成后写迁移标志，旧存储只读一个版本后删除。
+图片 SharedPreferences durable records 在首次 v29 启动导入：终态保留为历史；可证明尚未 dispatch 的 queued 记录转 `INTERRUPTED`，旧 `RUNNING` 因无法证明远端未受理，一律转 `UNKNOWN_OUTCOME`；已有完整输出的记录从 `COMMITTING` 只向前做 Media reconcile，绝不重新调用 Provider。导入完成后写迁移标志，旧存储只读一个版本后删除。
+
+通用“重试”不能只看终态。`FAILED/INTERRUPTED` 只有在 `billable_boundary=NOT_SENT` 时才允许无风险新 attempt；`SENT/RESPONSE_STARTED/RESULT_RECEIVED/UNKNOWN` 均需要 Provider 明确幂等保证或用户确认可能重复计费。`COMMITTING` 即使进程重启也保持本地恢复态，失败只能重做文件/Room/message/citation 提交，不能退回网络队列。
 
 FGS、通知、聊天计时、任务中心和工具 UI 都观察 ledger projection。不得再从 Compose 本地计时或 Tool.output 是否为空推导权威状态。
 
