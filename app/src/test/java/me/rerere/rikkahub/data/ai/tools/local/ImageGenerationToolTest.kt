@@ -119,4 +119,37 @@ class ImageGenerationToolTest {
         assertEquals("reserved-asset", assetId)
         assertEquals("room unavailable", deferredMessage)
     }
+
+    @Test
+    fun `resolved provider references preserve ordered deduplicated media identities`() {
+        val inputs = buildMediaReferenceInputs(
+            listOf(
+                ResolvedImageGenerationReference(
+                    localPath = "/files/images/b.png",
+                    assetId = "asset-b",
+                    managedSourcePath = "images/b.png",
+                ),
+                ResolvedImageGenerationReference(
+                    localPath = "/files/images/a.png",
+                    assetId = "asset-a",
+                    managedSourcePath = "images/a.png",
+                ),
+                ResolvedImageGenerationReference(
+                    localPath = "/files/duplicate-b.png",
+                    assetId = "asset-b",
+                    managedSourcePath = "images/duplicate-b.png",
+                ),
+                ResolvedImageGenerationReference(
+                    localPath = "/files/images/legacy.png",
+                    managedSourcePath = "images/legacy.png",
+                ),
+            ),
+        )
+
+        assertEquals(listOf("asset-b", "asset-a", null), inputs.map { it.assetId })
+        assertEquals(
+            listOf("images/b.png", "images/a.png", "images/legacy.png"),
+            inputs.map { it.sourcePath },
+        )
+    }
 }

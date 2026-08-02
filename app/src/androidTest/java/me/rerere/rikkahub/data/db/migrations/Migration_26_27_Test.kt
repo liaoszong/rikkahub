@@ -1,10 +1,18 @@
 package me.rerere.rikkahub.data.db.migrations
 
+import androidx.room.Room
 import androidx.room.testing.MigrationTestHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import me.rerere.rikkahub.data.db.AppDatabase
+import me.rerere.rikkahub.data.db.entity.MediaAssetEntity
+import me.rerere.rikkahub.data.repository.FilesRepository
+import me.rerere.rikkahub.data.repository.GenMediaRepository
+import me.rerere.rikkahub.data.repository.MediaAssetFileMetadata
+import me.rerere.rikkahub.data.repository.MediaAssetMetadataProbe
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -132,6 +140,21 @@ class Migration_26_27_Test {
             assertEquals(1, cursor.getInt(1))
         }
         db.query(
+            "SELECT message_id, part_id FROM message_media_ref WHERE asset_id = 'asset-a'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+            assertTrue(cursor.isNull(1))
+        }
+        db.query(
+            "SELECT state, detail FROM media_migration_journal " +
+                "WHERE scope_kind = 'asset' AND scope_key = 'asset-a' AND stage = 'reference_backfill'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("pending", cursor.getString(0))
+            assertEquals("message_scan_required", cursor.getString(1))
+        }
+        db.query(
             "SELECT state, detail FROM media_migration_journal " +
                 "WHERE scope_kind = 'asset' AND scope_key = 'asset-c' AND stage = 'blob_backfill'",
         ).use { cursor ->
@@ -159,6 +182,68 @@ class Migration_26_27_Test {
             assertTrue(cursor.isNull(5))
         }
         db.close()
+    }
+
+    @Test
+    fun migratedNullableBlobReconcilesMissingFileIdempotentlyAfterOpen() = runBlocking {
+        val databaseName = "migration-26-27-nullable-reconcile"
+        helper.createDatabase(databaseName, 26).apply {
+            execSQL(
+                """
+                INSERT INTO managed_files
+                    (id, folder, relative_path, display_name, mime_type, size_bytes, created_at, updated_at)
+                VALUES (20, 'images', 'images/missing.png', 'missing.png', 'image/png', 0, 10, 11)
+                """.trimIndent(),
+            )
+            insertAsset(
+                id = 20,
+                path = "images/missing.png",
+                assetId = "asset-missing",
+                managedFileId = 20,
+                sha256 = null,
+                storageState = "needs_metadata",
+            )
+            close()
+        }
+        helper.runMigrationsAndValidate(databaseName, 27, true, Migration_26_27).close()
+
+        val database = Room.databaseBuilder(
+            ApplicationProvider.getApplicationContext(),
+            AppDatabase::class.java,
+            databaseName,
+        ).addMigrations(Migration_27_28).build()
+        try {
+            val repository = GenMediaRepository(
+                dao = database.genMediaDao(),
+                filesRepository = FilesRepository(database.managedFileDao()),
+                metadataProbe = MediaAssetMetadataProbe { _, _ ->
+                    MediaAssetFileMetadata(
+                        mimeType = "image/png",
+                        sizeBytes = 0,
+                        width = null,
+                        height = null,
+                        sha256 = null,
+                        storageState = MediaAssetEntity.STORAGE_MISSING,
+                    )
+                },
+            )
+
+            val first = repository.reconcileLocalMetadata(resolveFile = { java.io.File("missing") })
+            val replay = repository.reconcileLocalMetadata(resolveFile = { java.io.File("missing") })
+
+            assertTrue(first.failures.isEmpty())
+            assertTrue(replay.failures.isEmpty())
+            assertEquals(1, first.missing)
+            assertEquals(1, replay.missing)
+            assertEquals(
+                "legacy-media-blob-asset-missing",
+                database.genMediaDao().getAssetBlob("asset-missing", "original")?.blobId,
+            )
+            assertEquals(1, database.genMediaDao().countBlobs())
+        } finally {
+            database.close()
+            ApplicationProvider.getApplicationContext<android.content.Context>().deleteDatabase(databaseName)
+        }
     }
 
     private fun androidx.sqlite.db.SupportSQLiteDatabase.insertAsset(

@@ -330,10 +330,8 @@ private fun backfillProvenMediaGraph(db: SupportSQLiteDatabase) {
             'asset',
             asset_id,
             'reference_backfill',
-            CASE WHEN conversation_id IS NOT NULL OR message_node_id IS NOT NULL OR tool_call_id IS NOT NULL
-                THEN 'complete' ELSE 'pending' END,
-            CASE WHEN conversation_id IS NOT NULL OR message_node_id IS NOT NULL OR tool_call_id IS NOT NULL
-                THEN NULL ELSE 'message_scan_required' END,
+            'pending',
+            'message_scan_required',
             updated_at
         FROM `GenMediaEntity`
         """.trimIndent(),

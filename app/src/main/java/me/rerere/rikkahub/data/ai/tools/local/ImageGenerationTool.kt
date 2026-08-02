@@ -50,6 +50,7 @@ import me.rerere.rikkahub.data.imggen.ChatImageGenerationState
 import me.rerere.rikkahub.data.imggen.ChatImageSlotStatus
 import me.rerere.rikkahub.data.imggen.toStatusPart
 import me.rerere.rikkahub.data.repository.GeneratedMediaAssetRegistration
+import me.rerere.rikkahub.data.repository.MediaAssetReferenceInput
 import me.rerere.rikkahub.data.repository.MediaAssetIds
 import me.rerere.rikkahub.data.repository.MediaAssetRepository
 import java.io.File
@@ -173,7 +174,17 @@ private suspend fun executeImageGeneration(
         } else {
             latestUserReferenceImages(context?.messages.orEmpty())
         }
-        val referencePaths = selectedReferences.mapNotNull { it.url.toLocalImagePath() }
+        val resolvedReferences = selectedReferences.mapNotNull { reference ->
+            reference.url.toLocalImagePath()?.let { localPath ->
+                ResolvedImageGenerationReference(
+                    localPath = localPath,
+                    assetId = reference.assetId,
+                    managedSourcePath = filesManager.toManagedRelativePath(File(localPath)),
+                )
+            }
+        }
+        val referencePaths = resolvedReferences.map(ResolvedImageGenerationReference::localPath)
+        val mediaReferenceInputs = buildMediaReferenceInputs(resolvedReferences)
         if (requestedReferenceIds.isNotEmpty() && referencePaths.isEmpty()) {
             error("The selected reference images are no longer available")
         }
@@ -187,7 +198,7 @@ private suspend fun executeImageGeneration(
         val reservedAssetIds = List(count) { index ->
             MediaAssetIds.forChatToolOutput(requestId, index)
         }
-        val referencedAssetId = selectedReferences.singleOrNull()?.assetId
+        val referencedAssetId = resolvedReferences.singleOrNull()?.assetId?.takeIf(String::isNotBlank)
         val parentAssetId = if (
             referencedAssetId != null && mediaAssetRepository.getAsset(referencedAssetId) != null
         ) {
@@ -319,6 +330,7 @@ private suspend fun executeImageGeneration(
                                                             ?.takeIf(String::isNotBlank)
                                                             ?: requestId,
                                                         parentAssetId = parentAssetId,
+                                                        referenceInputs = mediaReferenceInputs,
                                                     ),
                                                 )
                                                 val finishedAt = System.currentTimeMillis()
@@ -453,6 +465,26 @@ private data class ReferenceImage(
     val role: MessageRole,
     val assetId: String? = null,
 )
+
+internal data class ResolvedImageGenerationReference(
+    val localPath: String,
+    val assetId: String? = null,
+    val managedSourcePath: String? = null,
+)
+
+internal fun buildMediaReferenceInputs(
+    references: List<ResolvedImageGenerationReference>,
+): List<MediaAssetReferenceInput> = buildList {
+    val seenIdentities = mutableSetOf<String>()
+    references.forEach { reference ->
+        val assetId = reference.assetId?.takeIf(String::isNotBlank)
+        val sourcePath = reference.managedSourcePath?.takeIf(String::isNotBlank)
+        if (assetId == null && sourcePath == null) return@forEach
+        val identity = assetId?.let { "asset:$it" } ?: "path:$sourcePath"
+        if (!seenIdentities.add(identity)) return@forEach
+        add(MediaAssetReferenceInput(assetId = assetId, sourcePath = sourcePath))
+    }
+}
 
 private fun buildReferenceImageCatalog(messages: List<UIMessage>): List<ReferenceImage> = buildList {
     messages.forEachIndexed { messageIndex, message ->

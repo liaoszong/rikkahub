@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.data.files
 
+import kotlinx.coroutines.runBlocking
 import me.rerere.rikkahub.data.db.entity.ManagedFileEntity
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -128,6 +129,42 @@ class FilesManagerDeletionPolicyTest {
                     managedFile = null,
                 ),
             )
+            assertTrue(file.exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `failed physical delete preserves managed identity and replica authority`() = runBlocking {
+        val root = Files.createTempDirectory("managed-file-delete-failure").toFile()
+        try {
+            val file = root.resolve("attachment.txt").apply { writeText("keep") }
+            val entity = ManagedFileEntity(
+                id = 51L,
+                folder = FileFolders.UPLOAD,
+                relativePath = "${FileFolders.UPLOAD}/attachment.txt",
+                displayName = "attachment.txt",
+                mimeType = "text/plain",
+                sizeBytes = file.length(),
+                createdAt = 1L,
+                updatedAt = 1L,
+            )
+            var deletedIdentity: Long? = null
+
+            val deleted = deleteManagedFileWithIdentity(
+                entity = entity,
+                deleteFromDisk = true,
+                resolveFile = { file },
+                deletePhysicalFile = { false },
+                deleteIdentity = { id ->
+                    deletedIdentity = id
+                    1
+                },
+            )
+
+            assertFalse(deleted)
+            assertNull(deletedIdentity)
             assertTrue(file.exists())
         } finally {
             root.deleteRecursively()

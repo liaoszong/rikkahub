@@ -119,6 +119,11 @@ class FilesManager(
         return resolved
     }
 
+    fun toManagedRelativePath(file: File): String? = managedRelativePath(
+        filesDir = context.filesDir,
+        file = file,
+    )
+
     fun createChatFilesByContents(uris: List<Uri>): List<Uri> {
         val newUris = mutableListOf<Uri>()
         val dir = context.filesDir.resolve(FileFolders.UPLOAD)
@@ -486,10 +491,13 @@ class FilesManager(
 
     suspend fun delete(id: Long, deleteFromDisk: Boolean = true): Boolean = withContext(Dispatchers.IO) {
         val entity = repository.getById(id) ?: return@withContext false
-        if (deleteFromDisk) {
-            runCatching { getFile(entity).delete() }
-        }
-        repository.deleteById(id) > 0
+        deleteManagedFileWithIdentity(
+            entity = entity,
+            deleteFromDisk = deleteFromDisk,
+            resolveFile = ::getFile,
+            deletePhysicalFile = File::delete,
+            deleteIdentity = repository::deleteById,
+        )
     }
 
     suspend fun deleteAll(folder: String = FileFolders.UPLOAD): Boolean = withContext(Dispatchers.IO) {
@@ -718,6 +726,34 @@ internal fun deleteManagedChatFileIfAuthorized(
     if (!revalidated.file.exists()) return true
     if (!revalidated.file.isFile) return false
     return revalidated.file.delete() && !revalidated.file.exists()
+}
+
+internal fun managedRelativePath(filesDir: File, file: File): String? = runCatching {
+    val root = filesDir.canonicalFile
+    val target = file.canonicalFile
+    if (target == root || !target.toPath().startsWith(root.toPath())) return@runCatching null
+    root.toPath().relativize(target.toPath()).toString().replace(File.separatorChar, '/')
+}.getOrNull()?.takeIf(String::isNotBlank)
+
+internal suspend fun deleteManagedFileWithIdentity(
+    entity: ManagedFileEntity,
+    deleteFromDisk: Boolean,
+    resolveFile: (ManagedFileEntity) -> File,
+    deletePhysicalFile: (File) -> Boolean,
+    deleteIdentity: suspend (Long) -> Int,
+): Boolean {
+    if (deleteFromDisk) {
+        val target = runCatching { resolveFile(entity) }.getOrNull() ?: return false
+        val removed = if (!target.exists()) {
+            true
+        } else {
+            target.isFile &&
+                runCatching { deletePhysicalFile(target) }.getOrDefault(false) &&
+                !target.exists()
+        }
+        if (!removed) return false
+    }
+    return deleteIdentity(entity.id) > 0
 }
 
 suspend fun FilesManager.saveUploadFromUri(

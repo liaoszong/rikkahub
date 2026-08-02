@@ -55,6 +55,29 @@ interface GenMediaDAO {
         return updateRow(media)
     }
 
+    @Query(
+        "UPDATE GenMediaEntity SET display_name = :displayName, managed_file_id = :managedFileId, " +
+            "mime_type = :mimeType, size_bytes = :sizeBytes, width = :width, height = :height, " +
+            "sha256 = :sha256, storage_state = :storageState, metadata_version = :metadataVersion, " +
+            "updated_at = :updatedAt WHERE id = :id AND asset_id = :assetId " +
+            "AND updated_at = :expectedUpdatedAt",
+    )
+    suspend fun updateReconciledMetadata(
+        id: Int,
+        assetId: String,
+        displayName: String,
+        managedFileId: Long?,
+        mimeType: String,
+        sizeBytes: Long,
+        width: Int?,
+        height: Int?,
+        sha256: String?,
+        storageState: String,
+        metadataVersion: Int,
+        updatedAt: Long,
+        expectedUpdatedAt: Long,
+    ): Int
+
     @Query("SELECT * FROM GenMediaEntity WHERE asset_id = :assetId LIMIT 1")
     suspend fun getByAssetId(assetId: String): MediaAssetEntity?
 
@@ -227,6 +250,12 @@ interface GenMediaDAO {
         ordinal: Int,
     ): MediaRelationEntity?
 
+    @Query(
+        "SELECT * FROM media_relation WHERE asset_id = :assetId " +
+            "AND relation_kind = :relationKind ORDER BY ordinal ASC",
+    )
+    suspend fun getRelations(assetId: String, relationKind: String): List<MediaRelationEntity>
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertMessageRefIgnore(reference: MessageMediaRefEntity): Long
 
@@ -292,11 +321,31 @@ interface GenMediaDAO {
     @Transaction
     suspend fun reconcileAssetGraph(write: MediaAssetGraphWrite): MediaAssetEntity {
         requireManagedFileUpdate(write.managedFile)
-        require(update(write.asset) == 1) {
-            "Media asset reconciliation lost its committed row: ${write.asset.assetId}"
+        val expectedUpdatedAt = requireNotNull(write.expectedAssetUpdatedAt) {
+            "Media asset reconciliation requires an expected update timestamp"
+        }
+        val asset = write.asset
+        require(
+            updateReconciledMetadata(
+                id = asset.id,
+                assetId = asset.assetId,
+                displayName = asset.displayName,
+                managedFileId = asset.managedFileId,
+                mimeType = asset.mimeType,
+                sizeBytes = asset.sizeBytes,
+                width = asset.width,
+                height = asset.height,
+                sha256 = asset.sha256,
+                storageState = asset.storageState,
+                metadataVersion = asset.metadataVersion,
+                updatedAt = asset.updatedAt,
+                expectedUpdatedAt = expectedUpdatedAt,
+            ) == 1,
+        ) {
+            "Media asset reconciliation lost a concurrent update: ${asset.assetId}"
         }
         persistV2Graph(write)
-        return requireNotNull(getByAssetId(write.asset.assetId))
+        return requireNotNull(getByAssetId(asset.assetId))
     }
 
     suspend fun persistV2Graph(write: MediaAssetGraphWrite) {
@@ -449,8 +498,53 @@ interface GenMediaDAO {
     @Query("SELECT COUNT(*) FROM message_media_ref")
     suspend fun countMessageRefs(): Int
 
-    @Query("DELETE FROM GenMediaEntity WHERE id = :id")
-    suspend fun delete(id: Int)
+    @Query("SELECT COUNT(*) FROM media_relation WHERE related_asset_id = :assetId")
+    suspend fun countIncomingRelations(assetId: String): Int
+
+    @Query("SELECT COUNT(*) FROM message_media_ref WHERE asset_id = :assetId")
+    suspend fun countMessageReferences(assetId: String): Int
+
+    @Query(
+        "SELECT COUNT(*) FROM media_migration_journal WHERE scope_kind = 'asset' " +
+            "AND scope_key = :assetId AND stage = 'reference_backfill' AND state != 'complete'",
+    )
+    suspend fun countPendingReferenceBackfills(assetId: String): Int
+
+    @Query(
+        "UPDATE GenMediaEntity SET lifecycle = 'delete_pending', visibility = 'hidden', " +
+            "hidden_at = COALESCE(hidden_at, :now), deleted_at = COALESCE(deleted_at, :now), " +
+            "updated_at = :now WHERE id = :id AND asset_id = :assetId",
+    )
+    suspend fun markDeletePending(id: Int, assetId: String, now: Long): Int
+
+    @Query("DELETE FROM GenMediaEntity WHERE id = :id AND asset_id = :assetId")
+    suspend fun deleteRow(id: Int, assetId: String): Int
+
+    @Transaction
+    suspend fun delete(
+        id: Int,
+        now: Long = System.currentTimeMillis(),
+    ): MediaAssetDeleteResult {
+        val asset = getById(id) ?: return MediaAssetDeleteResult.NOT_FOUND
+        val mustFailClosed = countIncomingRelations(asset.assetId) > 0 ||
+            countMessageReferences(asset.assetId) > 0 ||
+            countPendingReferenceBackfills(asset.assetId) > 0
+        if (mustFailClosed) {
+            require(markDeletePending(id, asset.assetId, now) == 1)
+            return MediaAssetDeleteResult.DEFERRED_REFERENCED
+        }
+        return if (deleteRow(id, asset.assetId) == 1) {
+            MediaAssetDeleteResult.DELETED
+        } else {
+            MediaAssetDeleteResult.NOT_FOUND
+        }
+    }
+}
+
+enum class MediaAssetDeleteResult {
+    DELETED,
+    DEFERRED_REFERENCED,
+    NOT_FOUND,
 }
 
 data class MediaAssetGraphWrite(
@@ -462,4 +556,5 @@ data class MediaAssetGraphWrite(
     val relations: List<MediaRelationEntity> = emptyList(),
     val reference: MessageMediaRefEntity? = null,
     val journals: List<MediaMigrationJournalEntity> = emptyList(),
+    val expectedAssetUpdatedAt: Long? = null,
 )

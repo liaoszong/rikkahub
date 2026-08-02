@@ -5,8 +5,10 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.runBlocking
 import me.rerere.rikkahub.data.db.AppDatabase
+import me.rerere.rikkahub.data.db.dao.MediaAssetDeleteResult
 import me.rerere.rikkahub.data.db.entity.ManagedFileEntity
 import me.rerere.rikkahub.data.db.entity.MediaAssetEntity
+import me.rerere.rikkahub.data.db.entity.MediaV2Values
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -139,6 +141,14 @@ class MediaAssetRepositoryTest {
             assertEquals(1, database.genMediaDao().countAssetBlobs())
             assertEquals(1, database.genMediaDao().countReplicas())
             assertEquals(1, database.genMediaDao().countMessageRefs())
+            assertEquals(
+                MediaV2Values.JOURNAL_PENDING,
+                database.genMediaDao().getJournal(
+                    scopeKind = "asset",
+                    scopeKey = "asset-stable",
+                    stage = MediaV2Values.STAGE_REFERENCE_BACKFILL,
+                )?.state,
+            )
             assertEquals(
                 managed.fileId,
                 database.genMediaDao().getReplicaByManagedFileId(managed.fileId)?.managedFileId,
@@ -324,6 +334,172 @@ class MediaAssetRepositoryTest {
         }
     }
 
+    @Test
+    fun orderedReferenceInputsPersistEveryResolvableAssetOnce() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(
+            ApplicationProvider.getApplicationContext(),
+            AppDatabase::class.java,
+        ).build()
+        val directory = ApplicationProvider.getApplicationContext<android.content.Context>()
+            .cacheDir.resolve("media-reference-lineage-${System.nanoTime()}").apply { mkdirs() }
+        try {
+            val files = FilesRepository(database.managedFileDao())
+            val repository = GenMediaRepository(
+                dao = database.genMediaDao(),
+                filesRepository = files,
+                metadataProbe = availableProbe(SHA_A),
+            )
+            val firstFile = directory.resolve("first.png").apply { writeBytes(byteArrayOf(1)) }
+            val secondFile = directory.resolve("second.png").apply { writeBytes(byteArrayOf(1)) }
+            val resultFile = directory.resolve("result.png").apply { writeBytes(byteArrayOf(1)) }
+            val firstManaged = files.insert(managed("chat_generated_images/first.png", "first.png"))
+            val secondManaged = files.insert(managed("chat_generated_images/second.png", "second.png"))
+            val resultManaged = files.insert(managed("chat_generated_images/result.png", "result.png"))
+            repository.registerGeneratedAsset(firstManaged, firstFile, registration("asset-first"))
+            repository.registerGeneratedAsset(secondManaged, secondFile, registration("asset-second"))
+
+            repository.registerGeneratedAsset(
+                resultManaged,
+                resultFile,
+                registration("asset-result").copy(
+                    origin = MediaAssetEntity.ORIGIN_AI_EDITED,
+                    referenceInputs = listOf(
+                        MediaAssetReferenceInput(
+                            assetId = "asset-second",
+                            sourcePath = secondManaged.relativePath,
+                        ),
+                        MediaAssetReferenceInput(
+                            assetId = "asset-first",
+                            sourcePath = firstManaged.relativePath,
+                        ),
+                        MediaAssetReferenceInput(
+                            assetId = "asset-second",
+                            sourcePath = secondManaged.relativePath,
+                        ),
+                    ),
+                ),
+            )
+
+            val relations = database.genMediaDao().getRelations(
+                assetId = "asset-result",
+                relationKind = MediaV2Values.RELATION_REFERENCE_INPUT,
+            )
+            assertEquals(listOf("asset-second", "asset-first"), relations.map { it.relatedAssetId })
+            assertEquals(listOf(0, 1), relations.map { it.ordinal })
+        } finally {
+            directory.deleteRecursively()
+            database.close()
+        }
+    }
+
+    @Test
+    fun concurrentVisibilityUpdateMakesMetadataReconciliationRetryWithoutOverwritingUserState() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(
+            ApplicationProvider.getApplicationContext(),
+            AppDatabase::class.java,
+        ).build()
+        val file = File.createTempFile("media-cas", ".png")
+        try {
+            val files = FilesRepository(database.managedFileDao())
+            val managed = files.insert(managed("images/cas.png", "cas.png"))
+            database.genMediaDao().insertOrGet(
+                MediaAssetEntity(
+                    path = managed.relativePath,
+                    modelId = "legacy-model",
+                    prompt = "legacy",
+                    createAt = 1,
+                    assetId = "asset-cas",
+                    managedFileId = managed.id,
+                    storageState = MediaAssetEntity.STORAGE_NEEDS_METADATA,
+                    updatedAt = 1,
+                ),
+            )
+            val repository = GenMediaRepository(
+                dao = database.genMediaDao(),
+                filesRepository = files,
+                metadataProbe = MediaAssetMetadataProbe { _, _ ->
+                    runBlocking { database.genMediaDao().hide("asset-cas", 20) }
+                    MediaAssetFileMetadata(
+                        mimeType = "image/png",
+                        sizeBytes = 3,
+                        width = 1,
+                        height = 1,
+                        sha256 = SHA_A,
+                        storageState = MediaAssetEntity.STORAGE_AVAILABLE,
+                    )
+                },
+            )
+
+            val result = repository.reconcileLocalMetadata(resolveFile = { file })
+
+            assertEquals(1, result.failures.size)
+            val committed = requireNotNull(database.genMediaDao().getByAssetId("asset-cas"))
+            assertEquals(MediaAssetEntity.VISIBILITY_HIDDEN, committed.visibility)
+            assertEquals(20L, committed.updatedAt)
+            assertEquals(MediaAssetEntity.STORAGE_NEEDS_METADATA, committed.storageState)
+        } finally {
+            file.delete()
+            database.close()
+        }
+    }
+
+    @Test
+    fun deletingRelationTargetDefersSafelyInsteadOfThrowingForeignKeyFailure() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(
+            ApplicationProvider.getApplicationContext(),
+            AppDatabase::class.java,
+        ).build()
+        val directory = ApplicationProvider.getApplicationContext<android.content.Context>()
+            .cacheDir.resolve("media-delete-relation-${System.nanoTime()}").apply { mkdirs() }
+        try {
+            val files = FilesRepository(database.managedFileDao())
+            val repository = GenMediaRepository(
+                dao = database.genMediaDao(),
+                filesRepository = files,
+                metadataProbe = availableProbe(SHA_A),
+            )
+            val parentFile = directory.resolve("parent.png").apply { writeBytes(byteArrayOf(1)) }
+            val childFile = directory.resolve("child.png").apply { writeBytes(byteArrayOf(1)) }
+            val parent = repository.registerGeneratedAsset(
+                files.insert(managed("images/parent.png", "parent.png")),
+                parentFile,
+                registration("asset-parent").withoutMessageOwner(),
+            )
+            val parentJournal = requireNotNull(
+                database.genMediaDao().getJournal(
+                    "asset",
+                    parent.assetId,
+                    MediaV2Values.STAGE_REFERENCE_BACKFILL,
+                ),
+            )
+            database.genMediaDao().updateJournalState(
+                journalId = parentJournal.journalId,
+                state = MediaV2Values.JOURNAL_COMPLETE,
+                detail = null,
+                updatedAt = 20,
+            )
+            repository.registerGeneratedAsset(
+                files.insert(managed("images/child.png", "child.png")),
+                childFile,
+                registration("asset-child").withoutMessageOwner().copy(
+                    origin = MediaAssetEntity.ORIGIN_AI_EDITED,
+                    parentAssetId = parent.assetId,
+                ),
+            )
+
+            val result = repository.deleteMedia(parent.id)
+
+            assertEquals(MediaAssetDeleteResult.DEFERRED_REFERENCED, result)
+            val deferred = requireNotNull(database.genMediaDao().getByAssetId(parent.assetId))
+            assertEquals(MediaAssetEntity.LIFECYCLE_DELETE_PENDING, deferred.lifecycle)
+            assertEquals(MediaAssetEntity.VISIBILITY_HIDDEN, deferred.visibility)
+            assertNotNull(database.genMediaDao().getByAssetId("asset-child"))
+        } finally {
+            directory.deleteRecursively()
+            database.close()
+        }
+    }
+
     private fun managed(relativePath: String, displayName: String) = ManagedFileEntity(
         folder = "chat_generated_images",
         relativePath = relativePath,
@@ -343,6 +519,23 @@ class MediaAssetRepositoryTest {
         messageNodeId = "node-id",
         toolCallId = "tool-call-id",
     )
+
+    private fun GeneratedMediaAssetRegistration.withoutMessageOwner() = copy(
+        conversationId = null,
+        messageNodeId = null,
+        toolCallId = null,
+    )
+
+    private fun availableProbe(sha256: String) = MediaAssetMetadataProbe { _, _ ->
+        MediaAssetFileMetadata(
+            mimeType = "image/png",
+            sizeBytes = 1,
+            width = 1,
+            height = 1,
+            sha256 = sha256,
+            storageState = MediaAssetEntity.STORAGE_AVAILABLE,
+        )
+    }
 
     private companion object {
         val SHA_A = "a".repeat(64)

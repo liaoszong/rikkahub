@@ -85,6 +85,10 @@ class GenMediaRepository(
             sizeBytes = inspected.sizeBytes,
             updatedAt = now,
         )
+        val compatibilitySourcePaths = (
+            registration.referenceInputs.mapNotNull(MediaAssetReferenceInput::sourcePath) +
+                registration.sourcePaths
+            ).filter(String::isNotBlank).distinct()
         val asset = MediaAssetEntity(
             path = managedFile.relativePath,
             modelId = registration.modelId,
@@ -97,7 +101,7 @@ class GenMediaRepository(
             } else {
                 MediaAssetEntity.TYPE_IMAGE_GENERATION
             },
-            sourcePaths = registration.sourcePaths.takeIf { it.isNotEmpty() }?.joinToString("\n"),
+            sourcePaths = compatibilitySourcePaths.takeIf { it.isNotEmpty() }?.joinToString("\n"),
             assetId = registration.assetId,
             displayName = updatedManagedFile.displayName,
             managedFileId = updatedManagedFile.id,
@@ -119,6 +123,7 @@ class GenMediaRepository(
                 managedFile = updatedManagedFile,
                 asset = asset,
                 includeMigrationJournal = inspected.sha256 == null,
+                referenceInputs = registration.referenceInputs,
             ),
         )
     }
@@ -147,7 +152,7 @@ class GenMediaRepository(
             runCatching {
                 val file = resolveFile(asset.path)
                 val inspected = metadataProbe.inspect(file, asset.mimeType)
-                val now = System.currentTimeMillis()
+                val now = maxOf(System.currentTimeMillis(), asset.updatedAt + 1)
                 val managedFile = ensureManagedFile(asset, file, inspected, now)
                 val reconciled = asset.copy(
                     displayName = managedFile?.displayName ?: asset.displayName,
@@ -158,6 +163,7 @@ class GenMediaRepository(
                     height = inspected.height,
                     sha256 = inspected.sha256,
                     storageState = inspected.storageState,
+                    metadataVersion = MediaAssetEntity.METADATA_VERSION,
                     updatedAt = now,
                 )
                 dao.reconcileAssetGraph(
@@ -165,6 +171,7 @@ class GenMediaRepository(
                         managedFile = managedFile,
                         asset = reconciled,
                         includeMigrationJournal = true,
+                        expectedAssetUpdatedAt = asset.updatedAt,
                     ),
                 )
                 if (inspected.storageState == MediaAssetEntity.STORAGE_MISSING) {
@@ -266,10 +273,19 @@ class GenMediaRepository(
         managedFile: ManagedFileEntity?,
         asset: MediaAssetEntity,
         includeMigrationJournal: Boolean,
+        referenceInputs: List<MediaAssetReferenceInput> = emptyList(),
+        expectedAssetUpdatedAt: Long? = null,
     ): MediaAssetGraphWrite {
         val verifiedBlobId = MediaStableIds.blobIdForSha256(asset.sha256)
         val verifiedSha256 = verifiedBlobId?.substringAfter("sha256:")
-        val blobId = verifiedBlobId ?: MediaStableIds.derived("media-blob", asset.assetId)
+        val existingUnknownBlobId = if (verifiedBlobId == null) {
+            dao.getAssetBlob(asset.assetId, MediaV2Values.BLOB_ROLE_ORIGINAL)?.blobId
+        } else {
+            null
+        }
+        val blobId = verifiedBlobId
+            ?: existingUnknownBlobId
+            ?: MediaStableIds.derived("media-blob", asset.assetId)
         val blobState = asset.storageState.toBlobState()
         val blob = MediaBlobEntity(
             blobId = blobId,
@@ -316,28 +332,36 @@ class GenMediaRepository(
                     ordinal = 0,
                 )
             }
-        val sourcePaths = asset.sourcePaths
-            ?.lineSequence()
-            ?.map(String::trim)
-            ?.filter(String::isNotEmpty)
-            ?.distinct()
-            ?.toList()
-            .orEmpty()
-        var referenceOrdinal = 0
-        sourcePaths.forEach { sourcePath ->
-            val sourceAssetId = dao.getByPath(sourcePath)?.assetId
-            if (sourceAssetId != null && sourceAssetId != asset.assetId) {
+        val lineageInputs = referenceInputs.ifEmpty {
+            asset.sourcePaths
+                ?.lineSequence()
+                ?.map(String::trim)
+                ?.filter(String::isNotEmpty)
+                ?.map { sourcePath -> MediaAssetReferenceInput(sourcePath = sourcePath) }
+                ?.toList()
+                .orEmpty()
+        }
+        val relatedAssets = mutableSetOf<String>()
+        lineageInputs.forEachIndexed { ordinal, input ->
+            val sourceAssetId = input.assetId
+                ?.let { candidate -> dao.getByAssetId(candidate)?.assetId }
+                ?: input.sourcePath?.let { sourcePath -> dao.getByPath(sourcePath)?.assetId }
+            if (
+                sourceAssetId != null &&
+                sourceAssetId != asset.assetId &&
+                relatedAssets.add(sourceAssetId)
+            ) {
                 relations += relation(
                     asset = asset,
                     relatedAssetId = sourceAssetId,
                     kind = MediaV2Values.RELATION_REFERENCE_INPUT,
-                    ordinal = referenceOrdinal++,
+                    ordinal = ordinal,
                 )
             }
         }
         val reference = asset.toLegacyMessageReference()
-        val journals = if (includeMigrationJournal) {
-            buildList {
+        val journals = buildList {
+            if (includeMigrationJournal) {
                 add(
                     migrationJournal(
                         scopeKind = "asset",
@@ -349,20 +373,6 @@ class GenMediaRepository(
                             MediaV2Values.JOURNAL_COMPLETE
                         },
                         detail = if (verifiedSha256 == null) "sha256_verification_required" else null,
-                        updatedAt = asset.updatedAt,
-                    ),
-                )
-                add(
-                    migrationJournal(
-                        scopeKind = "asset",
-                        scopeKey = asset.assetId,
-                        stage = MediaV2Values.STAGE_REFERENCE_BACKFILL,
-                        state = if (reference == null) {
-                            MediaV2Values.JOURNAL_PENDING
-                        } else {
-                            MediaV2Values.JOURNAL_COMPLETE
-                        },
-                        detail = if (reference == null) "message_scan_required" else null,
                         updatedAt = asset.updatedAt,
                     ),
                 )
@@ -379,8 +389,24 @@ class GenMediaRepository(
                     )
                 }
             }
-        } else {
-            emptyList()
+            add(
+                migrationJournal(
+                    scopeKind = "asset",
+                    scopeKey = asset.assetId,
+                    stage = MediaV2Values.STAGE_REFERENCE_BACKFILL,
+                    state = if (reference?.hasConcreteMessageOwner() == true) {
+                        MediaV2Values.JOURNAL_COMPLETE
+                    } else {
+                        MediaV2Values.JOURNAL_PENDING
+                    },
+                    detail = if (reference?.hasConcreteMessageOwner() == true) {
+                        null
+                    } else {
+                        "message_scan_required"
+                    },
+                    updatedAt = asset.updatedAt,
+                ),
+            )
         }
         return MediaAssetGraphWrite(
             managedFile = managedFile,
@@ -391,6 +417,7 @@ class GenMediaRepository(
             relations = relations,
             reference = reference,
             journals = journals,
+            expectedAssetUpdatedAt = expectedAssetUpdatedAt,
         )
     }
 
@@ -434,6 +461,9 @@ class GenMediaRepository(
         )
     }
 
+    private fun MessageMediaRefEntity.hasConcreteMessageOwner(): Boolean =
+        !messageId.isNullOrBlank() && !partId.isNullOrBlank()
+
     private fun migrationJournal(
         scopeKind: String,
         scopeKey: String,
@@ -466,7 +496,19 @@ data class GeneratedMediaAssetRegistration(
     val toolCallId: String? = null,
     val parentAssetId: String? = null,
     val sourcePaths: List<String> = emptyList(),
+    val referenceInputs: List<MediaAssetReferenceInput> = emptyList(),
 )
+
+data class MediaAssetReferenceInput(
+    val assetId: String? = null,
+    val sourcePath: String? = null,
+) {
+    init {
+        require(!assetId.isNullOrBlank() || !sourcePath.isNullOrBlank()) {
+            "A media reference input requires an asset id or managed source path"
+        }
+    }
+}
 
 object MediaAssetIds {
     /** Deterministic across process recovery without coupling identity to a mutable path. */
