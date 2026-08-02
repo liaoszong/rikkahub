@@ -29,10 +29,13 @@ import kotlinx.serialization.json.putJsonArray
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.TokenUsage
+import me.rerere.ai.model.ApiSurface
+import me.rerere.ai.model.CapabilityMedia
+import me.rerere.ai.model.ModelFeature
+import me.rerere.ai.model.effectiveCapabilitySnapshot
 import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
-import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderSetting
@@ -270,11 +273,11 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                         return@mapNotNull null
                     }
 
-                    Model(
+                    ModelRegistry.enrichCapabilities(Model(
                         modelId = modelObject["name"]!!.jsonPrimitive.content.substringAfter("/"),
                         displayName = modelObject["displayName"]!!.jsonPrimitive.content,
                         type = if ("generateContent" in supportedGenerationMethods) ModelType.CHAT else ModelType.EMBEDDING,
-                    )
+                    ))
                 }
             } else {
                 emptyList()
@@ -286,7 +289,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         messages: List<UIMessage>,
         params: TextGenerationParams,
     ): MessageChunk = withContext(Dispatchers.IO) {
-        val requestBody = buildCompletionRequestBody(messages, params)
+        val requestBody = buildCompletionRequestBody(providerSetting, messages, params)
 
         val url = buildUrl(
             providerSetting = providerSetting,
@@ -342,7 +345,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         messages: List<UIMessage>,
         params: TextGenerationParams,
     ): Flow<MessageChunk> = callbackFlow {
-        val requestBody = buildCompletionRequestBody(messages, params)
+        val requestBody = buildCompletionRequestBody(providerSetting, messages, params)
 
         val url = buildUrl(
             providerSetting = providerSetting,
@@ -469,12 +472,17 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
     }.buffer(Channel.UNLIMITED)
 
     private fun buildCompletionRequestBody(
+        providerSetting: ProviderSetting.Google,
         messages: List<UIMessage>,
         params: TextGenerationParams
     ): JsonObject = buildJsonObject {
+        val effectiveCapabilities = params.model.effectiveCapabilitySnapshot(providerSetting)
+        require(ApiSurface.GENERATE_CONTENT in effectiveCapabilities.apiSurfaces) {
+            "Model ${params.model.modelId} does not declare Gemini generateContent"
+        }
         // System message if available
         val systemMessage = messages.firstOrNull { it.role == MessageRole.SYSTEM }
-        if (systemMessage != null && !params.model.outputModalities.contains(Modality.IMAGE)) {
+        if (systemMessage != null && CapabilityMedia.IMAGE !in effectiveCapabilities.outputMedia) {
             put("systemInstruction", buildJsonObject {
                 putJsonArray("parts") {
                     add(buildJsonObject {
@@ -492,13 +500,13 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             if (params.temperature != null) put("temperature", params.temperature)
             if (params.topP != null) put("topP", params.topP)
             if (params.maxTokens != null) put("maxOutputTokens", params.maxTokens)
-            if (params.model.outputModalities.contains(Modality.IMAGE)) {
+            if (CapabilityMedia.IMAGE in effectiveCapabilities.outputMedia) {
                 put("responseModalities", buildJsonArray {
                     add(JsonPrimitive("TEXT"))
                     add(JsonPrimitive("IMAGE"))
                 })
             }
-            if (params.model.abilities.contains(ModelAbility.REASONING)) {
+            if (ModelFeature.REASONING in effectiveCapabilities.features) {
                 put("thinkingConfig", buildJsonObject {
                     put("includeThoughts", true)
 
@@ -542,7 +550,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         // Function declarations and provider built-ins share Gemini's single `tools` array.
         // Building it once prevents a later built-in-tools write from silently replacing functions.
         val tools = buildJsonArray {
-            if (params.tools.isNotEmpty() && params.model.abilities.contains(ModelAbility.TOOL)) {
+            if (params.tools.isNotEmpty() && ModelFeature.TOOL_CALLING in effectiveCapabilities.features) {
                 add(buildJsonObject {
                     put("functionDeclarations", buildJsonArray {
                         params.tools.forEach { tool ->
@@ -569,6 +577,13 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 })
             }
             params.model.tools.forEach { builtInTool ->
+                val supported = when (builtInTool) {
+                    BuiltInTools.Search -> ModelFeature.WEB_SEARCH in effectiveCapabilities.features
+                    BuiltInTools.UrlContext -> ModelFeature.URL_CONTEXT in effectiveCapabilities.features
+                    BuiltInTools.ImageGeneration ->
+                        ModelFeature.IMAGE_GENERATION in effectiveCapabilities.features
+                }
+                if (!supported) return@forEach
                 when (builtInTool) {
                     BuiltInTools.Search -> {
                         add(buildJsonObject {

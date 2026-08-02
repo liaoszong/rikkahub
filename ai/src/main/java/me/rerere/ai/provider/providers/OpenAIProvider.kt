@@ -14,6 +14,10 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import me.rerere.ai.model.ApiSurface
+import me.rerere.ai.model.ModelFeature
+import me.rerere.ai.model.effectiveCapabilitySnapshot
+import me.rerere.ai.model.supports
 import me.rerere.ai.provider.EmbeddingGenerationParams
 import me.rerere.ai.provider.EmbeddingGenerationResult
 import me.rerere.ai.provider.ImageEditParams
@@ -24,6 +28,7 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.provider.providers.openai.ChatCompletionsAPI
 import me.rerere.ai.provider.providers.openai.ResponseAPI
+import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.UIMessage
@@ -82,10 +87,10 @@ class OpenAIProvider(
                 val modelObj = modelJson.jsonObject
                 val id = modelObj["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
 
-                Model(
+                ModelRegistry.enrichCapabilities(Model(
                     modelId = id,
                     displayName = id,
-                )
+                ))
             }
         }
 
@@ -125,7 +130,7 @@ class OpenAIProvider(
         providerSetting: ProviderSetting.OpenAI,
         messages: List<UIMessage>,
         params: TextGenerationParams
-    ): Flow<MessageChunk> = if (providerSetting.useResponseApi) {
+    ): Flow<MessageChunk> = if (shouldUseResponsesApi(providerSetting, params.model)) {
         responseAPI.streamText(
             providerSetting = providerSetting,
             messages = messages,
@@ -143,7 +148,7 @@ class OpenAIProvider(
         providerSetting: ProviderSetting.OpenAI,
         messages: List<UIMessage>,
         params: TextGenerationParams
-    ): MessageChunk = if (providerSetting.useResponseApi) {
+    ): MessageChunk = if (shouldUseResponsesApi(providerSetting, params.model)) {
         responseAPI.generateText(
             providerSetting = providerSetting,
             messages = messages,
@@ -161,6 +166,9 @@ class OpenAIProvider(
         providerSetting: ProviderSetting.OpenAI,
         params: EmbeddingGenerationParams
     ): EmbeddingGenerationResult = withContext(Dispatchers.IO) {
+        require(params.model.effectiveCapabilitySnapshot(providerSetting).supports(ApiSurface.EMBEDDINGS)) {
+            "Model ${params.model.modelId} does not declare the embeddings API surface"
+        }
         require(params.input.isNotEmpty()) { "Embedding input cannot be empty" }
 
         val requestBody = json.encodeToString(
@@ -218,6 +226,13 @@ class OpenAIProvider(
         require(providerSetting is ProviderSetting.OpenAI) {
             "Expected OpenAI provider setting"
         }
+        val capabilities = params.model.effectiveCapabilitySnapshot(providerSetting)
+        require(
+            capabilities.supports(ModelFeature.IMAGE_GENERATION) &&
+                capabilities.supports(ApiSurface.IMAGE_GENERATIONS)
+        ) {
+            "Model ${params.model.modelId} does not declare OpenAI image generation"
+        }
 
         val requestBody = json.encodeToString(
             buildJsonObject {
@@ -270,6 +285,13 @@ class OpenAIProvider(
     ): Flow<ImageGenerationItem> = flow {
         require(providerSetting is ProviderSetting.OpenAI) {
             "Expected OpenAI provider setting"
+        }
+        val capabilities = params.model.effectiveCapabilitySnapshot(providerSetting)
+        require(
+            capabilities.supports(ModelFeature.IMAGE_EDITING) &&
+                capabilities.supports(ApiSurface.IMAGE_EDITS)
+        ) {
+            "Model ${params.model.modelId} does not declare OpenAI image editing"
         }
         require(params.images.isNotEmpty()) {
             "At least one image is required"
@@ -332,6 +354,25 @@ class OpenAIProvider(
         }
 
         items.forEach { emit(it) }
+    }
+
+    private fun shouldUseResponsesApi(
+        providerSetting: ProviderSetting.OpenAI,
+        model: Model,
+    ): Boolean {
+        val capabilities = model.effectiveCapabilitySnapshot(providerSetting)
+        val supportsResponses = capabilities.supports(ApiSurface.RESPONSES)
+        val supportsChatCompletions = capabilities.supports(ApiSurface.CHAT_COMPLETIONS)
+        return when {
+            providerSetting.useResponseApi && supportsResponses -> true
+            !providerSetting.useResponseApi && supportsChatCompletions -> false
+            supportsResponses && !supportsChatCompletions -> true
+            supportsChatCompletions && !supportsResponses -> false
+            else -> error(
+                "Model ${model.modelId} does not declare a usable OpenAI text API surface: " +
+                    capabilities.apiSurfaces
+            )
+        }
     }
 
     private suspend fun parseImageResponse(

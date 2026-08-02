@@ -2,6 +2,8 @@ package me.rerere.ai.provider
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import me.rerere.ai.model.CapabilityOverride
+import me.rerere.ai.model.CapabilitySnapshot
 import kotlin.uuid.Uuid
 
 @Serializable
@@ -17,6 +19,14 @@ data class Model(
     val abilities: List<ModelAbility> = emptyList(),
     val tools: Set<BuiltInTools> = emptySet(),
     val providerOverwrite: ProviderSetting? = null,
+    /**
+     * Provider-neutral declaration captured from a registry or future capability probe.
+     * Null keeps old persisted models compatible and lets the resolver derive a snapshot from
+     * [type], [inputModalities], [outputModalities], [abilities], and [tools].
+     */
+    val declaredCapabilities: CapabilitySnapshot? = null,
+    /** Explicit user correction applied after registry and provider declarations. */
+    val capabilityOverride: CapabilityOverride? = null,
 )
 
 @Serializable

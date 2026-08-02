@@ -2,10 +2,12 @@ package me.rerere.rikkahub.data.ai.tools.local
 
 import androidx.core.net.toUri
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
@@ -30,15 +32,23 @@ import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.datastore.resolveImageGenerationModel
 import me.rerere.rikkahub.data.files.FileFolders
 import me.rerere.rikkahub.data.files.FilesManager
+import me.rerere.rikkahub.data.db.entity.MediaAssetEntity
 import me.rerere.rikkahub.data.imggen.ImageGenerationGateway
 import me.rerere.rikkahub.data.imggen.ImageGenerationExecution
 import me.rerere.rikkahub.data.imggen.ImageGenerationExecutionEvent
+import me.rerere.rikkahub.data.imggen.ImageGenerationException
+import me.rerere.rikkahub.data.imggen.ImageGenerationFailureKind
 import me.rerere.rikkahub.data.imggen.ImageGenerationRequest
 import me.rerere.rikkahub.data.imggen.ImageGenerationTaskExecutor
+import me.rerere.rikkahub.data.imggen.ChatImageGenerationTaskController
+import me.rerere.rikkahub.data.imggen.ChatImageGenerationTaskRecord
 import me.rerere.rikkahub.data.imggen.ChatImageGenerationSlot
 import me.rerere.rikkahub.data.imggen.ChatImageGenerationState
 import me.rerere.rikkahub.data.imggen.ChatImageSlotStatus
 import me.rerere.rikkahub.data.imggen.toStatusPart
+import me.rerere.rikkahub.data.repository.GeneratedMediaAssetRegistration
+import me.rerere.rikkahub.data.repository.MediaAssetIds
+import me.rerere.rikkahub.data.repository.MediaAssetRepository
 import java.io.File
 import java.util.UUID
 import kotlin.io.encoding.Base64
@@ -48,6 +58,8 @@ internal fun buildImageGenerationTool(
     settingsStore: SettingsStore,
     gateway: ImageGenerationGateway,
     filesManager: FilesManager,
+    chatImageTaskController: ChatImageGenerationTaskController,
+    mediaAssetRepository: MediaAssetRepository,
 ): Tool = Tool(
     name = "generate_image",
     description = """
@@ -106,6 +118,8 @@ internal fun buildImageGenerationTool(
             settingsStore = settingsStore,
             gateway = gateway,
             filesManager = filesManager,
+            chatImageTaskController = chatImageTaskController,
+            mediaAssetRepository = mediaAssetRepository,
         )
     },
     executeWithContext = { input, context ->
@@ -115,6 +129,8 @@ internal fun buildImageGenerationTool(
             settingsStore = settingsStore,
             gateway = gateway,
             filesManager = filesManager,
+            chatImageTaskController = chatImageTaskController,
+            mediaAssetRepository = mediaAssetRepository,
         )
     },
 )
@@ -125,6 +141,8 @@ private suspend fun executeImageGeneration(
     settingsStore: SettingsStore,
     gateway: ImageGenerationGateway,
     filesManager: FilesManager,
+    chatImageTaskController: ChatImageGenerationTaskController,
+    mediaAssetRepository: MediaAssetRepository,
 ): List<UIMessagePart> {
         val arguments = input.jsonObject
         val prompt = arguments["prompt"]?.jsonPrimitive?.contentOrNull?.trim()
@@ -156,9 +174,27 @@ private suspend fun executeImageGeneration(
         }
 
         val startedAt = System.currentTimeMillis()
-        val requestId = context?.toolCallId?.takeIf(String::isNotBlank)
+        val requestId = context?.executionRequestId?.takeIf(String::isNotBlank)
+            ?: context?.toolCallId?.takeIf(String::isNotBlank)
             ?: UUID.randomUUID().toString()
         val attempt = 1
+        val providerId = model.findProvider(settings.providers)?.id?.toString()
+        val reservedAssetIds = List(count) { index ->
+            MediaAssetIds.forChatToolOutput(requestId, index)
+        }
+        val referencedAssetId = selectedReferences.singleOrNull()?.assetId
+        val parentAssetId = if (
+            referencedAssetId != null && mediaAssetRepository.getAsset(referencedAssetId) != null
+        ) {
+            referencedAssetId
+        } else {
+            null
+        }
+        val assetOrigin = if (referencePaths.isEmpty()) {
+            MediaAssetEntity.ORIGIN_AI_GENERATED
+        } else {
+            MediaAssetEntity.ORIGIN_AI_EDITED
+        }
         val slots = MutableList(count) { index ->
             ChatImageGenerationSlot(
                 index = index,
@@ -168,7 +204,11 @@ private suspend fun executeImageGeneration(
             )
         }
         val slotImages = MutableList<UIMessagePart.Image?>(count) { null }
+        val committedAssetIds = MutableList<String?>(count) { null }
         val stateMutex = Mutex()
+        val durableTaskId = context?.contextId
+            ?.takeIf(String::isNotBlank)
+            ?.let { requestId }
 
         suspend fun snapshot(finishedAt: Long? = null): ChatImageGenerationState = stateMutex.withLock {
             ChatImageGenerationState(
@@ -184,137 +224,236 @@ private suspend fun executeImageGeneration(
             )
         }
 
-        context?.emitProgress(listOf(snapshot().toStatusPart()))
-
-        val semaphore = Semaphore(2)
-        val taskExecutor = ImageGenerationTaskExecutor(gateway)
-        coroutineScope {
-            val updates = Channel<Unit>(Channel.UNLIMITED)
-            val jobs = slots.indices.map { index ->
-                async {
-                    semaphore.withPermit {
-                        val slotStartedAt = System.currentTimeMillis()
-                        stateMutex.withLock {
-                            slots[index] = slots[index].copy(
-                                status = ChatImageSlotStatus.RUNNING,
-                                startedAtEpochMillis = slotStartedAt,
-                            )
-                        }
-                        updates.trySend(Unit)
-
-                        try {
-                            taskExecutor.execute(
-                                execution = ImageGenerationExecution(
-                                    requestId = slots[index].requestId,
-                                    attempt = slots[index].attempt,
-                                    request = ImageGenerationRequest(
-                                        prompt = prompt,
-                                        modelId = model.id.toString(),
-                                        modelName = model.displayName,
-                                        providerId = model.findProvider(settings.providers)?.id?.toString(),
-                                        size = size,
-                                        numberOfImages = 1,
-                                        referenceImages = referencePaths,
-                                    ),
-                                ),
-                            ) { event ->
-                                when (event) {
-                                    is ImageGenerationExecutionEvent.Running -> Unit
-                                    is ImageGenerationExecutionEvent.Preview -> Unit
-                                    is ImageGenerationExecutionEvent.FinalImage -> {
-                                        val image = saveToolImage(
-                                            filesManager = filesManager,
-                                            base64Data = event.item.data,
-                                            mimeType = event.item.mimeType,
-                                            index = index,
-                                        )
-                                        val finishedAt = System.currentTimeMillis()
-                                        stateMutex.withLock {
-                                            slotImages[index] = image
-                                            slots[index] = slots[index].copy(
-                                                status = ChatImageSlotStatus.SUCCEEDED,
-                                                imageUrl = image.url,
-                                                finishedAtEpochMillis = finishedAt,
-                                            )
-                                        }
-                                    }
-                                    is ImageGenerationExecutionEvent.Succeeded -> Unit
-                                    is ImageGenerationExecutionEvent.Failed -> stateMutex.withLock {
-                                        slots[index] = slots[index].copy(
-                                            status = ChatImageSlotStatus.FAILED,
-                                            error = event.failure.message.take(160),
-                                            failureKind = event.failure.kind,
-                                            finishedAtEpochMillis = System.currentTimeMillis(),
-                                        )
-                                    }
-                                    is ImageGenerationExecutionEvent.Cancelled -> stateMutex.withLock {
-                                        slots[index] = slots[index].copy(
-                                            status = ChatImageSlotStatus.CANCELLED,
-                                            finishedAtEpochMillis = System.currentTimeMillis(),
-                                        )
-                                    }
-                                }
-                            }
-                        } catch (cancelled: CancellationException) {
-                            val finishedAt = System.currentTimeMillis()
-                            stateMutex.withLock {
-                                slots[index] = slots[index].copy(
-                                    status = ChatImageSlotStatus.CANCELLED,
-                                    finishedAtEpochMillis = finishedAt,
-                                )
-                            }
-                            throw cancelled
-                        } catch (error: Throwable) {
-                            val finishedAt = System.currentTimeMillis()
-                            stateMutex.withLock {
-                                slots[index] = slots[index].copy(
-                                    status = ChatImageSlotStatus.FAILED,
-                                    error = error.message?.take(160) ?: error.javaClass.simpleName,
-                                    failureKind = me.rerere.rikkahub.data.imggen.ImageGenerationFailureKind.UNKNOWN,
-                                    finishedAtEpochMillis = finishedAt,
-                                )
-                            }
-                        } finally {
-                            updates.trySend(Unit)
-                        }
-                    }
-                }
-            }
-            launch {
-                jobs.awaitAll()
-                updates.close()
-            }
-            // Flow emissions must remain on the owning coroutine. Workers only signal that
-            // their slot changed; this parent serializes snapshots for progressive rendering.
-            for (ignored in updates) {
-                context?.emitProgress(
-                    buildList {
-                        add(snapshot().toStatusPart())
-                        stateMutex.withLock { slotImages.filterNotNull().forEach(::add) }
+        try {
+            if (durableTaskId != null) {
+                val ownerJob = currentCoroutineContext()[Job]
+                chatImageTaskController.begin(
+                    task = ChatImageGenerationTaskRecord(
+                        taskId = durableTaskId,
+                        conversationId = context.contextId.orEmpty(),
+                        toolCallId = context.toolCallId.ifBlank { requestId },
+                        requestId = requestId,
+                        attempt = attempt,
+                        modelId = model.id.toString(),
+                        modelName = model.displayName,
+                        providerId = providerId,
+                        prompt = prompt,
+                        mediaOrigin = assetOrigin,
+                        parentAssetId = parentAssetId,
+                        requestedImageCount = count,
+                        reservedOutputAssetIds = reservedAssetIds,
+                        startedAtEpochMillis = startedAt,
+                    ),
+                    cancelExecution = {
+                        ownerJob?.cancel(CancellationException("Image generation cancelled from notification"))
                     },
                 )
             }
-        }
 
-        val completedAt = System.currentTimeMillis()
-        val finalState = snapshot(finishedAt = completedAt)
-        return buildList {
-            add(finalState.toStatusPart())
-            slotImages.filterNotNull().forEach(::add)
+            context?.emitProgress(listOf(snapshot().toStatusPart()))
+
+            val semaphore = Semaphore(2)
+            val taskExecutor = ImageGenerationTaskExecutor(gateway)
+            coroutineScope {
+                val updates = Channel<Unit>(Channel.UNLIMITED)
+                val jobs = slots.indices.map { index ->
+                    async {
+                        semaphore.withPermit {
+                            val slotStartedAt = System.currentTimeMillis()
+                            stateMutex.withLock {
+                                slots[index] = slots[index].copy(
+                                    status = ChatImageSlotStatus.RUNNING,
+                                    startedAtEpochMillis = slotStartedAt,
+                                )
+                            }
+                            updates.trySend(Unit)
+
+                            try {
+                                taskExecutor.execute(
+                                    execution = ImageGenerationExecution(
+                                        requestId = slots[index].requestId,
+                                        attempt = slots[index].attempt,
+                                        request = ImageGenerationRequest(
+                                            prompt = prompt,
+                                            modelId = model.id.toString(),
+                                            modelName = model.displayName,
+                                            providerId = providerId,
+                                            size = size,
+                                            numberOfImages = 1,
+                                            referenceImages = referencePaths,
+                                        ),
+                                    ),
+                                ) { event ->
+                                    when (event) {
+                                        is ImageGenerationExecutionEvent.Running -> Unit
+                                        is ImageGenerationExecutionEvent.Preview -> Unit
+                                        is ImageGenerationExecutionEvent.FinalImage -> {
+                                            val image = saveToolImage(
+                                                filesManager = filesManager,
+                                                mediaAssetRepository = mediaAssetRepository,
+                                                base64Data = event.item.data,
+                                                mimeType = event.item.mimeType,
+                                                index = index,
+                                                registration = GeneratedMediaAssetRegistration(
+                                                    assetId = reservedAssetIds[index],
+                                                    origin = assetOrigin,
+                                                    modelId = model.id.toString(),
+                                                    modelDisplayName = model.displayName,
+                                                    providerId = providerId,
+                                                    prompt = prompt,
+                                                    createdAt = startedAt,
+                                                    conversationId = context?.contextId,
+                                                    toolCallId = context?.toolCallId
+                                                        ?.takeIf(String::isNotBlank)
+                                                        ?: requestId,
+                                                    parentAssetId = parentAssetId,
+                                                ),
+                                            )
+                                            val finishedAt = System.currentTimeMillis()
+                                            stateMutex.withLock {
+                                                slotImages[index] = image
+                                                committedAssetIds[index] = image.assetId
+                                                slots[index] = slots[index].copy(
+                                                    status = ChatImageSlotStatus.SUCCEEDED,
+                                                    imageUrl = image.url,
+                                                    finishedAtEpochMillis = finishedAt,
+                                                )
+                                            }
+                                        }
+                                        is ImageGenerationExecutionEvent.Succeeded -> Unit
+                                        is ImageGenerationExecutionEvent.Failed -> stateMutex.withLock {
+                                            slots[index] = slots[index].copy(
+                                                status = ChatImageSlotStatus.FAILED,
+                                                error = event.failure.message.take(160),
+                                                failureKind = event.failure.kind,
+                                                finishedAtEpochMillis = System.currentTimeMillis(),
+                                            )
+                                        }
+                                        is ImageGenerationExecutionEvent.Cancelled -> stateMutex.withLock {
+                                            slots[index] = slots[index].copy(
+                                                status = ChatImageSlotStatus.CANCELLED,
+                                                finishedAtEpochMillis = System.currentTimeMillis(),
+                                            )
+                                        }
+                                    }
+                                }
+                            } catch (cancelled: CancellationException) {
+                                val finishedAt = System.currentTimeMillis()
+                                stateMutex.withLock {
+                                    slots[index] = slots[index].copy(
+                                        status = ChatImageSlotStatus.CANCELLED,
+                                        finishedAtEpochMillis = finishedAt,
+                                    )
+                                }
+                                throw cancelled
+                            } catch (error: Throwable) {
+                                val finishedAt = System.currentTimeMillis()
+                                stateMutex.withLock {
+                                    slots[index] = slots[index].copy(
+                                        status = ChatImageSlotStatus.FAILED,
+                                        error = error.message?.take(160) ?: error.javaClass.simpleName,
+                                        failureKind = ImageGenerationFailureKind.UNKNOWN,
+                                        finishedAtEpochMillis = finishedAt,
+                                    )
+                                }
+                            } finally {
+                                updates.trySend(Unit)
+                            }
+                        }
+                    }
+                }
+                launch {
+                    jobs.awaitAll()
+                    updates.close()
+                }
+                // Flow emissions must remain on the owning coroutine. Workers only signal that
+                // their slot changed; this parent serializes snapshots for progressive rendering.
+                for (ignored in updates) {
+                    val progressState = snapshot()
+                    durableTaskId?.let { taskId ->
+                        chatImageTaskController.updateProgress(
+                            taskId = taskId,
+                            completedImageCount = progressState.succeededCount,
+                            failedImageCount = progressState.failedCount,
+                            outputAssetIds = stateMutex.withLock { committedAssetIds.filterNotNull() },
+                        )
+                    }
+                    context?.emitProgress(
+                        buildList {
+                            add(progressState.toStatusPart())
+                            stateMutex.withLock { slotImages.filterNotNull().forEach(::add) }
+                        },
+                    )
+                }
+            }
+
+            val completedAt = System.currentTimeMillis()
+            val finalState = snapshot(finishedAt = completedAt)
+            durableTaskId?.let { taskId ->
+                when {
+                    finalState.succeededCount > 0 -> chatImageTaskController.complete(taskId)
+                    finalState.slots.all { it.status == ChatImageSlotStatus.CANCELLED } -> {
+                        chatImageTaskController.cancelled(taskId)
+                    }
+                    else -> {
+                        val failure = finalState.slots.firstOrNull { it.failureKind != null }
+                        chatImageTaskController.fail(
+                            taskId = taskId,
+                            errorKind = failure?.failureKind ?: ImageGenerationFailureKind.UNKNOWN,
+                            errorMessage = failure?.error ?: "Image generation did not return an image",
+                        )
+                    }
+                }
+            }
+            return buildList {
+                add(finalState.toStatusPart())
+                slotImages.filterNotNull().forEach(::add)
+            }
+        } catch (cancelled: CancellationException) {
+            durableTaskId?.let(chatImageTaskController::cancelled)
+            throw cancelled
+        } catch (error: Throwable) {
+            durableTaskId?.let { taskId ->
+                chatImageTaskController.fail(
+                    taskId = taskId,
+                    errorKind = (error as? ImageGenerationException)?.kind ?: ImageGenerationFailureKind.UNKNOWN,
+                    errorMessage = error.message ?: "Image generation failed",
+                )
+            }
+            throw error
         }
 }
 
-private data class ReferenceImage(val id: String, val url: String, val role: MessageRole)
+private data class ReferenceImage(
+    val id: String,
+    val url: String,
+    val role: MessageRole,
+    val assetId: String? = null,
+)
 
 private fun buildReferenceImageCatalog(messages: List<UIMessage>): List<ReferenceImage> = buildList {
     messages.forEachIndexed { messageIndex, message ->
         message.parts.forEachIndexed { partIndex, part ->
             when (part) {
-                is UIMessagePart.Image -> add(ReferenceImage("msg-$messageIndex-img-$partIndex", part.url, message.role))
+                is UIMessagePart.Image -> add(
+                    ReferenceImage(
+                        id = "msg-$messageIndex-img-$partIndex",
+                        url = part.url,
+                        role = message.role,
+                        assetId = part.assetId,
+                    ),
+                )
                 is UIMessagePart.Tool -> (part.output + part.progress)
                     .filterIsInstance<UIMessagePart.Image>()
                     .forEachIndexed { imageIndex, image ->
-                        add(ReferenceImage("msg-$messageIndex-tool-$partIndex-img-$imageIndex", image.url, message.role))
+                        add(
+                            ReferenceImage(
+                                id = "msg-$messageIndex-tool-$partIndex-img-$imageIndex",
+                                url = image.url,
+                                role = message.role,
+                                assetId = image.assetId,
+                            ),
+                        )
                     }
                 else -> Unit
             }
@@ -327,7 +466,12 @@ private fun latestUserReferenceImages(messages: List<UIMessage>): List<Reference
     if (messageIndex < 0) return emptyList()
     return messages[messageIndex].parts.mapIndexedNotNull { partIndex, part ->
         (part as? UIMessagePart.Image)?.let {
-            ReferenceImage("msg-$messageIndex-img-$partIndex", it.url, MessageRole.USER)
+            ReferenceImage(
+                id = "msg-$messageIndex-img-$partIndex",
+                url = it.url,
+                role = MessageRole.USER,
+                assetId = it.assetId,
+            )
         }
     }
 }
@@ -343,9 +487,11 @@ private fun String.toLocalImagePath(): String? = runCatching {
 @OptIn(ExperimentalEncodingApi::class)
 private suspend fun saveToolImage(
     filesManager: FilesManager,
+    mediaAssetRepository: MediaAssetRepository,
     base64Data: String,
     mimeType: String,
     index: Int,
+    registration: GeneratedMediaAssetRegistration,
 ): UIMessagePart.Image {
     val normalizedMime = mimeType.ifBlank { "image/png" }
     val extension = when (normalizedMime.lowercase()) {
@@ -354,13 +500,40 @@ private suspend fun saveToolImage(
         else -> "png"
     }
     val rawData = base64Data.substringAfter("base64,", base64Data)
-    val managed = filesManager.saveManagedFromBytes(
-        // Final generated images are conversation assets. TOOL_OUTPUTS is an
-        // intentionally ephemeral workspace and is deleted on app startup.
-        folder = FileFolders.CHAT_GENERATED_IMAGES,
-        bytes = Base64.decode(rawData),
-        displayName = "generated_image_${index + 1}.$extension",
-        mimeType = normalizedMime,
+    val managed = try {
+        filesManager.saveManagedFromBytesWithIdentity(
+            // Final generated images are conversation assets. TOOL_OUTPUTS is an
+            // intentionally ephemeral workspace and is deleted on app startup.
+            folder = FileFolders.CHAT_GENERATED_IMAGES,
+            bytes = Base64.decode(rawData),
+            assetId = registration.assetId,
+            displayName = "generated_image_${index + 1}.$extension",
+            mimeType = normalizedMime,
+            createdAt = registration.createdAt,
+        )
+    } catch (error: Throwable) {
+        throw ImageGenerationException(
+            kind = ImageGenerationFailureKind.IMAGE_WRITE,
+            message = "The generated image could not be saved",
+            cause = error,
+        )
+    }
+    val file = filesManager.getFile(managed)
+    val asset = try {
+        mediaAssetRepository.registerGeneratedAsset(
+            managedFile = managed,
+            file = file,
+            registration = registration,
+        )
+    } catch (error: Throwable) {
+        throw ImageGenerationException(
+            kind = ImageGenerationFailureKind.DATABASE_WRITE,
+            message = "The generated image was saved but could not be registered in the image library",
+            cause = error,
+        )
+    }
+    return UIMessagePart.Image(
+        url = file.toUri().toString(),
+        assetId = asset.assetId,
     )
-    return UIMessagePart.Image(filesManager.getFile(managed).toUri().toString())
 }

@@ -91,6 +91,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dokar.sonner.ToastType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import me.rerere.ai.model.CapabilityMedia
+import me.rerere.ai.model.ModelFeature
+import me.rerere.ai.model.effectiveCapabilitySnapshot
+import me.rerere.ai.model.toLegacyModalities
+import me.rerere.ai.model.withFeatureCapabilities
+import me.rerere.ai.model.withInputMediaCapabilities
+import me.rerere.ai.model.withOutputMediaCapabilities
 import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
@@ -503,19 +510,16 @@ private fun ModelSettingsForm(
 ) {
     val pagerState = rememberPagerState { 3 }
     val scope = rememberCoroutineScope()
+    val effectiveCapabilities = model.effectiveCapabilitySnapshot(parentProvider)
 
     fun setModelId(id: String) {
-        val inputModality = ModelRegistry.MODEL_INPUT_MODALITIES.getData(id)
-        val outputModality = ModelRegistry.MODEL_OUTPUT_MODALITIES.getData(id)
-        val abilities = ModelRegistry.MODEL_ABILITIES.getData(id)
         onModelChange(
-            model.copy(
+            ModelRegistry.enrichCapabilities(model.copy(
                 modelId = id,
                 displayName = id,
-                inputModalities = inputModality,
-                outputModalities = outputModality,
-                abilities = abilities
-            )
+                declaredCapabilities = null,
+                capabilityOverride = null,
+            ))
         )
     }
 
@@ -607,21 +611,30 @@ private fun ModelSettingsForm(
 
                         ModelModalitySelector(
                             model = model,
-                            inputModalities = model.inputModalities,
+                            inputModalities = effectiveCapabilities.inputMedia.toLegacyModalities(),
                             onUpdateInputModalities = {
-                                onModelChange(model.copy(inputModalities = it))
+                                val media = effectiveCapabilities.inputMedia
+                                    .minus(LEGACY_CAPABILITY_MEDIA)
+                                    .plus(it.map(Modality::toCapabilityMedia))
+                                onModelChange(model.withInputMediaCapabilities(media))
                             },
-                            outputModalities = model.outputModalities,
+                            outputModalities = effectiveCapabilities.outputMedia.toLegacyModalities(),
                             onUpdateOutputModalities = {
-                                onModelChange(model.copy(outputModalities = it))
+                                val media = effectiveCapabilities.outputMedia
+                                    .minus(LEGACY_CAPABILITY_MEDIA)
+                                    .plus(it.map(Modality::toCapabilityMedia))
+                                onModelChange(model.withOutputMediaCapabilities(media))
                             }
                         )
 
                         if (model.type == ModelType.CHAT) {
                             ModalAbilitySelector(
-                                abilities = model.abilities,
+                                abilities = effectiveCapabilities.features.toLegacyAbilities(),
                                 onUpdateAbilities = {
-                                    onModelChange(model.copy(abilities = it))
+                                    val features = effectiveCapabilities.features
+                                        .minus(LEGACY_CAPABILITY_FEATURES)
+                                        .plus(it.map(ModelAbility::toCapabilityFeature))
+                                    onModelChange(model.withFeatureCapabilities(features))
                                 }
                             )
                         }
@@ -666,13 +679,46 @@ private fun ModelSettingsForm(
                     BuiltInToolsSettings(
                         tools = model.tools,
                         onUpdateTools = { tools ->
-                            onModelChange(model.copy(tools = tools))
+                            val toolFeatures = buildSet {
+                                if (BuiltInTools.Search in tools) add(ModelFeature.WEB_SEARCH)
+                                if (BuiltInTools.UrlContext in tools) add(ModelFeature.URL_CONTEXT)
+                                if (BuiltInTools.ImageGeneration in tools) add(ModelFeature.IMAGE_GENERATION)
+                            }
+                            val features = effectiveCapabilities.features
+                                .minus(CONFIGURABLE_TOOL_FEATURES)
+                                .plus(toolFeatures)
+                            onModelChange(
+                                model.copy(tools = tools).withFeatureCapabilities(features)
+                            )
                         }
                     )
                 }
             }
         }
     }
+}
+
+private val LEGACY_CAPABILITY_MEDIA = setOf(CapabilityMedia.TEXT, CapabilityMedia.IMAGE)
+private val LEGACY_CAPABILITY_FEATURES = setOf(ModelFeature.TOOL_CALLING, ModelFeature.REASONING)
+private val CONFIGURABLE_TOOL_FEATURES = setOf(
+    ModelFeature.WEB_SEARCH,
+    ModelFeature.URL_CONTEXT,
+    ModelFeature.IMAGE_GENERATION,
+)
+
+private fun Modality.toCapabilityMedia(): CapabilityMedia = when (this) {
+    Modality.TEXT -> CapabilityMedia.TEXT
+    Modality.IMAGE -> CapabilityMedia.IMAGE
+}
+
+private fun ModelAbility.toCapabilityFeature(): ModelFeature = when (this) {
+    ModelAbility.TOOL -> ModelFeature.TOOL_CALLING
+    ModelAbility.REASONING -> ModelFeature.REASONING
+}
+
+private fun Set<ModelFeature>.toLegacyAbilities(): List<ModelAbility> = buildList {
+    if (ModelFeature.TOOL_CALLING in this@toLegacyAbilities) add(ModelAbility.TOOL)
+    if (ModelFeature.REASONING in this@toLegacyAbilities) add(ModelAbility.REASONING)
 }
 
 @Composable
@@ -695,17 +741,9 @@ private fun AddModelButton(
         ModelPicker(
             models = models,
             selectedModels = selectedModels,
+            parentProvider = parentProvider,
             onModelSelected = { model ->
-                val inputModalities = ModelRegistry.MODEL_INPUT_MODALITIES.getData(model.modelId)
-                val outputModalities = ModelRegistry.MODEL_OUTPUT_MODALITIES.getData(model.modelId)
-                val abilities = ModelRegistry.MODEL_ABILITIES.getData(model.modelId)
-                onAddModel(
-                    model.copy(
-                        inputModalities = inputModalities,
-                        outputModalities = outputModalities,
-                        abilities = abilities
-                    )
-                )
+                onAddModel(ModelRegistry.enrichCapabilities(model))
             },
             onModelDeselected = { model ->
                 onRemoveModel(model)
@@ -716,11 +754,7 @@ private fun AddModelButton(
                         models = parentProvider.models + it.filter { model ->
                             parentProvider.models.none { existing -> existing.modelId == model.modelId }
                         }.map { model ->
-                            model.copy(
-                                inputModalities = ModelRegistry.MODEL_INPUT_MODALITIES.getData(model.modelId),
-                                outputModalities = ModelRegistry.MODEL_OUTPUT_MODALITIES.getData(model.modelId),
-                                abilities = ModelRegistry.MODEL_ABILITIES.getData(model.modelId)
-                            )
+                            ModelRegistry.enrichCapabilities(model)
                         }
                     )
                 )
@@ -840,6 +874,7 @@ private fun AddModelButton(
 private fun ModelPicker(
     models: List<Model>,
     selectedModels: List<Model>,
+    parentProvider: ProviderSetting,
     onModelSelected: (Model) -> Unit,
     onModelDeselected: (Model) -> Unit,
     onAllModelSelected: (List<Model>) -> Unit,
@@ -944,17 +979,15 @@ private fun ModelPicker(
                                         horizontalArrangement = Arrangement.spacedBy(2.dp)
                                     ) {
                                         val modelMeta = remember(it) {
-                                            it.copy(
-                                                inputModalities = ModelRegistry.MODEL_INPUT_MODALITIES.getData(it.modelId),
-                                                outputModalities = ModelRegistry.MODEL_OUTPUT_MODALITIES.getData(it.modelId),
-                                                abilities = ModelRegistry.MODEL_ABILITIES.getData(it.modelId),
-                                            )
+                                            ModelRegistry.enrichCapabilities(it)
                                         }
                                         ModelModalityTag(
                                             model = modelMeta,
+                                            providerSetting = parentProvider,
                                         )
                                         ModelAbilityTag(
                                             model = modelMeta,
+                                            providerSetting = parentProvider,
                                         )
                                     }
                                 }
@@ -1328,8 +1361,8 @@ private fun ModelCard(
                             }
                         }
                         ModelTypeTag(model = model)
-                        ModelModalityTag(model = model)
-                        ModelAbilityTag(model = model)
+                        ModelModalityTag(model = model, providerSetting = parentProvider)
+                        ModelAbilityTag(model = model, providerSetting = parentProvider)
                     }
                 }
 

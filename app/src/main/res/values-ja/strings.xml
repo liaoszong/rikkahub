@@ -285,7 +285,6 @@
   <string name="chat_page_export_success">%1$sにエクスポートしました</string>
   <string name="chat_page_history">チャット履歴</string>
   <string name="chat_page_menu_ai_translator">AI翻訳</string>
-  <string name="chat_page_menu_image_generation">画像生成</string>
   <string name="chat_page_message_count">%d件のメッセージ</string>
   <string name="chat_page_move_to_assistant">アシスタントに移動</string>
   <string name="chat_page_new_chat">新しいチャット</string>

@@ -51,7 +51,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Job
-import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.model.CapabilityMedia
+import me.rerere.ai.model.effectiveCapabilitySnapshot
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Camera01
 import me.rerere.hugeicons.stroke.Codesandbox
@@ -106,7 +107,9 @@ internal fun FilesPicker(
     onPickFile: () -> Unit,
 ) {
     val settings = LocalSettings.current
-    val provider = settings.getCurrentChatModel()?.findProvider(providers = settings.providers)
+    val model = settings.getCurrentChatModel()
+    val provider = model?.findProvider(providers = settings.providers)
+    val capabilities = model?.effectiveCapabilitySnapshot(provider)
     val navController = LocalNavController.current
     val workspaceRepository: WorkspaceRepository = koinInject()
     val workspaces by workspaceRepository.listFlow().collectAsState(initial = emptyList())
@@ -125,9 +128,11 @@ internal fun FilesPicker(
 
             ImagePickButton(onClick = onPickImage)
 
-            if (provider != null && provider is ProviderSetting.Google) {
+            if (capabilities?.inputMedia?.contains(CapabilityMedia.VIDEO) == true) {
                 VideoPickButton(onClick = onPickVideo)
+            }
 
+            if (capabilities?.inputMedia?.contains(CapabilityMedia.AUDIO) == true) {
                 AudioPickButton(onClick = onPickAudio)
             }
 

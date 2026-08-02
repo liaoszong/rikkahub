@@ -7,7 +7,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import me.rerere.ai.core.MessageRole
-import me.rerere.ai.provider.Modality
+import me.rerere.ai.model.CapabilityMedia
+import me.rerere.ai.model.effectiveCapabilitySnapshot
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.TextGenerationParams
@@ -48,7 +49,7 @@ object OcrTransformer : InputMessageTransformer, KoinComponent {
         ctx: TransformerContext,
         messages: List<UIMessage>,
     ): List<UIMessage> {
-        if (ctx.model.inputModalities.contains(Modality.IMAGE)) {
+        if (CapabilityMedia.IMAGE in ctx.model.effectiveCapabilitySnapshot().inputMedia) {
             return messages
         }
 

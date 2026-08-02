@@ -4,6 +4,9 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.core.ReasoningLevel
+import me.rerere.ai.model.CapabilityOverride
+import me.rerere.ai.model.CapabilitySetOverride
+import me.rerere.ai.model.ModelFeature
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ProviderSetting
@@ -78,10 +81,25 @@ class ClaudeProviderThinkingTest {
         }
     }
 
+    @Test
+    fun `capability override can disable reasoning request fields`() {
+        val request = buildRequest(
+            modelId = "claude-opus-4-8",
+            reasoningLevel = ReasoningLevel.HIGH,
+            capabilityOverride = CapabilityOverride(
+                features = CapabilitySetOverride(remove = setOf(ModelFeature.REASONING))
+            ),
+        )
+
+        assertNull(request["thinking"])
+        assertNull(request["output_config"])
+    }
+
     private fun buildRequest(
         modelId: String,
         reasoningLevel: ReasoningLevel,
         maxTokens: Int = 16_000,
+        capabilityOverride: CapabilityOverride? = null,
     ): JsonObject {
         val method = ClaudeProvider::class.java.getDeclaredMethod(
             "buildMessageRequest",
@@ -96,7 +114,11 @@ class ClaudeProviderThinkingTest {
             ProviderSetting.Claude(promptCaching = false),
             listOf(UIMessage.user("hello")),
             TextGenerationParams(
-                model = Model(modelId = modelId, abilities = listOf(ModelAbility.REASONING)),
+                model = Model(
+                    modelId = modelId,
+                    abilities = listOf(ModelAbility.REASONING),
+                    capabilityOverride = capabilityOverride,
+                ),
                 reasoningLevel = reasoningLevel,
                 maxTokens = maxTokens,
                 temperature = 0.7f,

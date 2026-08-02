@@ -61,9 +61,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
-import me.rerere.ai.provider.Modality
+import me.rerere.ai.model.CapabilityMedia
+import me.rerere.ai.model.ModelFeature
+import me.rerere.ai.model.effectiveCapabilitySnapshot
 import me.rerere.ai.provider.Model
-import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.hugeicons.HugeIcons
@@ -72,10 +73,13 @@ import me.rerere.hugeicons.stroke.Brain02
 import me.rerere.hugeicons.stroke.Cancel01
 import me.rerere.hugeicons.stroke.DragDropHorizontal
 import me.rerere.hugeicons.stroke.Favourite
+import me.rerere.hugeicons.stroke.Files02
 import me.rerere.hugeicons.stroke.Image03
+import me.rerere.hugeicons.stroke.MusicNote03
 import me.rerere.hugeicons.stroke.Search01
 import me.rerere.hugeicons.stroke.Text
 import me.rerere.hugeicons.stroke.Tools
+import me.rerere.hugeicons.stroke.Video01
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.data.datastore.SettingsStore
@@ -740,9 +744,9 @@ private fun ModelItem(
                     ) {
                         ModelTypeTag(model = model)
 
-                        ModelModalityTag(model = model)
+                        ModelModalityTag(model = model, providerSetting = providerSetting)
 
-                        ModelAbilityTag(model = model)
+                        ModelAbilityTag(model = model, providerSetting = providerSetting)
                     }
                 }
                 tail()
@@ -770,15 +774,19 @@ fun ModelTypeTag(model: Model) {
 }
 
 @Composable
-fun ModelModalityTag(model: Model) {
+fun ModelModalityTag(model: Model, providerSetting: ProviderSetting? = null) {
+    val capabilities = model.effectiveCapabilitySnapshot(providerSetting)
     Tag(
         type = TagType.SUCCESS
     ) {
-        model.inputModalities.fastForEach { modality ->
+        CapabilityMedia.entries.filter { it in capabilities.inputMedia }.fastForEach { modality ->
             Icon(
                 imageVector = when (modality) {
-                    Modality.TEXT -> HugeIcons.Text
-                    Modality.IMAGE -> HugeIcons.Image03
+                    CapabilityMedia.TEXT -> HugeIcons.Text
+                    CapabilityMedia.IMAGE -> HugeIcons.Image03
+                    CapabilityMedia.AUDIO -> HugeIcons.MusicNote03
+                    CapabilityMedia.VIDEO -> HugeIcons.Video01
+                    CapabilityMedia.DOCUMENT -> HugeIcons.Files02
                 },
                 contentDescription = null,
                 modifier = Modifier
@@ -791,11 +799,14 @@ fun ModelModalityTag(model: Model) {
             contentDescription = null,
             modifier = Modifier.size(LocalTextStyle.current.lineHeight.toDp())
         )
-        model.outputModalities.fastForEach { modality ->
+        CapabilityMedia.entries.filter { it in capabilities.outputMedia }.fastForEach { modality ->
             Icon(
                 imageVector = when (modality) {
-                    Modality.TEXT -> HugeIcons.Text
-                    Modality.IMAGE -> HugeIcons.Image03
+                    CapabilityMedia.TEXT -> HugeIcons.Text
+                    CapabilityMedia.IMAGE -> HugeIcons.Image03
+                    CapabilityMedia.AUDIO -> HugeIcons.MusicNote03
+                    CapabilityMedia.VIDEO -> HugeIcons.Video01
+                    CapabilityMedia.DOCUMENT -> HugeIcons.Files02
                 },
                 contentDescription = null,
                 modifier = Modifier
@@ -807,32 +818,29 @@ fun ModelModalityTag(model: Model) {
 }
 
 @Composable
-fun ModelAbilityTag(model: Model) {
-    model.abilities.fastForEach { ability ->
-        when (ability) {
-            ModelAbility.TOOL -> {
-                Tag(
-                    type = TagType.WARNING
-                ) {
-                    Icon(
-                        imageVector = HugeIcons.Tools,
-                        contentDescription = null,
-                        modifier = Modifier.size(LocalTextStyle.current.lineHeight.toDp())
-                    )
-                }
-            }
+fun ModelAbilityTag(model: Model, providerSetting: ProviderSetting? = null) {
+    val features = model.effectiveCapabilitySnapshot(providerSetting).features
+    if (ModelFeature.TOOL_CALLING in features) {
+        Tag(
+            type = TagType.WARNING
+        ) {
+            Icon(
+                imageVector = HugeIcons.Tools,
+                contentDescription = null,
+                modifier = Modifier.size(LocalTextStyle.current.lineHeight.toDp())
+            )
+        }
+    }
 
-            ModelAbility.REASONING -> {
-                Tag(
-                    type = TagType.INFO
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.deepthink),
-                        contentDescription = null,
-                        modifier = Modifier.size(LocalTextStyle.current.lineHeight.toDp()),
-                    )
-                }
-            }
+    if (ModelFeature.REASONING in features) {
+        Tag(
+            type = TagType.INFO
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.deepthink),
+                contentDescription = null,
+                modifier = Modifier.size(LocalTextStyle.current.lineHeight.toDp()),
+            )
         }
     }
 }

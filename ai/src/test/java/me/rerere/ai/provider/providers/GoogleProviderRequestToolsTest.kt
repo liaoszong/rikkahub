@@ -5,9 +5,13 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.Tool
+import me.rerere.ai.model.CapabilityOverride
+import me.rerere.ai.model.CapabilitySetOverride
+import me.rerere.ai.model.ModelFeature
 import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
+import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.UIMessage
 import okhttp3.OkHttpClient
@@ -66,14 +70,38 @@ class GoogleProviderRequestToolsTest {
         assertTrue(exception.cause?.message.orEmpty().contains("image_generation"))
     }
 
+    @Test
+    fun `capability override filters function and built in tools`() {
+        val body = invokeBuildCompletionRequestBody(
+            TextGenerationParams(
+                model = Model(
+                    modelId = "gemini-test",
+                    abilities = listOf(ModelAbility.TOOL),
+                    tools = setOf(BuiltInTools.Search, BuiltInTools.UrlContext),
+                    capabilityOverride = CapabilityOverride(
+                        features = CapabilitySetOverride(
+                            remove = setOf(ModelFeature.TOOL_CALLING, ModelFeature.WEB_SEARCH)
+                        )
+                    ),
+                ),
+                tools = listOf(testTool("lookup")),
+            )
+        )
+
+        val tools = body["tools"]!!.jsonArray
+        assertEquals(1, tools.size)
+        assertTrue("urlContext" in tools.single().jsonObject)
+    }
+
     private fun invokeBuildCompletionRequestBody(params: TextGenerationParams) =
         GoogleProvider::class.java.getDeclaredMethod(
             "buildCompletionRequestBody",
+            ProviderSetting.Google::class.java,
             List::class.java,
             TextGenerationParams::class.java,
         ).run {
             isAccessible = true
-            invoke(provider, listOf(UIMessage.user("hello")), params)
+            invoke(provider, ProviderSetting.Google(), listOf(UIMessage.user("hello")), params)
                 as kotlinx.serialization.json.JsonObject
         }
 

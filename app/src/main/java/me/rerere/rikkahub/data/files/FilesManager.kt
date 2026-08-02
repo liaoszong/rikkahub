@@ -7,8 +7,14 @@ import android.util.Log
 import androidx.core.net.toFile
 import androidx.core.net.toUri
 import java.io.File
+import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files as NioFiles
+import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
+import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -99,8 +105,19 @@ class FilesManager(
 
     suspend fun getByRelativePath(relativePath: String): ManagedFileEntity? = repository.getByPath(relativePath)
 
-    fun getFile(entity: ManagedFileEntity): File =
-        File(context.filesDir, entity.relativePath)
+    fun getFile(entity: ManagedFileEntity): File = resolveManagedFile(entity.relativePath)
+
+    fun resolveManagedFile(relativePath: String): File {
+        require(relativePath.isNotBlank() && !File(relativePath).isAbsolute) {
+            "Managed file path must be relative"
+        }
+        val root = context.filesDir.canonicalFile
+        val resolved = File(root, relativePath).canonicalFile
+        require(resolved != root && resolved.toPath().startsWith(root.toPath())) {
+            "Managed file path escapes app storage"
+        }
+        return resolved
+    }
 
     fun createChatFilesByContents(uris: List<Uri>): List<Uri> {
         val newUris = mutableListOf<Uri>()
@@ -252,11 +269,99 @@ class FilesManager(
     }
 
     fun getImagesDir(): File {
-        val dir = context.filesDir.resolve("images")
+        val dir = context.filesDir.resolve(FileFolders.LEGACY_GENERATED_IMAGES)
         if (!dir.exists()) {
             dir.mkdirs()
         }
         return dir
+    }
+
+    /**
+     * Persists paid/generated output under its pre-reserved logical identity. If the
+     * file commit succeeds but MediaAsset registration is interrupted, startup repair
+     * can recover the same asset id from the file name without replaying the provider.
+     */
+    suspend fun saveManagedFromBytesWithIdentity(
+        folder: String,
+        bytes: ByteArray,
+        assetId: String,
+        displayName: String,
+        mimeType: String,
+        createdAt: Long = System.currentTimeMillis(),
+    ): ManagedFileEntity = withContext(Dispatchers.IO) {
+        val canonicalAssetId = runCatching { UUID.fromString(assetId).toString() }
+            .getOrElse { throw IllegalArgumentException("Media asset id must be a UUID", it) }
+        require(canonicalAssetId == assetId) { "Media asset id must use canonical UUID form" }
+        val extension = when (mimeType.lowercase().substringBefore(';').trim()) {
+            "image/png" -> "png"
+            "image/jpeg", "image/jpg" -> "jpg"
+            "image/webp" -> "webp"
+            "image/gif" -> "gif"
+            else -> throw IllegalArgumentException("Unsupported generated image MIME: $mimeType")
+        }
+        val directory = File(context.filesDir, folder).apply { mkdirs() }.canonicalFile
+        val target = File(directory, "$canonicalAssetId.$extension").canonicalFile
+        require(target.parentFile == directory) { "Generated media path escapes its managed folder" }
+
+        if (target.isFile) {
+            require(target.hasSameContent(bytes)) {
+                "Media asset $canonicalAssetId is already bound to different file content"
+            }
+        } else {
+            writeManagedAtomically(target, bytes)
+        }
+        registerExistingManagedFile(
+            folder = folder,
+            file = target,
+            displayName = displayName,
+            mimeType = mimeType,
+            createdAt = createdAt,
+        )
+    }
+
+    /**
+     * Registers a file that was committed atomically by another data component.
+     * Existing path identity is updated in-place rather than REPLACE-inserted, which
+     * keeps MediaAsset foreign keys stable across reconciliation replays.
+     */
+    suspend fun registerExistingManagedFile(
+        folder: String,
+        file: File,
+        displayName: String = file.name,
+        mimeType: String = guessMimeType(file, displayName),
+        createdAt: Long = System.currentTimeMillis(),
+    ): ManagedFileEntity = withContext(Dispatchers.IO) {
+        val folderRoot = File(context.filesDir, folder).canonicalFile
+        val target = file.canonicalFile
+        require(target.toPath().startsWith(folderRoot.toPath()) && target != folderRoot) {
+            "Managed file must remain inside $folder"
+        }
+        require(target.isFile) { "Managed file does not exist: ${target.name}" }
+
+        val relativePath = buildRelativePath(folder, target)
+        val now = System.currentTimeMillis()
+        val existing = repository.getByPath(relativePath)
+        if (existing != null) {
+            val updated = existing.copy(
+                displayName = displayName,
+                mimeType = mimeType,
+                sizeBytes = target.length(),
+                updatedAt = now,
+            )
+            repository.update(updated)
+            return@withContext updated
+        }
+        repository.insert(
+            ManagedFileEntity(
+                folder = folder,
+                relativePath = relativePath,
+                displayName = displayName,
+                mimeType = mimeType,
+                sizeBytes = target.length(),
+                createdAt = createdAt,
+                updatedAt = now,
+            ),
+        )
     }
 
     @OptIn(ExperimentalEncodingApi::class)
@@ -481,6 +586,42 @@ class FilesManager(
         FileUtils.guessMimeType(file, fileName)
 }
 
+private fun writeManagedAtomically(target: File, bytes: ByteArray) {
+    val temporary = File(target.parentFile, ".${target.name}.${System.nanoTime()}.tmp")
+    try {
+        FileOutputStream(temporary).use { output ->
+            output.write(bytes)
+            output.fd.sync()
+        }
+        try {
+            NioFiles.move(
+                temporary.toPath(),
+                target.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            NioFiles.move(temporary.toPath(), target.toPath())
+        }
+    } finally {
+        temporary.delete()
+    }
+}
+
+private fun File.hasSameContent(bytes: ByteArray): Boolean {
+    if (length() != bytes.size.toLong()) return false
+    val fileDigest = MessageDigest.getInstance("SHA-256")
+    inputStream().use { input ->
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            fileDigest.update(buffer, 0, count)
+        }
+    }
+    val bytesDigest = MessageDigest.getInstance("SHA-256").digest(bytes)
+    return fileDigest.digest().contentEquals(bytesDigest)
+}
+
 data class SyncResult(
     val inserted: Int,
     val removed: Int,
@@ -489,6 +630,7 @@ data class SyncResult(
 object FileFolders {
     const val UPLOAD = "upload"
     const val CHAT_GENERATED_IMAGES = "chat_generated_images"
+    const val LEGACY_GENERATED_IMAGES = "images"
     const val SKILLS = "skills"
     const val FONTS = "fonts"
     const val TOOL_OUTPUTS = "tool_outputs"

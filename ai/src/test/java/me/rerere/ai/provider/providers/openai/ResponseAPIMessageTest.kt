@@ -9,6 +9,9 @@ import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
+import me.rerere.ai.model.CapabilityOverride
+import me.rerere.ai.model.CapabilitySetOverride
+import me.rerere.ai.model.ModelFeature
 import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
@@ -396,6 +399,37 @@ class ResponseAPIMessageTest {
         )
 
         assertFalse("tools key should not be written", requestBody.containsKey("tools"))
+    }
+
+    @Test
+    fun `capability override filters reasoning function and built in tools`() {
+        val requestBody = invokeBuildRequestBody(
+            providerSetting = ProviderSetting.OpenAI(
+                baseUrl = "https://api.openai.com/v1",
+                useResponseApi = true,
+            ),
+            params = TextGenerationParams(
+                model = Model(
+                    modelId = "test-model",
+                    abilities = listOf(ModelAbility.TOOL, ModelAbility.REASONING),
+                    tools = setOf(BuiltInTools.Search),
+                    capabilityOverride = CapabilityOverride(
+                        features = CapabilitySetOverride(
+                            remove = setOf(
+                                ModelFeature.TOOL_CALLING,
+                                ModelFeature.REASONING,
+                                ModelFeature.WEB_SEARCH,
+                            )
+                        )
+                    ),
+                ),
+                tools = listOf(createFunctionTool("get_weather")),
+                reasoningLevel = ReasoningLevel.HIGH,
+            ),
+        )
+
+        assertFalse(requestBody.containsKey("reasoning"))
+        assertFalse(requestBody.containsKey("tools"))
     }
 
     // ==================== Helper Functions ====================

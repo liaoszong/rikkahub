@@ -6,6 +6,7 @@ import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ModelType
+import me.rerere.ai.provider.ProviderSetting
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
@@ -90,6 +91,64 @@ class CapabilitySnapshotTest {
 
         assertEquals(snapshot, json.decodeFromString<CapabilitySnapshot>(json.encodeToString(snapshot)))
         assertEquals(override, json.decodeFromString<CapabilityOverride>(json.encodeToString(override)))
+    }
+
+    @Test
+    fun `effective resolution applies provider declaration before user override`() {
+        val model = Model(
+            modelId = "gpt-test",
+            declaredCapabilities = CapabilitySnapshot(
+                features = setOf(ModelFeature.TOOL_CALLING),
+                apiSurfaces = setOf(ApiSurface.CHAT_COMPLETIONS),
+            ),
+            capabilityOverride = CapabilityOverride(
+                features = CapabilitySetOverride(remove = setOf(ModelFeature.WEB_SEARCH)),
+                apiSurfaces = CapabilitySetOverride(replace = emptySet()),
+            ),
+        )
+
+        val effective = model.effectiveCapabilitySnapshot(
+            ProviderSetting.OpenAI(useResponseApi = true)
+        )
+
+        assertEquals(setOf(ModelFeature.TOOL_CALLING, ModelFeature.IMAGE_GENERATION), effective.features)
+        assertTrue(effective.apiSurfaces.isEmpty())
+        assertEquals(CapabilityOrigin.MERGED, effective.origin)
+    }
+
+    @Test
+    fun `provider declarations expose concrete api surfaces and adapter media`() {
+        val imageModel = Model(
+            modelId = "image-test",
+            type = ModelType.IMAGE,
+            inputModalities = listOf(Modality.TEXT, Modality.IMAGE),
+            outputModalities = listOf(Modality.IMAGE),
+        )
+        val openAiImage = imageModel.effectiveCapabilitySnapshot(ProviderSetting.OpenAI())
+        val googleChat = Model(modelId = "gemini-test")
+            .effectiveCapabilitySnapshot(ProviderSetting.Google())
+        val claudeChat = Model(modelId = "claude-test")
+            .effectiveCapabilitySnapshot(ProviderSetting.Claude())
+
+        assertEquals(
+            setOf(ApiSurface.IMAGE_GENERATIONS, ApiSurface.IMAGE_EDITS),
+            openAiImage.apiSurfaces,
+        )
+        assertTrue(CapabilityMedia.AUDIO in googleChat.inputMedia)
+        assertTrue(CapabilityMedia.VIDEO in googleChat.inputMedia)
+        assertEquals(setOf(ApiSurface.GENERATE_CONTENT), googleChat.apiSurfaces)
+        assertTrue(ModelFeature.WEB_SEARCH in googleChat.features)
+        assertTrue(ModelFeature.URL_CONTEXT in googleChat.features)
+        assertEquals(setOf(ApiSurface.MESSAGES), claudeChat.apiSurfaces)
+    }
+
+    @Test
+    fun `old serialized model remains readable without capability fields`() {
+        val decoded = Json.decodeFromString<Model>("""{"modelId":"legacy-model"}""")
+
+        assertEquals(null, decoded.declaredCapabilities)
+        assertEquals(null, decoded.capabilityOverride)
+        assertEquals(setOf(CapabilityMedia.TEXT), decoded.effectiveCapabilitySnapshot().inputMedia)
     }
 
     @Test

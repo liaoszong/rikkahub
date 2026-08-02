@@ -6,6 +6,7 @@ import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ModelType
+import me.rerere.ai.provider.ProviderSetting
 
 /**
  * A provider-neutral, serializable description of what a model can do.
@@ -46,6 +47,8 @@ enum class ModelFeature {
     IMAGE_EDITING,
     TOOL_CALLING,
     REASONING,
+    WEB_SEARCH,
+    URL_CONTEXT,
 }
 
 /** Endpoint families, not vendor names. Providers map these surfaces to their concrete URLs. */
@@ -112,6 +115,30 @@ data class CapabilityOverride(
 
 object CapabilitySnapshotResolver {
     /**
+     * The single runtime resolution path for model capabilities.
+     *
+     * Resolution order is deliberately stable:
+     *
+     * 1. an explicit registry/probe declaration, or the legacy compatibility adapter;
+     * 2. the concrete provider/API-surface declaration;
+     * 3. the user's replace -> add -> remove override.
+     */
+    fun effectiveCapabilitySnapshot(
+        model: Model,
+        providerSetting: ProviderSetting? = null,
+    ): CapabilitySnapshot {
+        val declared = model.declaredCapabilities
+            ?.also { requireSupportedVersion(it.schemaVersion, "snapshot") }
+            ?: fromLegacyModel(model)
+        val providerDeclared = declareProviderCapabilities(
+            base = declared,
+            model = model,
+            providerSetting = model.providerOverwrite ?: providerSetting,
+        )
+        return merge(providerDeclared, model.capabilityOverride)
+    }
+
+    /**
      * Bridges today's persisted [Model] fields into the versioned capability contract.
      * API surface inference is deliberately conservative and may be replaced by provider/user
      * declarations through [merge].
@@ -123,6 +150,8 @@ object CapabilitySnapshotResolver {
 
         if (ModelAbility.TOOL in model.abilities) features += ModelFeature.TOOL_CALLING
         if (ModelAbility.REASONING in model.abilities) features += ModelFeature.REASONING
+        if (BuiltInTools.Search in model.tools) features += ModelFeature.WEB_SEARCH
+        if (BuiltInTools.UrlContext in model.tools) features += ModelFeature.URL_CONTEXT
 
         val generatesImages = model.type == ModelType.IMAGE ||
             Modality.IMAGE in model.outputModalities ||
@@ -168,6 +197,73 @@ object CapabilitySnapshotResolver {
         )
     }
 
+    private fun declareProviderCapabilities(
+        base: CapabilitySnapshot,
+        model: Model,
+        providerSetting: ProviderSetting?,
+    ): CapabilitySnapshot {
+        if (providerSetting == null) return base
+
+        val inputMedia = when (providerSetting) {
+            // The current Google adapter serializes these media types as inlineData.
+            is ProviderSetting.Google -> base.inputMedia + setOf(
+                CapabilityMedia.AUDIO,
+                CapabilityMedia.VIDEO,
+            )
+
+            is ProviderSetting.OpenAI,
+            is ProviderSetting.Claude -> base.inputMedia
+        }
+        val providerFeatures = when (providerSetting) {
+            is ProviderSetting.OpenAI -> if (
+                providerSetting.useResponseApi && model.type == ModelType.CHAT
+            ) {
+                base.features + setOf(ModelFeature.WEB_SEARCH, ModelFeature.IMAGE_GENERATION)
+            } else {
+                base.features
+            }
+
+            is ProviderSetting.Google -> if (model.type != ModelType.EMBEDDING) {
+                base.features + setOf(ModelFeature.WEB_SEARCH, ModelFeature.URL_CONTEXT)
+            } else {
+                base.features
+            }
+
+            is ProviderSetting.Claude -> base.features
+        }
+        val apiSurfaces = when (providerSetting) {
+            is ProviderSetting.OpenAI -> when (model.type) {
+                ModelType.CHAT -> setOf(
+                    if (providerSetting.useResponseApi) ApiSurface.RESPONSES
+                    else ApiSurface.CHAT_COMPLETIONS
+                )
+
+                ModelType.IMAGE -> buildSet {
+                    add(ApiSurface.IMAGE_GENERATIONS)
+                    if (ModelFeature.IMAGE_EDITING in base.features) add(ApiSurface.IMAGE_EDITS)
+                }
+
+                ModelType.EMBEDDING -> setOf(ApiSurface.EMBEDDINGS)
+            }
+
+            is ProviderSetting.Google -> when (model.type) {
+                ModelType.CHAT,
+                ModelType.IMAGE -> setOf(ApiSurface.GENERATE_CONTENT)
+
+                ModelType.EMBEDDING -> setOf(ApiSurface.EMBEDDINGS)
+            }
+
+            is ProviderSetting.Claude -> setOf(ApiSurface.MESSAGES)
+        }
+
+        return base.copy(
+            inputMedia = inputMedia,
+            features = providerFeatures,
+            apiSurfaces = apiSurfaces,
+            origin = CapabilityOrigin.PROVIDER_DECLARED,
+        )
+    }
+
     private fun requireSupportedVersion(version: Int, kind: String) {
         require(version == CapabilitySnapshot.CURRENT_SCHEMA_VERSION) {
             "Unsupported capability $kind schema version $version; " +
@@ -175,6 +271,46 @@ object CapabilitySnapshotResolver {
         }
     }
 }
+
+fun Model.effectiveCapabilitySnapshot(providerSetting: ProviderSetting? = null): CapabilitySnapshot =
+    CapabilitySnapshotResolver.effectiveCapabilitySnapshot(this, providerSetting)
+
+fun CapabilitySnapshot.supports(feature: ModelFeature): Boolean = feature in features
+
+fun CapabilitySnapshot.supports(surface: ApiSurface): Boolean = surface in apiSurfaces
+
+fun CapabilitySnapshot.supportsInput(media: CapabilityMedia): Boolean = media in inputMedia
+
+fun CapabilitySnapshot.supportsOutput(media: CapabilityMedia): Boolean = media in outputMedia
+
+/** Compatibility view for legacy request encoders that still accept only text/image. */
+fun Set<CapabilityMedia>.toLegacyModalities(): List<Modality> =
+    listOf(Modality.TEXT, Modality.IMAGE).filter { it.toCapabilityMedia() in this }
+
+/** Persist an explicit media choice without creating a second runtime truth in legacy fields. */
+fun Model.withInputMediaCapabilities(media: Set<CapabilityMedia>): Model = copy(
+    inputModalities = media.toLegacyModalities(),
+    capabilityOverride = (capabilityOverride ?: CapabilityOverride()).copy(
+        inputMedia = CapabilitySetOverride(replace = media),
+    ),
+)
+
+fun Model.withOutputMediaCapabilities(media: Set<CapabilityMedia>): Model = copy(
+    outputModalities = media.toLegacyModalities(),
+    capabilityOverride = (capabilityOverride ?: CapabilityOverride()).copy(
+        outputMedia = CapabilitySetOverride(replace = media),
+    ),
+)
+
+fun Model.withFeatureCapabilities(features: Set<ModelFeature>): Model = copy(
+    abilities = buildList {
+        if (ModelFeature.TOOL_CALLING in features) add(ModelAbility.TOOL)
+        if (ModelFeature.REASONING in features) add(ModelAbility.REASONING)
+    },
+    capabilityOverride = (capabilityOverride ?: CapabilityOverride()).copy(
+        features = CapabilitySetOverride(replace = features),
+    ),
+)
 
 private fun Modality.toCapabilityMedia(): CapabilityMedia = when (this) {
     Modality.TEXT -> CapabilityMedia.TEXT

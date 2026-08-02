@@ -408,7 +408,9 @@ sealed class UIMessagePart {
     @SerialName("image")
     data class Image(
         val url: String,
-        override var metadata: JsonObject? = null
+        override var metadata: JsonObject? = null,
+        /** Stable host-owned media identity; providers continue to consume [url]. */
+        val assetId: String? = null,
     ) : UIMessagePart()
 
     @Serializable

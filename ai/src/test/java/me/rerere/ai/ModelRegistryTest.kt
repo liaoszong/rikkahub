@@ -1,5 +1,7 @@
 package me.rerere.ai
 
+import me.rerere.ai.model.CapabilityMedia
+import me.rerere.ai.model.ModelFeature
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.registry.ModelRegistry
@@ -102,5 +104,24 @@ class ModelRegistryTest {
             reasonerAbilities,
             ModelRegistry.MODEL_ABILITIES.getData("deepseek-v4-pro")
         )
+    }
+
+    @Test
+    fun `registry exposes provider neutral capability snapshots`() {
+        val gpt = ModelRegistry.capabilitiesFor("gpt-5.4")!!
+        val geminiImage = ModelRegistry.capabilitiesFor("gemini-3.1-flash-image-preview")!!
+        val claude = ModelRegistry.capabilitiesFor("claude-opus-4-8")!!
+
+        assertTrue(CapabilityMedia.IMAGE in gpt.inputMedia)
+        assertTrue(ModelFeature.TOOL_CALLING in gpt.features)
+        assertTrue(ModelFeature.REASONING in gpt.features)
+
+        assertTrue(CapabilityMedia.IMAGE in geminiImage.outputMedia)
+        assertTrue(ModelFeature.IMAGE_GENERATION in geminiImage.features)
+        assertTrue(ModelFeature.IMAGE_EDITING in geminiImage.features)
+
+        assertTrue(CapabilityMedia.IMAGE in claude.inputMedia)
+        assertTrue(ModelFeature.TOOL_CALLING in claude.features)
+        assertTrue(ModelFeature.REASONING in claude.features)
     }
 }

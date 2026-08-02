@@ -8,6 +8,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.Model
+import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
@@ -113,10 +114,16 @@ class GoogleProviderMediaRequestTest {
     private fun invokeBuildCompletionRequestBody(messages: List<UIMessage>): JsonObject =
         GoogleProvider::class.java.getDeclaredMethod(
             "buildCompletionRequestBody",
+            ProviderSetting.Google::class.java,
             List::class.java,
             TextGenerationParams::class.java,
         ).run {
             isAccessible = true
-            invoke(provider, messages, TextGenerationParams(model = Model(modelId = "gemini-test"))) as JsonObject
+            invoke(
+                provider,
+                ProviderSetting.Google(),
+                messages,
+                TextGenerationParams(model = Model(modelId = "gemini-test")),
+            ) as JsonObject
         }
 }

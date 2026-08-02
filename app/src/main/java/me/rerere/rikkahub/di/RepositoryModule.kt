@@ -32,7 +32,7 @@ val repositoryModule = module {
     }
 
     single {
-        GenMediaRepository(get())
+        GenMediaRepository(get(), get())
     }
 
     single {

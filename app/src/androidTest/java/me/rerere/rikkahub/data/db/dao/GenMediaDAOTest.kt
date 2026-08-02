@@ -7,6 +7,8 @@ import kotlinx.coroutines.runBlocking
 import me.rerere.rikkahub.data.db.AppDatabase
 import me.rerere.rikkahub.data.db.entity.GenMediaEntity
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -29,6 +31,38 @@ class GenMediaDAOTest {
             assertEquals(first.id, replay.id)
             assertEquals("first", replay.prompt)
             assertEquals(1, database.genMediaDao().getAllMedia().size)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun visibilityIsReversibleAndParentDeletionDoesNotDeleteEditedAsset() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(
+            ApplicationProvider.getApplicationContext(),
+            AppDatabase::class.java,
+        ).build()
+        try {
+            val parent = database.genMediaDao().insertOrGet(
+                media(path = "images/parent.png", prompt = "parent").copy(assetId = "asset-parent"),
+            )
+            val child = database.genMediaDao().insertOrGet(
+                media(path = "images/child.png", prompt = "child").copy(
+                    assetId = "asset-child",
+                    parentAssetId = parent.assetId,
+                ),
+            )
+
+            assertEquals(2, database.genMediaDao().getAllMedia().size)
+            assertEquals(1, database.genMediaDao().hide(parent.assetId, 20))
+            assertEquals(listOf(child.assetId), database.genMediaDao().getAllMedia().map { it.assetId })
+            assertEquals(2, database.genMediaDao().getAllMediaIncludingHidden().size)
+            assertEquals(1, database.genMediaDao().restore(parent.assetId, 30))
+
+            database.genMediaDao().delete(parent.id)
+            val survivingChild = database.genMediaDao().getByAssetId(child.assetId)
+            assertTrue(survivingChild != null)
+            assertNull(survivingChild?.parentAssetId)
         } finally {
             database.close()
         }

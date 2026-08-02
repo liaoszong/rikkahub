@@ -285,7 +285,6 @@
   <string name="chat_page_export_success">已匯出為%1$s</string>
   <string name="chat_page_history">聊天歷史</string>
   <string name="chat_page_menu_ai_translator">AI 翻譯</string>
-  <string name="chat_page_menu_image_generation">圖像生成</string>
   <string name="chat_page_message_count">%d 則訊息</string>
   <string name="chat_page_move_to_assistant">移至助理</string>
   <string name="chat_page_new_chat">新聊天</string>
@@ -391,7 +390,7 @@
   <string name="imggen_page_cancel_generation_title">取消生成</string>
   <string name="imggen_page_confirm">確定</string>
   <string name="imggen_page_delete">刪除</string>
-  <string name="imggen_page_gallery">相簿</string>
+  <string name="imggen_page_gallery">圖片庫</string>
   <string name="imggen_page_generate_image">生成圖片</string>
   <string name="imggen_page_generation_count">生成數量</string>
   <string name="imggen_page_generation_count_desc">每次生成的圖片數量</string>

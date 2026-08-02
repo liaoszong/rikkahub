@@ -63,7 +63,6 @@ sealed interface ImageGenerationExecutionEvent {
 data class ImageGenerationExecutionFailure(
     val kind: ImageGenerationFailureKind,
     val message: String,
-    val recoveredImage: GeneratedImage? = null,
 )
 
 sealed interface ImageGenerationExecutionResult {
@@ -126,7 +125,6 @@ class ImageGenerationTaskExecutor(
             return ImageGenerationExecutionFailure(
                 kind = error.kind,
                 message = error.message ?: "Image generation failed",
-                recoveredImage = error.recoveredImage,
             )
         }
         val (kind, message) = when (error) {

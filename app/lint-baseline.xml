@@ -389,28 +389,6 @@
     <issue
         id="LocalContextGetResourceValueCall"
         message="Querying resource values using LocalContext.current is not configuration-aware and may return stale values if the Configuration changes"
-        errorLine1="                                                            message = context.getString(R.string.imggen_page_image_saved_success),"
-        errorLine2="                                                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/me/rerere/rikkahub/ui/pages/imggen/ImgGenPage.kt"
-            line="751"
-            column="71"/>
-    </issue>
-
-    <issue
-        id="LocalContextGetResourceValueCall"
-        message="Querying resource values using LocalContext.current is not configuration-aware and may return stale values if the Configuration changes"
-        errorLine1="                                                            message = context.getString("
-        errorLine2="                                                                      ^">
-        <location
-            file="src/main/java/me/rerere/rikkahub/ui/pages/imggen/ImgGenPage.kt"
-            line="756"
-            column="71"/>
-    </issue>
-
-    <issue
-        id="LocalContextGetResourceValueCall"
-        message="Querying resource values using LocalContext.current is not configuration-aware and may return stale values if the Configuration changes"
         errorLine1="                        context.getString(R.string.backup_page_backup_success),"
         errorLine2="                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
@@ -4012,28 +3990,6 @@
             file="src/main/res/mipmap-xxxhdpi/ic_launcher_monochrome.png"/>
         <location
             file="src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png"/>
-    </issue>
-
-    <issue
-        id="UseKtx"
-        message="Use the KTX extension function `SharedPreferences.edit` instead?"
-        errorLine1="            preferences.edit().remove(KEY_CURRENT_TASK).apply()"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/me/rerere/rikkahub/data/imggen/ImageGenerationTaskStore.kt"
-            line="27"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="UseKtx"
-        message="Use the KTX extension function `SharedPreferences.edit` instead?"
-        errorLine1="        if (!preferences.edit().remove(KEY_CURRENT_TASK).commit()) {"
-        errorLine2="             ~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/me/rerere/rikkahub/data/imggen/ImageGenerationTaskStore.kt"
-            line="45"
-            column="14"/>
     </issue>
 
     <issue

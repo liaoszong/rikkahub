@@ -31,7 +31,7 @@ import me.rerere.rikkahub.di.dataSourceModule
 import me.rerere.rikkahub.di.repositoryModule
 import me.rerere.rikkahub.di.viewModelModule
 import me.rerere.rikkahub.data.files.FilesManager
-import me.rerere.rikkahub.data.imggen.ImageGenerationResultStore
+import me.rerere.rikkahub.data.imggen.MediaAssetRecovery
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.service.WebServerService
 import me.rerere.rikkahub.utils.CrashHandler
@@ -181,7 +181,7 @@ class RikkaHubApp : Application() {
     private fun reconcileGeneratedImages() {
         get<AppScope>().launch(Dispatchers.IO) {
             runCatching {
-                get<ImageGenerationResultStore>().reconcilePending()
+                get<MediaAssetRecovery>().reconcilePending()
             }.onSuccess { result ->
                 if (result.inspected > 0 || result.failures.isNotEmpty()) {
                     Log.i(

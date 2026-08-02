@@ -287,7 +287,6 @@
   <string name="chat_page_export_success">Exported to %1$s</string>
   <string name="chat_page_history">Chat History</string>
   <string name="chat_page_menu_ai_translator">AI Translator</string>
-  <string name="chat_page_menu_image_generation">Image Generation</string>
   <string name="chat_drawer_creative_tools">Creative tools</string>
   <string name="chat_page_message_count">%d messages</string>
   <string name="chat_page_move_to_assistant">Move to Assistant</string>
@@ -395,7 +394,7 @@
   <string name="imggen_page_cancel_generation_title">Cancel Generation</string>
   <string name="imggen_page_confirm">Confirm</string>
   <string name="imggen_page_delete">Delete</string>
-  <string name="imggen_page_gallery">Gallery</string>
+  <string name="imggen_page_gallery">Image Library</string>
   <string name="imggen_page_generate_image">Generate Image</string>
   <string name="imggen_page_generating_background">Generating in background</string>
   <string name="imggen_page_preview_waiting">Preview received · waiting for final image</string>

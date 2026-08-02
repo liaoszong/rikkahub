@@ -100,7 +100,7 @@ import me.rerere.rikkahub.ui.pages.extensions.workspace.WorkspaceTerminalPage
 import me.rerere.workspace.WorkspaceStorageArea
 import me.rerere.rikkahub.ui.pages.favorite.FavoritePage
 import me.rerere.rikkahub.ui.pages.history.HistoryPage
-import me.rerere.rikkahub.ui.pages.imggen.ImageGenPage
+import me.rerere.rikkahub.ui.pages.imggen.ImageLibraryPage
 import me.rerere.rikkahub.ui.pages.log.LogPage
 import me.rerere.rikkahub.ui.pages.search.SearchPage
 import me.rerere.rikkahub.ui.pages.setting.SettingAboutPage
@@ -234,8 +234,8 @@ class RouteActivity : ComponentActivity() {
         setIntent(intent)
         if (intent.getBooleanExtra(EXTRA_OPEN_IMAGE_GENERATION, false)) {
             navStack?.let { stack ->
-                if (stack.lastOrNull() !is Screen.ImageGen) {
-                    stack.add(Screen.ImageGen)
+                if (stack.lastOrNull() !is Screen.ImageLibrary) {
+                    stack.add(Screen.ImageLibrary)
                 }
                 intent.removeExtra(EXTRA_OPEN_IMAGE_GENERATION)
             }
@@ -269,7 +269,7 @@ class RouteActivity : ComponentActivity() {
 
         val startScreen: Screen = if (intent.getBooleanExtra(EXTRA_OPEN_IMAGE_GENERATION, false)) {
             intent.removeExtra(EXTRA_OPEN_IMAGE_GENERATION)
-            Screen.ImageGen
+            Screen.ImageLibrary
         } else {
             Screen.Chat(
                 id = if (readBooleanPreference("create_new_conversation_on_start", true)) {
@@ -410,8 +410,13 @@ class RouteActivity : ComponentActivity() {
                                 BackupPage()
                             }
 
+                            entry<Screen.ImageLibrary> {
+                                ImageLibraryPage()
+                            }
+
+                            // Compatibility route for nav state persisted by pre-library builds.
                             entry<Screen.ImageGen> {
-                                ImageGenPage()
+                                ImageLibraryPage()
                             }
 
                             entry<Screen.WebView> { key ->
@@ -647,6 +652,10 @@ sealed interface Screen : NavKey {
     @Serializable
     data object Backup : Screen
 
+    @Serializable
+    data object ImageLibrary : Screen
+
+    @Deprecated("Standalone image generation was replaced by the image library")
     @Serializable
     data object ImageGen : Screen
 

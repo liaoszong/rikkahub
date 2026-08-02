@@ -25,9 +25,10 @@ import kotlinx.serialization.json.putJsonArray
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.TokenUsage
+import me.rerere.ai.model.ModelFeature
+import me.rerere.ai.model.effectiveCapabilitySnapshot
 import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Model
-import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.provider.providers.providerAuthHeaders
@@ -195,6 +196,7 @@ class ResponseAPI(
     ): JsonObject {
         val host = providerSetting.baseUrl.toHttpUrl().host
         val capabilities = resolveResponseProviderCapabilities(host)
+        val modelCapabilities = params.model.effectiveCapabilitySnapshot(providerSetting)
         return buildJsonObject {
             put("model", params.model.modelId)
             put("stream", stream)
@@ -218,7 +220,7 @@ class ResponseAPI(
             put("input", buildMessages(messages))
 
             // reasoning
-            if (params.model.abilities.contains(ModelAbility.REASONING)) {
+            if (ModelFeature.REASONING in modelCapabilities.features) {
                 val level = params.reasoningLevel
                 put("reasoning", buildJsonObject {
                     if (capabilities.supportsReasoningSummary) {
@@ -239,8 +241,16 @@ class ResponseAPI(
             // Response API 的 tools 是扁平数组, 函数工具和内置工具可以共存, 必须写在同一个 key 下,
             // 否则后写入的会覆盖前者
             val useFunctionTools =
-                params.model.abilities.contains(ModelAbility.TOOL) && params.tools.isNotEmpty()
-            if (useFunctionTools || params.model.tools.isNotEmpty()) {
+                ModelFeature.TOOL_CALLING in modelCapabilities.features && params.tools.isNotEmpty()
+            val enabledBuiltInTools = params.model.tools.filter { tool ->
+                when (tool) {
+                    BuiltInTools.Search -> ModelFeature.WEB_SEARCH in modelCapabilities.features
+                    BuiltInTools.UrlContext -> ModelFeature.URL_CONTEXT in modelCapabilities.features
+                    BuiltInTools.ImageGeneration ->
+                        ModelFeature.IMAGE_GENERATION in modelCapabilities.features
+                }
+            }
+            if (useFunctionTools || enabledBuiltInTools.isNotEmpty()) {
                 putJsonArray("tools") {
                     if (useFunctionTools) {
                         params.tools.forEach { tool ->
@@ -258,7 +268,7 @@ class ResponseAPI(
                         }
                     }
                     // built-in tools
-                    params.model.tools.forEach { builtInTool ->
+                    enabledBuiltInTools.forEach { builtInTool ->
                         when (builtInTool) {
                             BuiltInTools.Search -> {
                                 add(buildJsonObject {

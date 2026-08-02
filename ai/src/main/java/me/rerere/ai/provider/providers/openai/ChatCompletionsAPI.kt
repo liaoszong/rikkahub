@@ -29,9 +29,12 @@ import kotlinx.serialization.json.putJsonArray
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.TokenUsage
+import me.rerere.ai.model.CapabilityMedia
+import me.rerere.ai.model.ModelFeature
+import me.rerere.ai.model.effectiveCapabilitySnapshot
+import me.rerere.ai.model.toLegacyModalities
 import me.rerere.ai.provider.Modality
 import me.rerere.ai.provider.Model
-import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.provider.providers.providerAuthHeaders
@@ -257,6 +260,7 @@ class ChatCompletionsAPI(
         stream: Boolean = false,
     ): JsonObject {
         val host = providerSetting.baseUrl.toHttpUrl().host
+        val effectiveCapabilities = params.model.effectiveCapabilitySnapshot(providerSetting)
         return buildJsonObject {
             put("model", params.model.modelId)
             put(
@@ -264,7 +268,7 @@ class ChatCompletionsAPI(
                 buildMessages(
                     messages = messages,
                     includeHistoryReasoning = providerSetting.includeHistoryReasoning,
-                    supportInputModalities = params.model.inputModalities,
+                    supportInputModalities = effectiveCapabilities.inputMedia.toLegacyModalities(),
                 )
             )
 
@@ -285,7 +289,7 @@ class ChatCompletionsAPI(
 
             // open router适配
             if(host == "openrouter.ai") {
-                if(params.model.outputModalities.contains(Modality.IMAGE)) {
+                if (CapabilityMedia.IMAGE in effectiveCapabilities.outputMedia) {
                     put("modalities", buildJsonArray {
                         add("image")
                         add("text")
@@ -293,7 +297,7 @@ class ChatCompletionsAPI(
                 }
             }
 
-            if (params.model.abilities.contains(ModelAbility.REASONING)) {
+            if (ModelFeature.REASONING in effectiveCapabilities.features) {
                 val level = params.reasoningLevel
                 when (host) {
                     "openrouter.ai" -> {
@@ -429,7 +433,7 @@ class ChatCompletionsAPI(
                 }
             }
 
-            if (params.model.abilities.contains(ModelAbility.TOOL) && params.tools.isNotEmpty()) {
+            if (ModelFeature.TOOL_CALLING in effectiveCapabilities.features && params.tools.isNotEmpty()) {
                 putJsonArray("tools") {
                     params.tools.forEach { tool ->
                         add(buildJsonObject {

@@ -257,8 +257,8 @@ fun ChatDrawerContent(
                 if (settings.displaySetting.drawerCreativeToolsExpanded) {
                     DrawerListAction(
                         icon = HugeIcons.Image02,
-                        label = stringResource(R.string.chat_page_menu_image_generation),
-                        onClick = { navController.navigate(Screen.ImageGen) },
+                        label = stringResource(R.string.imggen_page_gallery),
+                        onClick = { navController.navigate(Screen.ImageLibrary) },
                     )
                     DrawerListAction(
                         icon = HugeIcons.LanguageCircle,

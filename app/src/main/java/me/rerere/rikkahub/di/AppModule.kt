@@ -3,19 +3,19 @@ package me.rerere.rikkahub.di
 import kotlinx.serialization.json.Json
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.ai.tools.local.LocalTools
-import me.rerere.rikkahub.data.imggen.ImageGenerationForegroundController
 import me.rerere.rikkahub.data.imggen.ImageGenerationGateway
-import me.rerere.rikkahub.data.imggen.ImageGenerationResultStore
-import me.rerere.rikkahub.data.imggen.ImageGenerationTaskManager
-import me.rerere.rikkahub.data.imggen.ImageGenerationTaskStore
-import me.rerere.rikkahub.data.imggen.LocalImageGenerationResultStore
+import me.rerere.rikkahub.data.imggen.MediaAssetRecovery
 import me.rerere.rikkahub.data.imggen.ProviderImageGenerationGateway
-import me.rerere.rikkahub.data.imggen.SharedPreferencesImageGenerationTaskStore
+import me.rerere.rikkahub.data.imggen.ChatImageGenerationForegroundController
+import me.rerere.rikkahub.data.imggen.ChatImageGenerationTaskController
+import me.rerere.rikkahub.data.imggen.ChatImageGenerationTaskCoordinator
+import me.rerere.rikkahub.data.imggen.ChatImageGenerationTaskStore
+import me.rerere.rikkahub.data.imggen.SharedPreferencesChatImageGenerationTaskStore
 import me.rerere.rikkahub.data.event.AppEventBus
-import me.rerere.rikkahub.service.AndroidImageGenerationForegroundController
 import me.rerere.rikkahub.service.ChatNotificationManager
 import me.rerere.rikkahub.service.ChatService
-import me.rerere.rikkahub.service.ImageGenerationForegroundReadiness
+import me.rerere.rikkahub.service.AndroidChatImageGenerationForegroundController
+import me.rerere.rikkahub.service.ChatImageGenerationForegroundReadiness
 import me.rerere.rikkahub.utils.EmojiData
 import me.rerere.rikkahub.utils.EmojiUtils
 import me.rerere.rikkahub.utils.AppAnalytics
@@ -35,7 +35,7 @@ val appModule = module {
     }
 
     single {
-        LocalTools(get(), get(), get(), get(), get(), get())
+        LocalTools(get(), get(), get(), get(), get(), get(), get(), get())
     }
 
     single {
@@ -50,37 +50,36 @@ val appModule = module {
         )
     }
 
-    single<ImageGenerationTaskStore> {
-        SharedPreferencesImageGenerationTaskStore(context = get(), json = get())
-    }
-
     single<ImageGenerationGateway> {
         ProviderImageGenerationGateway(settingsStore = get(), providerManager = get())
     }
 
-    single<ImageGenerationResultStore> {
-        LocalImageGenerationResultStore(
-            context = get(),
-            filesManager = get(),
-            genMediaRepository = get(),
-        )
+    single<ChatImageGenerationTaskStore> {
+        SharedPreferencesChatImageGenerationTaskStore(context = get(), json = get())
     }
 
     single {
-        ImageGenerationForegroundReadiness()
+        ChatImageGenerationForegroundReadiness()
     }
 
-    single<ImageGenerationForegroundController> {
-        AndroidImageGenerationForegroundController(context = get(), readiness = get())
+    single<ChatImageGenerationForegroundController> {
+        AndroidChatImageGenerationForegroundController(context = get(), readiness = get())
     }
 
-    single(createdAtStart = true) {
-        ImageGenerationTaskManager(
-            scope = get<AppScope>(),
-            gateway = get(),
-            resultStore = get(),
-            taskStore = get(),
-            foregroundController = get(),
+    single {
+        ChatImageGenerationTaskCoordinator(store = get(), foregroundController = get())
+    }
+
+    single<ChatImageGenerationTaskController> {
+        get<ChatImageGenerationTaskCoordinator>()
+    }
+
+    single {
+        MediaAssetRecovery(
+            context = get(),
+            filesManager = get(),
+            genMediaRepository = get(),
+            chatTaskStore = get(),
         )
     }
 

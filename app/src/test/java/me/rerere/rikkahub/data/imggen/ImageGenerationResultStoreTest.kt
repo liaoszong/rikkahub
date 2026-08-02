@@ -4,6 +4,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.rikkahub.data.db.entity.GenMediaEntity
+import me.rerere.rikkahub.data.repository.MediaAssetIds
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -12,6 +13,14 @@ import java.nio.file.Files
 import java.util.Base64
 
 class ImageGenerationResultStoreTest {
+    @Test
+    fun `chat media asset identity is stable per tool output and distinct per index`() {
+        val first = MediaAssetIds.forChatToolOutput("tool-call", 0)
+
+        assertEquals(first, MediaAssetIds.forChatToolOutput("tool-call", 0))
+        assertTrue(first != MediaAssetIds.forChatToolOutput("tool-call", 1))
+    }
+
     @Test
     fun `validated payload chooses extension from bytes rather than requested file convention`() {
         val jpeg = byteArrayOf(
@@ -69,18 +78,6 @@ class ImageGenerationResultStoreTest {
     }
 
     @Test
-    fun `legacy generated image JSON restores both model identities`() {
-        val legacy = Json.decodeFromString<GeneratedImage>(
-            """{"id":1,"prompt":"p","filePath":"/a.png","timestamp":2,"model":"Visible Model"}""",
-        )
-
-        assertEquals("Visible Model", legacy.model)
-        assertEquals("Visible Model", legacy.modelId)
-        assertEquals("Visible Model", legacy.modelDisplayName)
-        assertEquals(null, legacy.providerId)
-    }
-
-    @Test
     fun `atomic write replaces target and leaves no temporary file`() {
         val directory = Files.createTempDirectory("imggen-atomic").toFile()
         val target = directory.resolve("result.png")
@@ -99,9 +96,9 @@ class ImageGenerationResultStoreTest {
         imagesDir.resolve("task-0.png").writeBytes(byteArrayOf(1))
         val inserted = mutableListOf<GenMediaEntity>()
         var fail = true
-        val store = PendingImageRegistrationStore(imagesDir) { entity ->
+        val store = PendingImageRegistrationStore(imagesDir) { metadata, _ ->
             if (fail) error("database unavailable")
-            inserted += entity
+            inserted += metadata.toEntity()
             42L
         }
         val metadata = PendingImageMetadata(
@@ -131,6 +128,7 @@ class ImageGenerationResultStoreTest {
         assertEquals(1, first.registered)
         assertTrue(first.failures.isEmpty())
         assertEquals("provider/model-id", inserted.single().modelId)
+        assertEquals(metadata.stableAssetId(), inserted.single().assetId)
         assertEquals(0, second.inspected)
         assertEquals(0, second.registered)
     }
@@ -141,7 +139,8 @@ class ImageGenerationResultStoreTest {
         val imagesDir = root.resolve("images").apply { mkdirs() }
         imagesDir.resolve("task-0.png").writeBytes(byteArrayOf(1))
         val rows = linkedMapOf<String, GenMediaEntity>()
-        val store = PendingImageRegistrationStore(imagesDir) { entity ->
+        val store = PendingImageRegistrationStore(imagesDir) { metadata, _ ->
+            val entity = metadata.toEntity()
             rows.getOrPut(entity.path) { entity.copy(id = rows.size + 1) }.id.toLong()
         }
         val metadata = PendingImageMetadata(

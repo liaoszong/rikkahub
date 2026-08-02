@@ -1,6 +1,12 @@
 package me.rerere.ai.registry
 
+import me.rerere.ai.model.CapabilityMedia
+import me.rerere.ai.model.CapabilityOrigin
+import me.rerere.ai.model.CapabilitySnapshot
+import me.rerere.ai.model.ModelFeature
+import me.rerere.ai.model.toLegacyModalities
 import me.rerere.ai.provider.Modality
+import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 
 fun interface ModelData<T> {
@@ -579,22 +585,70 @@ object ModelRegistry {
         QWEN_MT
     )
 
+    /** Primary provider-neutral declaration produced by the built-in model registry. */
+    val MODEL_CAPABILITIES = ModelData<CapabilitySnapshot?> { modelId ->
+        capabilitiesFor(modelId)
+    }
+
+    /** Legacy views remain for persisted settings and downstream compatibility only. */
     val MODEL_INPUT_MODALITIES = ModelData { modelId ->
-        resolveModalities(modelId) { it.inputModalities }
+        capabilitiesFor(modelId)?.inputMedia?.toLegacyModalities() ?: listOf(Modality.TEXT)
     }
 
     val MODEL_OUTPUT_MODALITIES = ModelData { modelId ->
-        resolveModalities(modelId) { it.outputModalities }
+        capabilitiesFor(modelId)?.outputMedia?.toLegacyModalities() ?: listOf(Modality.TEXT)
     }
 
     val MODEL_ABILITIES = ModelData { modelId ->
-        val abilities = resolveModels(modelId)
-            .flatMap { it.abilities }
-            .toSet()
+        val features = capabilitiesFor(modelId)?.features.orEmpty()
         buildList {
-            if (ModelAbility.TOOL in abilities) add(ModelAbility.TOOL)
-            if (ModelAbility.REASONING in abilities) add(ModelAbility.REASONING)
+            if (ModelFeature.TOOL_CALLING in features) add(ModelAbility.TOOL)
+            if (ModelFeature.REASONING in features) add(ModelAbility.REASONING)
         }
+    }
+
+    fun capabilitiesFor(modelId: String): CapabilitySnapshot? {
+        val definitions = resolveModels(modelId)
+        if (definitions.isEmpty()) return null
+
+        val inputMedia = definitions
+            .flatMap { definition -> definition.inputModalities }
+            .mapTo(linkedSetOf()) { modality -> modality.toCapabilityMedia() }
+        val outputMedia = definitions
+            .flatMap { definition -> definition.outputModalities }
+            .mapTo(linkedSetOf()) { modality -> modality.toCapabilityMedia() }
+        val abilities = definitions.flatMapTo(linkedSetOf()) { it.abilities }
+        val features = buildSet {
+            if (ModelAbility.TOOL in abilities) add(ModelFeature.TOOL_CALLING)
+            if (ModelAbility.REASONING in abilities) add(ModelFeature.REASONING)
+            if (CapabilityMedia.IMAGE in outputMedia) add(ModelFeature.IMAGE_GENERATION)
+            if (
+                CapabilityMedia.IMAGE in inputMedia &&
+                CapabilityMedia.IMAGE in outputMedia
+            ) {
+                add(ModelFeature.IMAGE_EDITING)
+            }
+        }
+        return CapabilitySnapshot(
+            inputMedia = inputMedia.ifEmpty { setOf(CapabilityMedia.TEXT) },
+            outputMedia = outputMedia.ifEmpty { setOf(CapabilityMedia.TEXT) },
+            features = features,
+            origin = CapabilityOrigin.INFERRED,
+        )
+    }
+
+    /** Attach one registry snapshot while keeping the old fields serialized for compatibility. */
+    fun enrichCapabilities(model: Model): Model {
+        val capabilities = capabilitiesFor(model.modelId) ?: return model
+        return model.copy(
+            inputModalities = capabilities.inputMedia.toLegacyModalities(),
+            outputModalities = capabilities.outputMedia.toLegacyModalities(),
+            abilities = buildList {
+                if (ModelFeature.TOOL_CALLING in capabilities.features) add(ModelAbility.TOOL)
+                if (ModelFeature.REASONING in capabilities.features) add(ModelAbility.REASONING)
+            },
+            declaredCapabilities = capabilities,
+        )
     }
 
     private fun resolveModels(modelId: String): List<ModelDefinition> {
@@ -615,20 +669,6 @@ object ModelRegistry {
         return matches
     }
 
-    private fun resolveModalities(
-        modelId: String,
-        selector: (ModelDefinition) -> Set<Modality>
-    ): List<Modality> {
-        val modalities = resolveModels(modelId)
-            .flatMap { selector(it) }
-            .toSet()
-        return if (modalities.isEmpty()) {
-            listOf(Modality.TEXT)
-        } else {
-            listOf(Modality.TEXT, Modality.IMAGE).filter { it in modalities }
-        }
-    }
-
     private fun ModelDefinitionBuilder.visionInput() {
         input(Modality.TEXT, Modality.IMAGE)
     }
@@ -647,5 +687,10 @@ object ModelRegistry {
 
     private fun ModelDefinitionBuilder.toolReasoningAbility() {
         ability(ModelAbility.TOOL, ModelAbility.REASONING)
+    }
+
+    private fun Modality.toCapabilityMedia(): CapabilityMedia = when (this) {
+        Modality.TEXT -> CapabilityMedia.TEXT
+        Modality.IMAGE -> CapabilityMedia.IMAGE
     }
 }

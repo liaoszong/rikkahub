@@ -28,13 +28,17 @@ import kotlinx.serialization.json.putJsonArray
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.TokenUsage
+import me.rerere.ai.model.ApiSurface
+import me.rerere.ai.model.ModelFeature
+import me.rerere.ai.model.effectiveCapabilitySnapshot
+import me.rerere.ai.model.supports
 import me.rerere.ai.provider.ClaudePromptCacheTtl
 import me.rerere.ai.provider.ImageGenerationParams
 import me.rerere.ai.provider.Model
-import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
+import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.UIMessage
@@ -138,9 +142,11 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 val id = modelObj["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
                 val displayName = modelObj["display_name"]?.jsonPrimitive?.contentOrNull ?: id
 
-                Model(
-                    modelId = id,
-                    displayName = displayName,
+                ModelRegistry.enrichCapabilities(
+                    Model(
+                        modelId = id,
+                        displayName = displayName,
+                    )
                 )
             }
         }
@@ -322,6 +328,10 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
     ): JsonObject {
         val maxTokens = params.maxTokens ?: 64_000
         val thinkingProtocol = claudeThinkingProtocol(params.model.modelId)
+        val capabilities = params.model.effectiveCapabilitySnapshot(providerSetting)
+        require(capabilities.supports(ApiSurface.MESSAGES)) {
+            "Model ${params.model.modelId} does not support the Anthropic Messages API"
+        }
         return buildJsonObject {
             put("model", params.model.modelId)
             put(
@@ -364,7 +374,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
 
             // Claude 4.6+ 使用 adaptive；旧模型仍使用 enabled + budget_tokens。
             // Fable/Mythos 的 thinking 永远开启，OFF 时必须省略参数而不是发送 disabled。
-            if (params.model.abilities.contains(ModelAbility.REASONING)) {
+            if (capabilities.supports(ModelFeature.REASONING)) {
                 when (thinkingProtocol) {
                     ClaudeThinkingProtocol.ALWAYS_ON_ADAPTIVE -> if (params.reasoningLevel != ReasoningLevel.OFF) {
                         put("thinking", buildJsonObject {
@@ -404,7 +414,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             }
 
             // 处理工具
-            if (params.model.abilities.contains(ModelAbility.TOOL) && params.tools.isNotEmpty()) {
+            if (capabilities.supports(ModelFeature.TOOL_CALLING) && params.tools.isNotEmpty()) {
                 putJsonArray("tools") {
                     params.tools.forEachIndexed { index, tool ->
                         add(buildJsonObject {

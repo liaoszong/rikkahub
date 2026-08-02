@@ -7,6 +7,8 @@ import me.rerere.rikkahub.data.datastore.resolveImageGenerationModel
 import me.rerere.rikkahub.data.event.AppEventBus
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.imggen.ImageGenerationGateway
+import me.rerere.rikkahub.data.imggen.ChatImageGenerationTaskController
+import me.rerere.rikkahub.data.repository.MediaAssetRepository
 import me.rerere.tts.provider.TTSManager
 
 class LocalTools(
@@ -16,6 +18,8 @@ class LocalTools(
     private val settingsStore: SettingsStore,
     private val imageGenerationGateway: ImageGenerationGateway,
     private val filesManager: FilesManager,
+    private val chatImageTaskController: ChatImageGenerationTaskController,
+    private val mediaAssetRepository: MediaAssetRepository,
 ) {
     val javascriptTool by lazy { buildJavascriptTool() }
 
@@ -34,7 +38,13 @@ class LocalTools(
     val calendarCreateTool by lazy { buildCalendarCreateTool(context) }
 
     val imageGenerationTool by lazy {
-        buildImageGenerationTool(settingsStore, imageGenerationGateway, filesManager)
+        buildImageGenerationTool(
+            settingsStore,
+            imageGenerationGateway,
+            filesManager,
+            chatImageTaskController,
+            mediaAssetRepository,
+        )
     }
 
     fun getTools(options: List<LocalToolOption>): List<Tool> {

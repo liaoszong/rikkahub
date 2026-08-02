@@ -287,7 +287,6 @@
   <string name="chat_page_export_success">已导出为%1$s</string>
   <string name="chat_page_history">聊天历史</string>
   <string name="chat_page_menu_ai_translator">AI翻译</string>
-  <string name="chat_page_menu_image_generation">图像生成</string>
   <string name="chat_drawer_creative_tools">创作工具</string>
   <string name="chat_page_message_count">%d 条消息</string>
   <string name="chat_page_move_to_assistant">移至助手</string>
@@ -394,7 +393,7 @@
   <string name="imggen_page_cancel_generation_title">取消生成</string>
   <string name="imggen_page_confirm">确定</string>
   <string name="imggen_page_delete">删除</string>
-  <string name="imggen_page_gallery">相册</string>
+  <string name="imggen_page_gallery">图片库</string>
   <string name="imggen_page_generate_image">生成图片</string>
   <string name="imggen_page_generating_background">正在后台生成图片</string>
   <string name="imggen_page_preview_waiting">已收到预览图，正在等待最终图片</string>

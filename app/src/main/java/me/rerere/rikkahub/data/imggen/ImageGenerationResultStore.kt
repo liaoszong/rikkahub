@@ -5,179 +5,110 @@ import android.graphics.BitmapFactory
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import me.rerere.ai.ui.ImageGenerationItem
-import me.rerere.common.android.appTempFolder
 import me.rerere.rikkahub.data.db.entity.GenMediaEntity
+import me.rerere.rikkahub.data.db.entity.MediaAssetEntity
+import me.rerere.rikkahub.data.files.FileFolders
 import me.rerere.rikkahub.data.files.FilesManager
+import me.rerere.rikkahub.data.repository.GeneratedMediaAssetRegistration
 import me.rerere.rikkahub.data.repository.GenMediaRepository
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.util.UUID
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
-
-interface ImageGenerationResultStore {
-    suspend fun savePreview(
-        task: ImageGenerationTask,
-        item: ImageGenerationItem,
-        index: Int,
-    ): GeneratedImage
-
-    suspend fun saveFinal(
-        task: ImageGenerationTask,
-        item: ImageGenerationItem,
-        index: Int,
-        sourcePaths: List<String>,
-    ): GeneratedImage
-
-    fun deletePreview(image: GeneratedImage)
-
-    /** Retry gallery registrations whose image file was committed but whose Room insert failed. */
-    suspend fun reconcilePending(): ImageMediaReconciliationResult = ImageMediaReconciliationResult()
-}
 
 data class ImageMediaReconciliationResult(
     val inspected: Int = 0,
     val registered: Int = 0,
+    val metadataRepaired: Int = 0,
+    val missingFiles: Int = 0,
     val failures: List<String> = emptyList(),
 )
 
-class LocalImageGenerationResultStore(
+/**
+ * One-time and crash-recovery bridge for files created by older releases. It deliberately
+ * contains no provider execution API; chat is the sole owner of new image requests.
+ */
+class MediaAssetRecovery(
     private val context: Context,
     private val filesManager: FilesManager,
     private val genMediaRepository: GenMediaRepository,
-) : ImageGenerationResultStore {
-    override suspend fun savePreview(
-        task: ImageGenerationTask,
-        item: ImageGenerationItem,
-        index: Int,
-    ): GeneratedImage {
-        val timestamp = System.currentTimeMillis()
-        val payload = try {
-            decodeImageForPersistence(item)
-        } catch (error: Exception) {
-            throw ImageGenerationException(
-                ImageGenerationFailureKind.IMAGE_WRITE,
-                "The generated image payload is invalid",
-                error,
-            )
-        }
-        val imageFile = File(context.appTempFolder, "imggen_${task.taskId}_$index.${payload.extension}")
-        val createdFile = try {
-            atomicWrite(imageFile, payload.bytes)
-        } catch (error: Exception) {
-            throw ImageGenerationException(
-                ImageGenerationFailureKind.IMAGE_WRITE,
-                "Failed to save the image preview",
-                error,
-            )
-        }
-        return GeneratedImage(
-            id = 0,
-            prompt = task.prompt,
-            filePath = createdFile.absolutePath,
-            timestamp = timestamp,
-            model = task.modelName,
-            modelId = task.modelId,
-            modelDisplayName = task.modelName,
-            providerId = task.providerId,
-            isPreview = true,
+    private val chatTaskStore: ChatImageGenerationTaskStore,
+) {
+    suspend fun reconcilePending(): ImageMediaReconciliationResult {
+        val pending = pendingStore().reconcile()
+        val chatFolderSyncFailure = runCatching {
+            filesManager.syncFolder(FileFolders.CHAT_GENERATED_IMAGES)
+        }.exceptionOrNull()
+        val registrationsByAssetId = chatTaskStore.load().toPendingMediaRegistrations()
+        val orphanedChatFiles = genMediaRepository.reconcileUnregisteredGeneratedFiles(
+            folder = FileFolders.CHAT_GENERATED_IMAGES,
+            resolveFile = { relativePath -> resolveManagedMediaFile(context, relativePath) },
+            registrationsByAssetId = registrationsByAssetId,
         )
-    }
-
-    override suspend fun saveFinal(
-        task: ImageGenerationTask,
-        item: ImageGenerationItem,
-        index: Int,
-        sourcePaths: List<String>,
-    ): GeneratedImage {
-        val timestamp = System.currentTimeMillis()
-        val payload = try {
-            decodeImageForPersistence(item)
-        } catch (error: Exception) {
-            throw ImageGenerationException(
-                ImageGenerationFailureKind.IMAGE_WRITE,
-                "The generated image payload is invalid",
-                error,
-            )
-        }
-        val imageFile = File(filesManager.getImagesDir(), "${task.taskId}_$index.${payload.extension}")
-        val metadata = PendingImageMetadata(
-            path = "images/${imageFile.name}",
-            mimeType = payload.mimeType,
-            modelId = task.modelId,
-            modelDisplayName = task.modelName,
-            providerId = task.providerId,
-            prompt = task.prompt,
-            createAt = timestamp,
-            type = if (sourcePaths.isEmpty()) {
-                GenMediaEntity.TYPE_IMAGE_GENERATION
-            } else {
-                GenMediaEntity.TYPE_IMAGE_EDIT
+        val assets = genMediaRepository.reconcileLocalMetadata(
+            resolveFile = { relativePath -> resolveManagedMediaFile(context, relativePath) },
+        )
+        return pending.copy(
+            inspected = pending.inspected + orphanedChatFiles.inspected + assets.inspected,
+            registered = pending.registered + orphanedChatFiles.registered,
+            metadataRepaired = assets.repaired,
+            missingFiles = orphanedChatFiles.missing + assets.missing,
+            failures = buildList {
+                addAll(pending.failures)
+                chatFolderSyncFailure?.let { error ->
+                    add("chat_generated_images: ${error.message ?: error::class.java.simpleName}")
+                }
+                addAll(orphanedChatFiles.failures)
+                addAll(assets.failures)
             },
-            sourcePaths = sourcePaths,
-        )
-        val pendingStore = pendingStore()
-        val createdFile = try {
-            // Journal intent first. A process death can now leave either a
-            // reconcilable sidecar or a fully committed image, never an
-            // untracked final image created by this path.
-            pendingStore.persist(metadata)
-            atomicWrite(imageFile, payload.bytes)
-        } catch (error: Exception) {
-            if (!imageFile.exists()) pendingStore.discard(metadata)
-            throw ImageGenerationException(
-                ImageGenerationFailureKind.IMAGE_WRITE,
-                "Failed to save the generated image",
-                error,
-            )
-        }
-
-        val id = try {
-            pendingStore.register(metadata)
-        } catch (error: Exception) {
-            val recoveredImage = GeneratedImage(
-                id = 0,
-                prompt = task.prompt,
-                filePath = createdFile.absolutePath,
-                timestamp = timestamp,
-                model = task.modelName,
-                modelId = task.modelId,
-                modelDisplayName = task.modelName,
-                providerId = task.providerId,
-            )
-            throw ImageGenerationException(
-                ImageGenerationFailureKind.DATABASE_WRITE,
-                "The image was saved, but could not be added to the gallery",
-                error,
-                recoveredImage,
-            )
-        }
-        return GeneratedImage(
-            id = id,
-            prompt = task.prompt,
-            filePath = createdFile.absolutePath,
-            timestamp = timestamp,
-            model = task.modelName,
-            modelId = task.modelId,
-            modelDisplayName = task.modelName,
-            providerId = task.providerId,
         )
     }
-
-    override fun deletePreview(image: GeneratedImage) {
-        if (image.isPreview) {
-            File(image.filePath).delete()
-        }
-    }
-
-    override suspend fun reconcilePending(): ImageMediaReconciliationResult = pendingStore().reconcile()
 
     private fun pendingStore() = PendingImageRegistrationStore(
         imagesDir = filesManager.getImagesDir(),
-        insert = { genMediaRepository.insertMedia(it) },
+        insert = { metadata, imageFile ->
+            val managedFile = filesManager.registerExistingManagedFile(
+                folder = FileFolders.LEGACY_GENERATED_IMAGES,
+                file = imageFile,
+                mimeType = metadata.mimeType,
+                createdAt = metadata.createAt,
+            )
+            genMediaRepository.registerGeneratedAsset(
+                managedFile = managedFile,
+                file = imageFile,
+                registration = GeneratedMediaAssetRegistration(
+                    assetId = metadata.stableAssetId(),
+                    origin = if (metadata.type == GenMediaEntity.TYPE_IMAGE_EDIT) {
+                        MediaAssetEntity.ORIGIN_AI_EDITED
+                    } else {
+                        MediaAssetEntity.ORIGIN_AI_GENERATED
+                    },
+                    modelId = metadata.modelId,
+                    modelDisplayName = metadata.modelDisplayName,
+                    providerId = metadata.providerId,
+                    prompt = metadata.prompt,
+                    createdAt = metadata.createAt,
+                    sourcePaths = metadata.sourcePaths,
+                ),
+            ).id.toLong()
+        },
     )
+}
+
+internal fun resolveManagedMediaFile(context: Context, relativePath: String): File {
+    require(relativePath.isNotBlank() && !File(relativePath).isAbsolute) {
+        "Media path must be relative"
+    }
+    val root = context.filesDir.canonicalFile
+    val resolved = File(root, relativePath).canonicalFile
+    require(resolved.toPath().startsWith(root.toPath()) && resolved != root) {
+        "Media path escapes app storage"
+    }
+    return resolved
 }
 
 internal data class ValidatedImagePayload(
@@ -369,9 +300,29 @@ internal fun atomicWrite(target: File, bytes: ByteArray): File {
     }
 }
 
+internal fun Iterable<ChatImageGenerationTaskRecord>.toPendingMediaRegistrations():
+    Map<String, GeneratedMediaAssetRegistration> = flatMap { task ->
+    task.reservedOutputAssetIds.map { assetId ->
+        assetId to GeneratedMediaAssetRegistration(
+            assetId = assetId,
+            origin = task.mediaOrigin,
+            modelId = task.modelId.ifBlank { task.modelName },
+            modelDisplayName = task.modelName,
+            providerId = task.providerId,
+            prompt = task.prompt,
+            createdAt = task.startedAtEpochMillis,
+            conversationId = task.conversationId,
+            toolCallId = task.toolCallId,
+            parentAssetId = task.parentAssetId,
+        )
+    }
+}.toMap()
+
 @Serializable
 internal data class PendingImageMetadata(
-    val version: Int = 1,
+    val version: Int = 2,
+    /** Absent in v1 sidecars; [stableAssetId] deterministically upgrades them. */
+    val assetId: String? = null,
     val path: String,
     val mimeType: String,
     val modelId: String,
@@ -394,12 +345,22 @@ internal data class PendingImageMetadata(
         createAt = createAt,
         type = type,
         sourcePaths = sourcePaths.takeIf { it.isNotEmpty() }?.joinToString("\n"),
+        assetId = stableAssetId(),
+        origin = if (type == GenMediaEntity.TYPE_IMAGE_EDIT) {
+            MediaAssetEntity.ORIGIN_AI_EDITED
+        } else {
+            MediaAssetEntity.ORIGIN_AI_GENERATED
+        },
+        mimeType = mimeType,
     )
+
+    fun stableAssetId(): String = assetId?.takeIf { it.isNotBlank() }
+        ?: UUID.nameUUIDFromBytes("pending-media:$path".encodeToByteArray()).toString()
 }
 
 internal class PendingImageRegistrationStore(
     private val imagesDir: File,
-    private val insert: suspend (GenMediaEntity) -> Long,
+    private val insert: suspend (PendingImageMetadata, File) -> Long,
 ) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
@@ -412,8 +373,11 @@ internal class PendingImageRegistrationStore(
     }
 
     suspend fun register(metadata: PendingImageMetadata): Int {
+        val image = requireNotNull(resolveImage(metadata.path)?.takeIf(File::isFile)) {
+            "Generated image file is missing: ${metadata.path}"
+        }
         val id = try {
-            insert(metadata.toEntity()).toInt()
+            insert(metadata, image).toInt()
         } catch (error: Exception) {
             runCatching {
                 writeMetadata(
@@ -461,7 +425,11 @@ internal class PendingImageRegistrationStore(
                 .onSuccess { registered++ }
                 .onFailure { failures += "${file.name}: ${it.message ?: it::class.java.simpleName}" }
         }
-        return ImageMediaReconciliationResult(inspected, registered, failures)
+        return ImageMediaReconciliationResult(
+            inspected = inspected,
+            registered = registered,
+            failures = failures,
+        )
     }
 
     private fun metadataFiles(): List<File> =

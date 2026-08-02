@@ -30,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -39,13 +40,19 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.imggen.ChatImageGenerationSlot
 import me.rerere.rikkahub.data.imggen.ChatImageGenerationState
+import me.rerere.rikkahub.data.imggen.ChatImageGenerationTaskController
+import me.rerere.rikkahub.data.imggen.ChatImageGenerationTaskPhase
+import me.rerere.rikkahub.data.imggen.ChatImageGenerationTaskRecord
 import me.rerere.rikkahub.data.imggen.ChatImageSlotStatus
+import me.rerere.rikkahub.data.imggen.ImageGenerationFailureKind
 import me.rerere.rikkahub.ui.components.richtext.ZoomableAsyncImage
 import me.rerere.rikkahub.ui.modifier.shimmer
+import org.koin.compose.koinInject
 
 @Composable
 fun ChatImageGenerationGallery(
@@ -54,18 +61,26 @@ fun ChatImageGenerationGallery(
     active: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val taskController = koinInject<ChatImageGenerationTaskController>()
+    val durableTasks by taskController.tasks.collectAsStateWithLifecycle()
+    val durableTask = durableTasks[toolCallId]
+        ?: state?.requestId?.let(durableTasks::get)
+    val resolvedState = remember(state, durableTask) {
+        state?.reconcileTerminalTask(durableTask)
+    }
+    val resolvedActive = active && (durableTask?.isActive ?: true)
     var collapsed by rememberSaveable(toolCallId) { mutableStateOf(false) }
     var selectedSlotIndex by rememberSaveable(toolCallId) { mutableIntStateOf(0) }
     var now by rememberSaveable(toolCallId) { mutableLongStateOf(System.currentTimeMillis()) }
 
-    LaunchedEffect(active, state?.finishedAtEpochMillis) {
-        while (active && state?.finishedAtEpochMillis == null) {
+    LaunchedEffect(resolvedActive, resolvedState?.finishedAtEpochMillis) {
+        while (resolvedActive && resolvedState?.finishedAtEpochMillis == null) {
             now = System.currentTimeMillis()
             delay(1_000)
         }
     }
 
-    val succeeded = state?.slots.orEmpty().filter {
+    val succeeded = resolvedState?.slots.orEmpty().filter {
         it.status == ChatImageSlotStatus.SUCCEEDED && !it.imageUrl.isNullOrBlank()
     }
     LaunchedEffect(succeeded.map { it.index }) {
@@ -74,7 +89,7 @@ fun ChatImageGenerationGallery(
         }
     }
 
-    val elapsedMillis = state?.let {
+    val elapsedMillis = resolvedState?.let {
         (it.finishedAtEpochMillis ?: now) - it.startedAtEpochMillis
     }?.coerceAtLeast(0L) ?: 0L
 
@@ -90,14 +105,14 @@ fun ChatImageGenerationGallery(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(
-                text = galleryStatusText(state, active, elapsedMillis),
+                text = galleryStatusText(resolvedState, resolvedActive, elapsedMillis),
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            if (state != null) {
+            if (resolvedState != null) {
                 TextButton(onClick = { collapsed = !collapsed }) {
                     Text(stringResource(if (collapsed) R.string.chat_image_generation_expand else R.string.chat_image_generation_collapse))
                 }
@@ -105,7 +120,7 @@ fun ChatImageGenerationGallery(
         }
 
         if (!collapsed) {
-            val selected = state?.slots?.firstOrNull { it.index == selectedSlotIndex }
+            val selected = resolvedState?.slots?.firstOrNull { it.index == selectedSlotIndex }
                 ?.takeIf { it.status == ChatImageSlotStatus.SUCCEEDED }
                 ?: succeeded.firstOrNull()
             AnimatedContent(
@@ -116,7 +131,7 @@ fun ChatImageGenerationGallery(
                 if (imageUrl.isNullOrBlank()) {
                     PendingMainImage(
                         elapsedMillis = elapsedMillis,
-                        aspectRatio = state.imageAspectRatio(),
+                        aspectRatio = resolvedState.imageAspectRatio(),
                     )
                 } else {
                     val previewImages = succeeded.mapNotNull { it.imageUrl }
@@ -128,13 +143,13 @@ fun ChatImageGenerationGallery(
                         contentScale = ContentScale.Fit,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .aspectRatio(state.imageAspectRatio())
+                            .aspectRatio(resolvedState.imageAspectRatio())
                             .clip(RoundedCornerShape(18.dp)),
                     )
                 }
             }
 
-            val slots = state?.slots.orEmpty()
+            val slots = resolvedState?.slots.orEmpty()
             if (slots.size > 1) {
                 LazyRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -154,7 +169,7 @@ fun ChatImageGenerationGallery(
             }
         } else {
             LazyRow(horizontalArrangement = Arrangement.spacedBy((-10).dp)) {
-                items(state?.slots.orEmpty().take(4), key = ChatImageGenerationSlot::index) { slot ->
+                items(resolvedState?.slots.orEmpty().take(4), key = ChatImageGenerationSlot::index) { slot ->
                     GalleryThumbnail(slot = slot, selected = false, onClick = { collapsed = false }, compact = true)
                 }
             }
@@ -237,6 +252,50 @@ private fun GalleryThumbnail(
     }
 }
 
+/**
+ * The durable task ledger is authoritative after a process/service interruption. The
+ * conversation checkpoint can legitimately be one emission behind, so project its
+ * terminal state instead of leaving an eternal spinner or offering an implicit retry.
+ */
+internal fun ChatImageGenerationState.reconcileTerminalTask(
+    task: ChatImageGenerationTaskRecord?,
+): ChatImageGenerationState {
+    if (isTerminal || task == null || task.isActive) return this
+
+    val terminalStatus = if (task.phase == ChatImageGenerationTaskPhase.CANCELLED) {
+        ChatImageSlotStatus.CANCELLED
+    } else {
+        ChatImageSlotStatus.FAILED
+    }
+    val failureKind = when (task.phase) {
+        ChatImageGenerationTaskPhase.CANCELLED -> ImageGenerationFailureKind.USER_CANCELLED
+        ChatImageGenerationTaskPhase.INTERRUPTED -> ImageGenerationFailureKind.PROCESS_INTERRUPTED
+        ChatImageGenerationTaskPhase.COMPLETED -> ImageGenerationFailureKind.DATABASE_WRITE
+        else -> task.errorKind ?: ImageGenerationFailureKind.UNKNOWN
+    }
+    val errorMessage = task.errorMessage ?: when (task.phase) {
+        ChatImageGenerationTaskPhase.COMPLETED ->
+            "The generated image is in the image library, but the chat checkpoint did not finish."
+        ChatImageGenerationTaskPhase.CANCELLED -> "Image generation was cancelled."
+        else -> "Image generation was interrupted and was not retried."
+    }
+    return copy(
+        finishedAtEpochMillis = finishedAtEpochMillis ?: task.finishedAtEpochMillis,
+        slots = slots.map { slot ->
+            if (slot.status == ChatImageSlotStatus.QUEUED || slot.status == ChatImageSlotStatus.RUNNING) {
+                slot.copy(
+                    status = terminalStatus,
+                    error = errorMessage,
+                    finishedAtEpochMillis = task.finishedAtEpochMillis,
+                    failureKind = failureKind,
+                )
+            } else {
+                slot
+            }
+        },
+    )
+}
+
 @Composable
 private fun galleryStatusText(
     state: ChatImageGenerationState?,
@@ -256,6 +315,12 @@ private fun galleryStatusText(
             formatElapsed(elapsedMillis),
         )
         !state.isTerminal -> stringResource(
+            R.string.chat_image_generation_interrupted,
+            success,
+            total,
+            formatElapsed(elapsedMillis),
+        )
+        state.slots.any { it.status == ChatImageSlotStatus.CANCELLED } -> stringResource(
             R.string.chat_image_generation_interrupted,
             success,
             total,

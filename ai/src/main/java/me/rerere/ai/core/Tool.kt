@@ -24,6 +24,10 @@ data class ToolExecutionContext(
     val toolCallId: String,
     val messages: List<UIMessage>,
     val emitProgress: suspend (List<UIMessagePart>) -> Unit,
+    /** Opaque host-owned scope identity, such as a conversation ID. */
+    val contextId: String? = null,
+    /** Stable host-owned execution identity; never derive billing idempotency from provider IDs. */
+    val executionRequestId: String = toolCallId,
 )
 
 @Serializable
