@@ -78,13 +78,35 @@ For each later release:
 2. Double-click `release.cmd`.
 3. Review the displayed Git status and type the exact release confirmation.
 
-The release runner then increments the PaleInk revision and version code,
-archives the notes, runs tests and one universal signed build in a single
-Gradle invocation, stages and commits the reviewed worktree, creates and pushes
-an annotated tag, uploads a draft GitHub Release, atomically publishes the
-update site, promotes the GitHub Release, and verifies the public feed and APK.
-If site publication fails, the GitHub Release remains a draft rather than
-advertising an unavailable update.
+The release runner first fingerprints the tracked build inputs and runs the
+repository-wide tests and Lint gate. A successful gate is recorded under the
+ignored `.release-cache/` directory and is reused while those build
+inputs remain unchanged; documentation and release-note-only commits do not
+invalidate it. Only then does the runner increment the version, archive the
+notes, and build the universal signed APK in a separate Gradle invocation.
+
+The prepared APK and its SHA-256 receipt are retained in that ignored cache
+directory. Publication then stages and commits the release allowlist, creates
+and pushes the annotated tag, uploads or replaces the GitHub Release asset,
+atomically publishes the update site, promotes the GitHub Release, and verifies
+the public feed and APK. If publication is interrupted, rerun only the Publish
+phase; tests, Lint, and APK packaging are not repeated:
+
+```powershell
+pwsh ops/release/release.ps1 -Phase Publish
+```
+
+The available phases are:
+
+- `Full` (default): reuse or run verification, build once, and publish.
+- `Verify`: run or reuse only the repository-wide tests and Lint gate.
+- `Publish`: publish the prepared APK and resume an interrupted release.
+- `Symbols`: independently retry the Crashlytics mapping upload.
+
+Crashlytics symbols are intentionally outside the critical publication path.
+Run the `Symbols` phase after release, or opt in to waiting with
+`-UploadSymbols`. If site publication fails, the GitHub Release remains a draft
+rather than advertising an unavailable update.
 
 Use this read-only preflight when changing the release scripts:
 

@@ -54,6 +54,17 @@ Assert-Contract ($releaseText.Contains('if (-not $ConfirmRelease)')) `
     'release.ps1 must keep interactive confirmation unless explicitly bypassed.'
 Assert-Contract ($releaseText.Contains("'--configuration-cache'")) `
     'release.ps1 must reuse the cache-safe repository verification graph.'
+$verificationOffset = $releaseText.IndexOf("'verifyForkRelease'", [StringComparison]::Ordinal)
+$versionMutationOffset = $releaseText.IndexOf('$newBuildText =', [StringComparison]::Ordinal)
+$assembleOffset = $releaseText.IndexOf("':app:assembleRelease'", [StringComparison]::Ordinal)
+Assert-Contract ($verificationOffset -ge 0 -and $verificationOffset -lt $versionMutationOffset) `
+    'The repository gate must run before release version files are mutated.'
+Assert-Contract ($assembleOffset -gt $versionMutationOffset) `
+    'The signed APK build must be separate from the repository gate.'
+Assert-Contract ($releaseText.Contains("[ValidateSet('Full', 'Verify', 'Publish', 'Symbols')]")) `
+    'release.ps1 must expose resumable release phases.'
+Assert-Contract ($releaseText.Contains('[switch]$UploadSymbols')) `
+    'Crashlytics symbol upload must be explicitly opted into.'
 foreach ($mutation in @('git add --', 'git commit -m', 'git tag -a', 'git push')) {
     $mutationOffset = $releaseText.IndexOf($mutation, [StringComparison]::Ordinal)
     Assert-Contract ($mutationOffset -gt $dryRunGuard) "release.ps1 mutation must remain after the DryRun guard: $mutation"
@@ -64,6 +75,8 @@ $supportsShouldProcess = $publisherText.IndexOf('[CmdletBinding(SupportsShouldPr
 $shouldProcessGuard = $publisherText.IndexOf('$PSCmdlet.ShouldProcess(', [StringComparison]::Ordinal)
 Assert-Contract ($supportsShouldProcess -ge 0) 'publish-update.ps1 must declare SupportsShouldProcess for -WhatIf.'
 Assert-Contract ($shouldProcessGuard -ge 0) 'publish-update.ps1 must guard publication with ShouldProcess.'
+Assert-Contract ($publisherText.Contains('$publishCommand.Replace("`r`n", "`n")')) `
+    'Remote Bash commands must normalize Windows CRLF to LF.'
 foreach ($mutation in @('ssh ', 'scp ')) {
     $mutationOffset = $publisherText.IndexOf($mutation, $shouldProcessGuard, [StringComparison]::Ordinal)
     Assert-Contract ($mutationOffset -gt $shouldProcessGuard) "publish-update.ps1 remote mutation must remain after ShouldProcess: $mutation"

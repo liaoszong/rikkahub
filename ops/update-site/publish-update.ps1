@@ -233,6 +233,9 @@ install -m 644 '$remoteStaging/index.html' '$remoteRoot/public/index.html'
 install -m 644 '$remoteStaging/stable.json' '$remoteRoot/public/api/v1/stable.json.next'
 mv '$remoteRoot/public/api/v1/stable.json.next' '$remoteRoot/public/api/v1/stable.json'
 "@
+    # PowerShell here-strings use the host newline. Remote Bash requires LF;
+    # otherwise Windows CRLF can turn `set -eu` into an invalid option.
+    $publishCommand = $publishCommand.Replace("`r`n", "`n")
     & ssh @ssh $publishCommand
     if ($LASTEXITCODE -ne 0) { throw 'Remote verification or publication failed.' }
 
