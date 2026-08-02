@@ -1,6 +1,7 @@
 package me.rerere.rikkahub.data.db.dao
 
 import androidx.room.Dao
+import androidx.room.ColumnInfo
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
@@ -46,6 +47,56 @@ interface ConversationGraphDAO {
     suspend fun getParts(conversationId: String, messageId: String): List<MessagePartEntity>
 
     @Query(
+        "SELECT * FROM message_branch_group WHERE conversation_id = :conversationId " +
+            "ORDER BY legacy_order, branch_group_id",
+    )
+    suspend fun getBranchGroups(conversationId: String): List<MessageBranchGroupEntity>
+
+    @Query(
+        "SELECT message.* FROM conversation_message AS message " +
+            "INNER JOIN message_branch_group AS branch " +
+            "ON branch.conversation_id = message.conversation_id " +
+            "AND branch.branch_group_id = message.branch_group_id " +
+            "WHERE message.conversation_id = :conversationId " +
+            "ORDER BY branch.legacy_order, message.sibling_ordinal, message.message_id",
+    )
+    suspend fun getMessages(conversationId: String): List<ConversationMessageEntity>
+
+    @Query(
+        "SELECT part.* FROM message_part AS part " +
+            "INNER JOIN conversation_message AS message " +
+            "ON message.conversation_id = part.conversation_id " +
+            "AND message.message_id = part.message_id " +
+            "INNER JOIN message_branch_group AS branch " +
+            "ON branch.conversation_id = message.conversation_id " +
+            "AND branch.branch_group_id = message.branch_group_id " +
+            "WHERE part.conversation_id = :conversationId " +
+            "ORDER BY branch.legacy_order, message.sibling_ordinal, part.ordinal, part.part_id",
+    )
+    suspend fun getAllParts(conversationId: String): List<MessagePartEntity>
+
+    @Query(
+        "SELECT message_id, legacy_message_id FROM conversation_message " +
+            "WHERE conversation_id = :conversationId",
+    )
+    suspend fun getMessageIdentities(conversationId: String): List<ConversationMessageIdentity>
+
+    @Query("SELECT COUNT(*) FROM message_branch_group WHERE conversation_id = :conversationId")
+    suspend fun countBranchGroups(conversationId: String): Int
+
+    @Query("SELECT COUNT(*) FROM conversation_message WHERE conversation_id = :conversationId")
+    suspend fun countMessages(conversationId: String): Int
+
+    @Query("SELECT COUNT(*) FROM message_part WHERE conversation_id = :conversationId")
+    suspend fun countParts(conversationId: String): Int
+
+    @Query("DELETE FROM conversation_message WHERE conversation_id = :conversationId")
+    suspend fun deleteMessages(conversationId: String)
+
+    @Query("DELETE FROM message_branch_group WHERE conversation_id = :conversationId")
+    suspend fun deleteBranchGroups(conversationId: String)
+
+    @Query(
         "UPDATE ConversationEntity SET revision = revision + 1, update_at = :updateAt, " +
             "last_writer_replica_id = :writerReplicaId " +
             "WHERE id = :conversationId AND revision = :expectedRevision AND deleted_at IS NULL",
@@ -63,7 +114,7 @@ interface ConversationMigrationDAO {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertJournal(journal: ConversationMigrationJournalEntity): Long
 
-    @Insert(onConflict = OnConflictStrategy.ABORT)
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertQuarantine(record: ConversationMigrationQuarantineEntity)
 
     @Query("SELECT * FROM conversation_migration_journal WHERE conversation_id = :conversationId")
@@ -74,7 +125,216 @@ interface ConversationMigrationDAO {
             "WHERE phase != 'READY' ORDER BY updated_at, conversation_id LIMIT :limit",
     )
     suspend fun getPendingJournals(limit: Int): List<ConversationMigrationJournalEntity>
+
+    @Query(
+        "INSERT OR IGNORE INTO conversation_migration_journal (" +
+            "conversation_id, phase, source_revision, next_node_index, " +
+            "written_group_count, written_message_count, written_part_count, " +
+            "inference_flags_json, attempts, updated_at" +
+            ") SELECT id, 'PENDING', revision, 0, 0, 0, 0, '[]', 0, :now " +
+            "FROM ConversationEntity WHERE storage_version = 1 AND deleted_at IS NULL",
+    )
+    suspend fun seedMissingJournals(now: Long)
+
+    @Query(
+        "SELECT conversation_id FROM conversation_migration_journal " +
+            "WHERE phase IN ('PENDING', 'COPYING', 'VERIFYING') " +
+            "AND (lease_until IS NULL OR lease_until <= :now) " +
+            "ORDER BY updated_at, conversation_id LIMIT :limit",
+    )
+    suspend fun getLeaseCandidates(now: Long, limit: Int): List<String>
+
+    @Query(
+        "UPDATE conversation_migration_journal SET " +
+            "phase = CASE WHEN phase = 'PENDING' THEN 'COPYING' ELSE phase END, " +
+            "lease_owner = :workerId, lease_until = :leaseUntil, " +
+            "attempts = attempts + 1, updated_at = :now " +
+            "WHERE conversation_id = :conversationId " +
+            "AND phase IN ('PENDING', 'COPYING', 'VERIFYING') " +
+            "AND (lease_until IS NULL OR lease_until <= :now)",
+    )
+    suspend fun claimLease(
+        conversationId: String,
+        workerId: String,
+        now: Long,
+        leaseUntil: Long,
+    ): Int
+
+    @Query(
+        "SELECT id, revision, storage_version, active_leaf_message_id, deleted_at " +
+            "FROM ConversationEntity WHERE id = :conversationId",
+    )
+    suspend fun getConversationState(conversationId: String): ConversationV2State?
+
+    @Query(
+        "SELECT id, node_index, select_index, length(messages) AS message_length " +
+            "FROM message_node WHERE conversation_id = :conversationId " +
+            "ORDER BY node_index, id",
+    )
+    suspend fun getLegacyNodeHeaders(conversationId: String): List<LegacyMessageNodeHeader>
+
+    @Query("SELECT substr(messages, :start, :length) FROM message_node WHERE id = :nodeId")
+    suspend fun getLegacyMessagesChunk(nodeId: String, start: Long, length: Int): String?
+
+    @Query(
+        "UPDATE conversation_migration_journal SET phase = 'COPYING', " +
+            "source_revision = :sourceRevision, legacy_source_digest = :sourceDigest, " +
+            "legacy_projection_digest = NULL, v2_projection_digest = NULL, " +
+            "next_node_index = 0, previous_selected_message_id = NULL, " +
+            "expected_group_count = :groupCount, expected_message_count = NULL, " +
+            "expected_part_count = NULL, written_group_count = 0, " +
+            "written_message_count = 0, written_part_count = 0, " +
+            "inference_flags_json = '[]', last_error_code = NULL, last_error_detail = NULL, " +
+            "lease_until = :leaseUntil, updated_at = :now " +
+            "WHERE conversation_id = :conversationId AND lease_owner = :workerId",
+    )
+    suspend fun resetForSource(
+        conversationId: String,
+        workerId: String,
+        sourceRevision: Long,
+        sourceDigest: String,
+        groupCount: Int,
+        now: Long,
+        leaseUntil: Long,
+    ): Int
+
+    @Query(
+        "UPDATE conversation_migration_journal SET " +
+            "next_node_index = :nextNodeIndex, " +
+            "previous_selected_message_id = :previousSelectedMessageId, " +
+            "written_group_count = :writtenGroupCount, " +
+            "written_message_count = :writtenMessageCount, " +
+            "written_part_count = :writtenPartCount, " +
+            "inference_flags_json = :inferenceFlagsJson, " +
+            "lease_until = :leaseUntil, updated_at = :now " +
+            "WHERE conversation_id = :conversationId AND phase = 'COPYING' " +
+            "AND lease_owner = :workerId",
+    )
+    suspend fun checkpointNode(
+        conversationId: String,
+        workerId: String,
+        nextNodeIndex: Int,
+        previousSelectedMessageId: String?,
+        writtenGroupCount: Int,
+        writtenMessageCount: Int,
+        writtenPartCount: Int,
+        inferenceFlagsJson: String,
+        now: Long,
+        leaseUntil: Long,
+    ): Int
+
+    @Query(
+        "UPDATE conversation_migration_journal SET phase = 'VERIFYING', " +
+            "expected_group_count = :groupCount, expected_message_count = :messageCount, " +
+            "expected_part_count = :partCount, legacy_projection_digest = :legacyDigest, " +
+            "lease_until = :leaseUntil, updated_at = :now " +
+            "WHERE conversation_id = :conversationId AND phase = 'COPYING' " +
+            "AND lease_owner = :workerId",
+    )
+    suspend fun markVerifying(
+        conversationId: String,
+        workerId: String,
+        groupCount: Int,
+        messageCount: Int,
+        partCount: Int,
+        legacyDigest: String,
+        now: Long,
+        leaseUntil: Long,
+    ): Int
+
+    @Query(
+        "UPDATE ConversationEntity SET storage_version = 2, " +
+            "active_leaf_message_id = :activeLeafMessageId " +
+            "WHERE id = :conversationId AND storage_version = 1 " +
+            "AND revision = :sourceRevision AND deleted_at IS NULL",
+    )
+    suspend fun markConversationReady(
+        conversationId: String,
+        sourceRevision: Long,
+        activeLeafMessageId: String?,
+    ): Int
+
+    @Query(
+        "UPDATE conversation_migration_journal SET phase = 'READY', " +
+            "v2_projection_digest = :v2Digest, lease_owner = NULL, lease_until = NULL, " +
+            "last_error_code = NULL, last_error_detail = NULL, updated_at = :now " +
+            "WHERE conversation_id = :conversationId AND phase = 'VERIFYING' " +
+            "AND lease_owner = :workerId",
+    )
+    suspend fun markReady(
+        conversationId: String,
+        workerId: String,
+        v2Digest: String,
+        now: Long,
+    ): Int
+
+    @Query(
+        "UPDATE conversation_migration_journal SET phase = 'QUARANTINED', " +
+            "last_error_code = :reasonCode, last_error_detail = :detail, " +
+            "lease_owner = NULL, lease_until = NULL, updated_at = :now " +
+            "WHERE conversation_id = :conversationId AND lease_owner = :workerId",
+    )
+    suspend fun markQuarantined(
+        conversationId: String,
+        workerId: String,
+        reasonCode: String,
+        detail: String?,
+        now: Long,
+    ): Int
+
+    @Query(
+        "UPDATE conversation_migration_journal SET last_error_code = :errorCode, " +
+            "last_error_detail = :detail, lease_owner = NULL, lease_until = :retryAt, " +
+            "updated_at = :now WHERE conversation_id = :conversationId " +
+            "AND lease_owner = :workerId",
+    )
+    suspend fun recordTransientFailure(
+        conversationId: String,
+        workerId: String,
+        errorCode: String,
+        detail: String?,
+        now: Long,
+        retryAt: Long,
+    ): Int
+
+    @Query(
+        "UPDATE conversation_migration_journal SET lease_owner = NULL, lease_until = NULL, " +
+            "updated_at = :now WHERE conversation_id = :conversationId " +
+            "AND lease_owner = :workerId",
+    )
+    suspend fun releaseLease(conversationId: String, workerId: String, now: Long): Int
+
+    @Query("DELETE FROM conversation_migration_quarantine WHERE conversation_id = :conversationId")
+    suspend fun deleteQuarantine(conversationId: String)
 }
+
+data class ConversationMessageIdentity(
+    @ColumnInfo("message_id")
+    val messageId: String,
+    @ColumnInfo("legacy_message_id")
+    val legacyMessageId: String?,
+)
+
+data class ConversationV2State(
+    val id: String,
+    val revision: Long,
+    @ColumnInfo("storage_version")
+    val storageVersion: Int,
+    @ColumnInfo("active_leaf_message_id")
+    val activeLeafMessageId: String?,
+    @ColumnInfo("deleted_at")
+    val deletedAt: Long?,
+)
+
+data class LegacyMessageNodeHeader(
+    val id: String,
+    @ColumnInfo("node_index")
+    val nodeIndex: Int,
+    @ColumnInfo("select_index")
+    val selectIndex: Int,
+    @ColumnInfo("message_length")
+    val messageLength: Long,
+)
 
 @Dao
 interface MessageFtsOutboxDAO {

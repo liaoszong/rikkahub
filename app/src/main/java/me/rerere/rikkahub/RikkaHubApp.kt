@@ -33,6 +33,7 @@ import me.rerere.rikkahub.di.viewModelModule
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.imggen.MediaAssetRecovery
 import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.data.db.conversation.ConversationV2BackfillCoordinator
 import me.rerere.rikkahub.service.WebServerService
 import me.rerere.rikkahub.utils.CrashHandler
 import me.rerere.rikkahub.utils.DatabaseUtil
@@ -84,6 +85,9 @@ class RikkaHubApp : Application() {
 
         // install crash handler
         CrashHandler.install(this)
+
+        // Build the verified ConversationStore v2 shadow without switching production reads/writes yet.
+        backfillConversationStoreV2()
 
         // Init QuickJS native library
         QuickJSLoader.init()
@@ -192,6 +196,25 @@ class RikkaHubApp : Application() {
                 }
             }.onFailure {
                 Log.e(TAG, "reconcileGeneratedImages failed", it)
+            }
+        }
+    }
+
+    private fun backfillConversationStoreV2() {
+        get<AppScope>().launch(Dispatchers.IO) {
+            runCatching {
+                get<ConversationV2BackfillCoordinator>().runPending()
+            }.onSuccess { result ->
+                if (result.inspected > 0) {
+                    Log.i(
+                        TAG,
+                        "backfillConversationStoreV2: inspected=${result.inspected} " +
+                            "ready=${result.ready} quarantined=${result.quarantined} " +
+                            "inProgress=${result.inProgress} failed=${result.failed}",
+                    )
+                }
+            }.onFailure {
+                Log.e(TAG, "backfillConversationStoreV2 failed", it)
             }
         }
     }
