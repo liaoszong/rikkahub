@@ -40,6 +40,15 @@ import me.rerere.rikkahub.data.db.entity.WorkspaceEntity
 import me.rerere.rikkahub.data.db.migrations.Migration_16_17
 import me.rerere.rikkahub.data.db.migrations.Migration_22_23
 import me.rerere.rikkahub.data.db.migrations.Migration_8_9
+import me.rerere.rikkahub.fork.pale.request.RequestAttemptEntity
+import me.rerere.rikkahub.fork.pale.request.RequestAuditEventEntity
+import me.rerere.rikkahub.fork.pale.request.RequestLedgerDAO
+import me.rerere.rikkahub.fork.pale.request.RequestLedgerEntity
+import me.rerere.rikkahub.fork.pale.request.RequestMigrationJournalEntity
+import me.rerere.rikkahub.fork.pale.request.RequestOutputEntity
+import me.rerere.rikkahub.fork.pale.request.ToolAuditEventEntity
+import me.rerere.rikkahub.fork.pale.request.ToolInvocationEntity
+import me.rerere.rikkahub.fork.pale.request.ToolPermissionEntity
 import me.rerere.rikkahub.utils.JsonInstant
 
 @Database(
@@ -64,8 +73,16 @@ import me.rerere.rikkahub.utils.JsonInstant
         FavoriteEntity::class,
         WorkspaceEntity::class,
         FolderEntity::class,
+        RequestLedgerEntity::class,
+        RequestAttemptEntity::class,
+        RequestOutputEntity::class,
+        ToolInvocationEntity::class,
+        ToolPermissionEntity::class,
+        RequestAuditEventEntity::class,
+        ToolAuditEventEntity::class,
+        RequestMigrationJournalEntity::class,
     ],
-    version = 28,
+    version = 29,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
@@ -110,6 +127,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun workspaceDao(): WorkspaceDAO
 
     abstract fun folderDao(): FolderDAO
+
+    abstract fun requestLedgerDao(): RequestLedgerDAO
 }
 
 object TokenUsageConverter {

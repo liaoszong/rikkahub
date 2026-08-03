@@ -104,6 +104,9 @@ object RequestLifecycle {
             RequestState.SUCCEEDED,
             RequestState.FAILED,
         ),
+        RequestState.UNKNOWN_OUTCOME to setOf(
+            RequestState.COMMITTING,
+        ),
     )
 
     fun canTransition(
