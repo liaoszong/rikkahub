@@ -8,12 +8,13 @@
     "ops/update-site/",
     "pale/",
     "app/src/main/java/me/rerere/rikkahub/fork/pale/",
-    "app/src/test/java/me/rerere/rikkahub/fork/pale/"
+    "app/src/test/java/me/rerere/rikkahub/fork/pale/",
+    "app/src/androidTest/java/me/rerere/rikkahub/fork/pale/"
   ],
   "forkOwnedPaths": [
     ".github/workflows/quality-gate.yml",
     "release.cmd"
   ],
-  "knownIntegrationPathCount": 200,
-  "knownIntegrationPathSetSha256": "bc295321604c37edca133b9f909ba1bfbebac23e09dce644de6e74b9d97ad69d"
+  "knownIntegrationPathCount": 203,
+  "knownIntegrationPathSetSha256": "63aaf29b2c663c310f42167d57f794422a24f9e8ed818e0f79a58a94f9b5b5eb"
 }
