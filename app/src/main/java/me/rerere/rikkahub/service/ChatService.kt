@@ -85,6 +85,7 @@ import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.data.datastore.resolveBackgroundTextModel
 import me.rerere.rikkahub.data.files.FilesManager
+import me.rerere.rikkahub.data.files.FileFolders
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.AssistantAffectScope
@@ -1654,31 +1655,57 @@ class ChatService(
             throw NotFoundException("Message not found")
         }
 
-        val copiedNodes = currentConversation.messageNodes
-            .subList(0, targetNodeIndex + 1)
-            .map { node ->
-                node.copy(
-                    id = Uuid.random(),
-                    messages = node.messages.map { message ->
-                        message.copy(
-                            parts = message.parts.map { part ->
-                                part.copyWithForkedFileUrl()
-                            }
-                        )
-                    }
-                )
+        val forkConversationId = Uuid.random()
+        val copiedFileIds = mutableListOf<Long>()
+        try {
+            val copiedNodes = currentConversation.messageNodes
+                .subList(0, targetNodeIndex + 1)
+                .map { node ->
+                    node.copy(
+                        id = Uuid.random(),
+                        messages = node.messages.map { message ->
+                            message.copy(
+                                parts = message.parts.map { part ->
+                                    part.copyWithForkedFileUrl(copiedFileIds::add)
+                                },
+                            )
+                        },
+                    )
+                }
+
+            val forkConversation = Conversation(
+                id = forkConversationId,
+                assistantId = currentConversation.assistantId,
+                messageNodes = copiedNodes,
+                customSystemPrompt = currentConversation.customSystemPrompt,
+                modeInjectionIds = currentConversation.modeInjectionIds,
+                lorebookIds = currentConversation.lorebookIds,
+            )
+
+            return mutateAndSaveConversation(forkConversation.id) { forkConversation }
+        } catch (error: Throwable) {
+            val durableLookup = withContext(NonCancellable) {
+                runCatching { conversationRepo.getConversationById(forkConversationId) }
             }
-
-        val forkConversation = Conversation(
-            id = Uuid.random(),
-            assistantId = currentConversation.assistantId,
-            messageNodes = copiedNodes,
-            customSystemPrompt = currentConversation.customSystemPrompt,
-            modeInjectionIds = currentConversation.modeInjectionIds,
-            lorebookIds = currentConversation.lorebookIds,
-        )
-
-        return mutateAndSaveConversation(forkConversation.id) { forkConversation }
+            durableLookup.getOrNull()?.let { committed ->
+                return committed
+            }
+            durableLookup.exceptionOrNull()?.let { lookupError ->
+                error.addSuppressed(lookupError)
+                // The insert outcome is unknown; preserving copied files is fail-safe.
+                throw error
+            }
+            withContext(NonCancellable) {
+                copiedFileIds.asReversed().forEach { fileId ->
+                    runCatching {
+                        check(filesManager.delete(fileId)) {
+                            "Fork attachment rollback failed for managed file $fileId"
+                        }
+                    }.exceptionOrNull()?.let(error::addSuppressed)
+                }
+            }
+            throw error
+        }
     }
 
     suspend fun selectMessageNode(
@@ -1755,20 +1782,19 @@ class ChatService(
         return conversation.copy(messageNodes = updatedNodes)
     }
 
-    private fun UIMessagePart.copyWithForkedFileUrl(): UIMessagePart {
-        fun copyLocalFileIfNeeded(url: String): String {
+    private suspend fun UIMessagePart.copyWithForkedFileUrl(
+        onManagedFileCopied: (Long) -> Unit,
+    ): UIMessagePart {
+        suspend fun copyLocalFileIfNeeded(url: String): String {
             if (!url.startsWith("file:")) return url
-            val copied = filesManager.createChatFilesByContents(listOf(url.toUri())).firstOrNull()
-            return copied?.toString() ?: url
+            val copied = filesManager.saveManagedFromUri(
+                folder = FileFolders.UPLOAD,
+                uri = url.toUri(),
+            )
+            onManagedFileCopied(copied.id)
+            return filesManager.getFile(copied).toUri().toString()
         }
-
-        return when (this) {
-            is UIMessagePart.Image -> copy(url = copyLocalFileIfNeeded(url))
-            is UIMessagePart.Document -> copy(url = copyLocalFileIfNeeded(url))
-            is UIMessagePart.Video -> copy(url = copyLocalFileIfNeeded(url))
-            is UIMessagePart.Audio -> copy(url = copyLocalFileIfNeeded(url))
-            else -> this
-        }
+        return copyForConversationFork(::copyLocalFileIfNeeded)
     }
 
     suspend fun clearTranslationField(conversationId: Uuid, messageId: Uuid) {
@@ -1784,6 +1810,25 @@ class ChatService(
         runCatching { job.join() }
         finishInterruptedPendingTools(conversationId)
     }
+}
+
+/**
+ * Gallery images carry a stable assetId and are shared by reference across a fork. Ordinary
+ * attachments are copied, including files nested inside tool output/progress, so deleting either
+ * conversation cannot invalidate the other one's attachment path.
+ */
+internal suspend fun UIMessagePart.copyForConversationFork(
+    copyLocalFile: suspend (String) -> String,
+): UIMessagePart = when (this) {
+    is UIMessagePart.Image -> if (assetId.isNullOrBlank()) copy(url = copyLocalFile(url)) else this
+    is UIMessagePart.Document -> copy(url = copyLocalFile(url))
+    is UIMessagePart.Video -> copy(url = copyLocalFile(url))
+    is UIMessagePart.Audio -> copy(url = copyLocalFile(url))
+    is UIMessagePart.Tool -> copy(
+        output = output.map { part -> part.copyForConversationFork(copyLocalFile) },
+        progress = progress.map { part -> part.copyForConversationFork(copyLocalFile) },
+    )
+    else -> this
 }
 
 class ConversationDeletedException(id: Uuid) :

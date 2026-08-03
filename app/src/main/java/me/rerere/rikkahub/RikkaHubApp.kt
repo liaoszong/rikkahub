@@ -35,6 +35,7 @@ import me.rerere.rikkahub.data.imggen.MediaAssetRecovery
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.db.conversation.ConversationV2BackfillCoordinator
 import me.rerere.rikkahub.data.db.fts.MessageFtsOutboxProcessor
+import me.rerere.rikkahub.data.db.media.ConversationMediaReferenceBackfillProcessor
 import me.rerere.rikkahub.service.WebServerService
 import me.rerere.rikkahub.utils.CrashHandler
 import me.rerere.rikkahub.utils.DatabaseUtil
@@ -89,6 +90,9 @@ class RikkaHubApp : Application() {
 
         // Resume durable search projection work before creating any new outbox events.
         get<MessageFtsOutboxProcessor>().start()
+
+        // Verify exact ConversationStore -> MediaAsset ownership after restore/startup.
+        get<ConversationMediaReferenceBackfillProcessor>().start()
 
         // Finish restartable ConversationStore v2 migrations left by older installations.
         backfillConversationStoreV2()
@@ -191,6 +195,7 @@ class RikkaHubApp : Application() {
             runCatching {
                 get<MediaAssetRecovery>().reconcilePending()
             }.onSuccess { result ->
+                get<ConversationMediaReferenceBackfillProcessor>().requestBackfill()
                 if (result.inspected > 0 || result.failures.isNotEmpty()) {
                     Log.i(
                         TAG,
@@ -210,6 +215,7 @@ class RikkaHubApp : Application() {
                 get<ConversationV2BackfillCoordinator>().runPending()
             }.onSuccess { result ->
                 get<MessageFtsOutboxProcessor>().requestDrain()
+                get<ConversationMediaReferenceBackfillProcessor>().requestBackfill()
                 if (result.inspected > 0) {
                     Log.i(
                         TAG,

@@ -16,6 +16,7 @@ import me.rerere.rikkahub.data.db.entity.MediaRelationEntity
 import me.rerere.rikkahub.data.db.entity.MediaReplicaEntity
 import me.rerere.rikkahub.data.db.entity.MediaV2Values
 import me.rerere.rikkahub.data.db.entity.MessageMediaRefEntity
+import me.rerere.rikkahub.data.db.media.MediaReferenceBackfillScheduler
 import me.rerere.pale.media.MediaStableIds
 import java.io.File
 import java.io.FileInputStream
@@ -33,6 +34,8 @@ class GenMediaRepository(
     private val dao: GenMediaDAO,
     private val filesRepository: FilesRepository? = null,
     private val metadataProbe: MediaAssetMetadataProbe = AndroidMediaAssetMetadataProbe,
+    private val mediaReferenceBackfillScheduler: MediaReferenceBackfillScheduler =
+        MediaReferenceBackfillScheduler {},
 ) {
     fun getAllMedia(): PagingSource<Int, GenMediaEntity> = dao.getAll()
 
@@ -59,73 +62,77 @@ class GenMediaRepository(
         managedFile: ManagedFileEntity,
         file: File,
         registration: GeneratedMediaAssetRegistration,
-    ): MediaAssetEntity = withContext(Dispatchers.IO) {
-        require(managedFile.id > 0) { "A committed managed file is required" }
-        require(managedFile.relativePath.isNotBlank()) { "Managed file path cannot be blank" }
-        require(file.name == managedFile.relativePath.substringAfterLast('/')) {
-            "Managed file identity does not match the inspected file"
-        }
-        MediaStableIds.requireValid(registration.assetId, "Media asset id")
-        MediaStableIds.requireValid(managedFile.fileId, "Managed file id")
-        require(registration.modelId.isNotBlank()) { "Generated media model id cannot be blank" }
-        require(registration.origin in MediaAssetOrigins.ALL) {
-            "Unsupported media origin: ${registration.origin}"
-        }
-        registration.parentAssetId?.let { parentId ->
-            require(dao.getByAssetId(parentId) != null) {
-                "Parent media asset does not exist: $parentId"
+    ): MediaAssetEntity {
+        val committed = withContext(Dispatchers.IO) {
+            require(managedFile.id > 0) { "A committed managed file is required" }
+            require(managedFile.relativePath.isNotBlank()) { "Managed file path cannot be blank" }
+            require(file.name == managedFile.relativePath.substringAfterLast('/')) {
+                "Managed file identity does not match the inspected file"
             }
-        }
+            MediaStableIds.requireValid(registration.assetId, "Media asset id")
+            MediaStableIds.requireValid(managedFile.fileId, "Managed file id")
+            require(registration.modelId.isNotBlank()) { "Generated media model id cannot be blank" }
+            require(registration.origin in MediaAssetOrigins.ALL) {
+                "Unsupported media origin: ${registration.origin}"
+            }
+            registration.parentAssetId?.let { parentId ->
+                require(dao.getByAssetId(parentId) != null) {
+                    "Parent media asset does not exist: $parentId"
+                }
+            }
 
-        val inspected = metadataProbe.inspect(file, managedFile.mimeType)
-        val storageState = inspected.storageState
-        val now = System.currentTimeMillis()
-        val updatedManagedFile = managedFile.copy(
-            mimeType = inspected.mimeType,
-            sizeBytes = inspected.sizeBytes,
-            updatedAt = now,
-        )
-        val compatibilitySourcePaths = (
-            registration.referenceInputs.mapNotNull(MediaAssetReferenceInput::sourcePath) +
-                registration.sourcePaths
-            ).filter(String::isNotBlank).distinct()
-        val asset = MediaAssetEntity(
-            path = managedFile.relativePath,
-            modelId = registration.modelId,
-            modelDisplayName = registration.modelDisplayName,
-            providerId = registration.providerId,
-            prompt = registration.prompt,
-            createAt = registration.createdAt,
-            type = if (registration.origin == MediaAssetEntity.ORIGIN_AI_EDITED) {
-                MediaAssetEntity.TYPE_IMAGE_EDIT
-            } else {
-                MediaAssetEntity.TYPE_IMAGE_GENERATION
-            },
-            sourcePaths = compatibilitySourcePaths.takeIf { it.isNotEmpty() }?.joinToString("\n"),
-            assetId = registration.assetId,
-            displayName = updatedManagedFile.displayName,
-            managedFileId = updatedManagedFile.id,
-            origin = registration.origin,
-            mimeType = inspected.mimeType,
-            sizeBytes = inspected.sizeBytes,
-            width = inspected.width,
-            height = inspected.height,
-            sha256 = inspected.sha256,
-            storageState = storageState,
-            conversationId = registration.conversationId,
-            messageNodeId = registration.messageNodeId,
-            toolCallId = registration.toolCallId,
-            parentAssetId = registration.parentAssetId,
-            updatedAt = now,
-        )
-        dao.registerAssetGraph(
-            buildGraphWrite(
-                managedFile = updatedManagedFile,
-                asset = asset,
-                includeMigrationJournal = inspected.sha256 == null,
-                referenceInputs = registration.referenceInputs,
-            ),
-        )
+            val inspected = metadataProbe.inspect(file, managedFile.mimeType)
+            val storageState = inspected.storageState
+            val now = System.currentTimeMillis()
+            val updatedManagedFile = managedFile.copy(
+                mimeType = inspected.mimeType,
+                sizeBytes = inspected.sizeBytes,
+                updatedAt = now,
+            )
+            val compatibilitySourcePaths = (
+                registration.referenceInputs.mapNotNull(MediaAssetReferenceInput::sourcePath) +
+                    registration.sourcePaths
+                ).filter(String::isNotBlank).distinct()
+            val asset = MediaAssetEntity(
+                path = managedFile.relativePath,
+                modelId = registration.modelId,
+                modelDisplayName = registration.modelDisplayName,
+                providerId = registration.providerId,
+                prompt = registration.prompt,
+                createAt = registration.createdAt,
+                type = if (registration.origin == MediaAssetEntity.ORIGIN_AI_EDITED) {
+                    MediaAssetEntity.TYPE_IMAGE_EDIT
+                } else {
+                    MediaAssetEntity.TYPE_IMAGE_GENERATION
+                },
+                sourcePaths = compatibilitySourcePaths.takeIf { it.isNotEmpty() }?.joinToString("\n"),
+                assetId = registration.assetId,
+                displayName = updatedManagedFile.displayName,
+                managedFileId = updatedManagedFile.id,
+                origin = registration.origin,
+                mimeType = inspected.mimeType,
+                sizeBytes = inspected.sizeBytes,
+                width = inspected.width,
+                height = inspected.height,
+                sha256 = inspected.sha256,
+                storageState = storageState,
+                conversationId = registration.conversationId,
+                messageNodeId = registration.messageNodeId,
+                toolCallId = registration.toolCallId,
+                parentAssetId = registration.parentAssetId,
+                updatedAt = now,
+            )
+            dao.registerAssetGraph(
+                buildGraphWrite(
+                    managedFile = updatedManagedFile,
+                    asset = asset,
+                    includeMigrationJournal = inspected.sha256 == null,
+                    referenceInputs = registration.referenceInputs,
+                ),
+            )
+        }
+        mediaReferenceBackfillScheduler.requestBackfill()
+        return committed
     }
 
     suspend fun hideAsset(assetId: String, now: Long = System.currentTimeMillis()): Boolean =
@@ -142,53 +149,57 @@ class GenMediaRepository(
     suspend fun reconcileLocalMetadata(
         resolveFile: (relativePath: String) -> File,
         limit: Int = 256,
-    ): MediaAssetReconciliationResult = withContext(Dispatchers.IO) {
-        require(limit in 1..2_048) { "Reconciliation limit must be between 1 and 2048" }
-        val failures = mutableListOf<String>()
-        var repaired = 0
-        var missing = 0
-        val candidates = dao.getAssetsNeedingMetadata(limit)
-        candidates.forEach { asset ->
-            runCatching {
-                val file = resolveFile(asset.path)
-                val inspected = metadataProbe.inspect(file, asset.mimeType)
-                val now = maxOf(System.currentTimeMillis(), asset.updatedAt + 1)
-                val managedFile = ensureManagedFile(asset, file, inspected, now)
-                val reconciled = asset.copy(
-                    displayName = managedFile?.displayName ?: asset.displayName,
-                    managedFileId = managedFile?.id ?: asset.managedFileId,
-                    mimeType = inspected.mimeType,
-                    sizeBytes = inspected.sizeBytes,
-                    width = inspected.width,
-                    height = inspected.height,
-                    sha256 = inspected.sha256,
-                    storageState = inspected.storageState,
-                    metadataVersion = MediaAssetEntity.METADATA_VERSION,
-                    updatedAt = now,
-                )
-                dao.reconcileAssetGraph(
-                    buildGraphWrite(
-                        managedFile = managedFile,
-                        asset = reconciled,
-                        includeMigrationJournal = true,
-                        expectedAssetUpdatedAt = asset.updatedAt,
-                    ),
-                )
-                if (inspected.storageState == MediaAssetEntity.STORAGE_MISSING) {
-                    missing++
-                } else if (inspected.storageState == MediaAssetEntity.STORAGE_AVAILABLE) {
-                    repaired++
+    ): MediaAssetReconciliationResult {
+        val result = withContext(Dispatchers.IO) {
+            require(limit in 1..2_048) { "Reconciliation limit must be between 1 and 2048" }
+            val failures = mutableListOf<String>()
+            var repaired = 0
+            var missing = 0
+            val candidates = dao.getAssetsNeedingMetadata(limit)
+            candidates.forEach { asset ->
+                runCatching {
+                    val file = resolveFile(asset.path)
+                    val inspected = metadataProbe.inspect(file, asset.mimeType)
+                    val now = maxOf(System.currentTimeMillis(), asset.updatedAt + 1)
+                    val managedFile = ensureManagedFile(asset, file, inspected, now)
+                    val reconciled = asset.copy(
+                        displayName = managedFile?.displayName ?: asset.displayName,
+                        managedFileId = managedFile?.id ?: asset.managedFileId,
+                        mimeType = inspected.mimeType,
+                        sizeBytes = inspected.sizeBytes,
+                        width = inspected.width,
+                        height = inspected.height,
+                        sha256 = inspected.sha256,
+                        storageState = inspected.storageState,
+                        metadataVersion = MediaAssetEntity.METADATA_VERSION,
+                        updatedAt = now,
+                    )
+                    dao.reconcileAssetGraph(
+                        buildGraphWrite(
+                            managedFile = managedFile,
+                            asset = reconciled,
+                            includeMigrationJournal = true,
+                            expectedAssetUpdatedAt = asset.updatedAt,
+                        ),
+                    )
+                    if (inspected.storageState == MediaAssetEntity.STORAGE_MISSING) {
+                        missing++
+                    } else if (inspected.storageState == MediaAssetEntity.STORAGE_AVAILABLE) {
+                        repaired++
+                    }
+                }.onFailure { error ->
+                    failures += "${asset.assetId}: ${error.message ?: error::class.java.simpleName}"
                 }
-            }.onFailure { error ->
-                failures += "${asset.assetId}: ${error.message ?: error::class.java.simpleName}"
             }
+            MediaAssetReconciliationResult(
+                inspected = candidates.size,
+                repaired = repaired,
+                missing = missing,
+                failures = failures,
+            )
         }
-        MediaAssetReconciliationResult(
-            inspected = candidates.size,
-            repaired = repaired,
-            missing = missing,
-            failures = failures,
-        )
+        if (result.inspected > 0) mediaReferenceBackfillScheduler.requestBackfill()
+        return result
     }
 
     /**

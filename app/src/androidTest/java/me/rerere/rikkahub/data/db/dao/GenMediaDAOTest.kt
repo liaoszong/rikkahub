@@ -6,6 +6,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.runBlocking
 import me.rerere.rikkahub.data.db.AppDatabase
 import me.rerere.rikkahub.data.db.entity.GenMediaEntity
+import me.rerere.rikkahub.data.db.entity.MediaMigrationJournalEntity
+import me.rerere.rikkahub.data.db.entity.MediaV2Values
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -58,6 +60,17 @@ class GenMediaDAOTest {
             assertEquals(listOf(child.assetId), database.genMediaDao().getAllMedia().map { it.assetId })
             assertEquals(2, database.genMediaDao().getAllMediaIncludingHidden().size)
             assertEquals(1, database.genMediaDao().restore(parent.assetId, 30))
+
+            database.genMediaDao().insertJournalIgnore(
+                MediaMigrationJournalEntity(
+                    journalId = "journal-parent-reference",
+                    scopeKind = "asset",
+                    scopeKey = parent.assetId,
+                    stage = MediaV2Values.STAGE_REFERENCE_BACKFILL,
+                    state = MediaV2Values.JOURNAL_COMPLETE,
+                    updatedAt = 30,
+                ),
+            )
 
             database.genMediaDao().delete(parent.id)
             val survivingChild = database.genMediaDao().getByAssetId(child.assetId)

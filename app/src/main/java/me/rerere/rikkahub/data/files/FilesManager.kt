@@ -50,17 +50,28 @@ class FilesManager(
         val resolvedName = displayName ?: getFileNameFromUri(uri) ?: "file"
         val resolvedMime = mimeType ?: getFileMimeType(uri) ?: "application/octet-stream"
         val target = createTargetFile(folder, resolvedName, resolvedMime)
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            target.outputStream().use { output ->
-                input.copyTo(output)
+        try {
+            val inputStream = context.contentResolver.openInputStream(uri)
+                ?: error("Failed to open input stream for $uri")
+            inputStream.use { input ->
+                target.outputStream().use { output ->
+                    input.copyTo(output)
+                }
             }
+            createManagedFileEntity(
+                folder = folder,
+                file = target,
+                displayName = resolvedName,
+                mimeType = resolvedMime,
+            )
+        } catch (error: Throwable) {
+            runCatching {
+                check(!target.exists() || target.delete() && !target.exists()) {
+                    "Failed to roll back managed file ${target.name}"
+                }
+            }.exceptionOrNull()?.let(error::addSuppressed)
+            throw error
         }
-        createManagedFileEntity(
-            folder = folder,
-            file = target,
-            displayName = resolvedName,
-            mimeType = resolvedMime,
-        )
     }
 
     suspend fun saveManagedFromBytes(

@@ -31,6 +31,9 @@ import me.rerere.rikkahub.data.db.conversation.ConversationV2Writer
 import me.rerere.rikkahub.data.db.fts.MessageFtsManager
 import me.rerere.rikkahub.data.db.fts.MessageFtsOutboxProcessor
 import me.rerere.rikkahub.data.db.fts.SimpleDictManager
+import me.rerere.rikkahub.data.db.media.ConversationMediaReferenceBackfillProcessor
+import me.rerere.rikkahub.data.db.media.ConversationMediaReferenceIndexer
+import me.rerere.rikkahub.data.db.media.FilesDirManagedMediaPathResolver
 import me.rerere.rikkahub.data.db.migrations.Migration_6_7
 import me.rerere.rikkahub.data.db.migrations.Migration_11_12
 import me.rerere.rikkahub.data.db.migrations.Migration_13_14
@@ -179,6 +182,25 @@ val dataSourceModule = module {
     single { ConversationV2Codec(get()) }
 
     single {
+        val context: Context = get()
+        ConversationMediaReferenceIndexer(
+            database = get(),
+            dao = get<AppDatabase>().genMediaDao(),
+            migrationDAO = get<AppDatabase>().conversationMigrationDao(),
+            shadowProjector = get(),
+            json = get(),
+            managedPathResolver = FilesDirManagedMediaPathResolver(context.filesDir),
+        )
+    }
+
+    single {
+        ConversationMediaReferenceBackfillProcessor(
+            indexer = get(),
+            appScope = get<AppScope>(),
+        )
+    }
+
+    single {
         ConversationV2Writer(
             database = get(),
             conversationDAO = get<AppDatabase>().conversationDao(),
@@ -189,6 +211,8 @@ val dataSourceModule = module {
             projector = get(),
             codec = get(),
             json = get(),
+            mediaReferenceIndexer = get(),
+            mediaReferenceBackfillScheduler = get<ConversationMediaReferenceBackfillProcessor>(),
         )
     }
 

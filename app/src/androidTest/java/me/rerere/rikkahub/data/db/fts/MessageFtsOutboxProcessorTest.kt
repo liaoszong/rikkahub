@@ -16,6 +16,9 @@ import me.rerere.rikkahub.data.db.conversation.ConversationV2Codec
 import me.rerere.rikkahub.data.db.conversation.ConversationV2ShadowProjector
 import me.rerere.rikkahub.data.db.conversation.ConversationV2Writer
 import me.rerere.rikkahub.data.db.entity.ConversationV2Values
+import me.rerere.rikkahub.data.db.media.ConversationMediaReferenceIndexer
+import me.rerere.rikkahub.data.db.media.FilesDirManagedMediaPathResolver
+import me.rerere.rikkahub.data.db.media.MediaReferenceBackfillScheduler
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.utils.JsonInstant
@@ -50,6 +53,14 @@ class MessageFtsOutboxProcessorTest {
             JsonInstant,
         )
         val ftsManager = MessageFtsManager(database)
+        val mediaReferenceIndexer = ConversationMediaReferenceIndexer(
+            database = database,
+            dao = database.genMediaDao(),
+            migrationDAO = database.conversationMigrationDao(),
+            shadowProjector = projector,
+            json = JsonInstant,
+            managedPathResolver = FilesDirManagedMediaPathResolver(context.filesDir),
+        )
         writer = ConversationV2Writer(
             database = database,
             conversationDAO = database.conversationDao(),
@@ -60,6 +71,8 @@ class MessageFtsOutboxProcessorTest {
             projector = projector,
             codec = ConversationV2Codec(JsonInstant),
             json = JsonInstant,
+            mediaReferenceIndexer = mediaReferenceIndexer,
+            mediaReferenceBackfillScheduler = MediaReferenceBackfillScheduler {},
             nowMillis = { ++clock },
         )
         processor = MessageFtsOutboxProcessor(

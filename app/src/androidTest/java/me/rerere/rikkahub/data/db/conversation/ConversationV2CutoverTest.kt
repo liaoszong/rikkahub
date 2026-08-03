@@ -21,15 +21,20 @@ import me.rerere.rikkahub.data.db.entity.ConversationEntity
 import me.rerere.rikkahub.data.db.entity.ConversationMigrationJournalEntity
 import me.rerere.rikkahub.data.db.entity.ConversationV2Values
 import me.rerere.rikkahub.data.db.entity.FavoriteEntity
+import me.rerere.rikkahub.data.db.entity.MediaAssetEntity
+import me.rerere.rikkahub.data.db.entity.MediaMigrationJournalEntity
+import me.rerere.rikkahub.data.db.entity.MediaV2Values
 import me.rerere.rikkahub.data.db.entity.MessageNodeEntity
 import me.rerere.rikkahub.data.db.fts.MessageFtsManager
 import me.rerere.rikkahub.data.db.fts.MessageFtsOutboxProcessor
-import me.rerere.rikkahub.data.files.FilesManager
+import me.rerere.rikkahub.data.db.media.ConversationMediaReferenceIndexer
+import me.rerere.rikkahub.data.db.media.FilesDirManagedMediaPathResolver
+import me.rerere.rikkahub.data.db.media.MediaReferenceBackfillScheduler
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.data.repository.ConversationRepository
-import me.rerere.rikkahub.data.repository.FilesRepository
 import me.rerere.rikkahub.utils.JsonInstant
+import me.rerere.pale.media.MediaStableIds
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -38,6 +43,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
 import kotlin.uuid.Uuid
 
 @RunWith(AndroidJUnit4::class)
@@ -73,6 +79,14 @@ class ConversationV2CutoverTest {
             database.conversationMigrationDao(),
             JsonInstant,
         )
+        val mediaReferenceIndexer = ConversationMediaReferenceIndexer(
+            database = database,
+            dao = database.genMediaDao(),
+            migrationDAO = database.conversationMigrationDao(),
+            shadowProjector = projector,
+            json = JsonInstant,
+            managedPathResolver = FilesDirManagedMediaPathResolver(context.filesDir),
+        )
         writer = ConversationV2Writer(
             database = database,
             conversationDAO = database.conversationDao(),
@@ -83,6 +97,8 @@ class ConversationV2CutoverTest {
             projector = projector,
             codec = ConversationV2Codec(JsonInstant),
             json = JsonInstant,
+            mediaReferenceIndexer = mediaReferenceIndexer,
+            mediaReferenceBackfillScheduler = MediaReferenceBackfillScheduler {},
             nowMillis = { ++clock },
         )
         val ftsManager = MessageFtsManager(database)
@@ -539,6 +555,147 @@ class ConversationV2CutoverTest {
         assertEquals(5L, patched.storageRevision)
         assertTrue(requireNotNull(repository.getConversationById(legacy.id)).isPinned)
         assertEquals("legacy", projector.loadReady(legacy.id.toString())?.nodes?.single()?.messages?.single()?.text())
+    }
+
+    @Test
+    fun writerMaintainsExactMediaReferencesAcrossInsertUpdateAndDelete() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val relativePath = "chat_generated_images/writer-${System.nanoTime()}.png"
+        val imageFile = File(context.filesDir, relativePath).apply {
+            parentFile?.mkdirs()
+            writeBytes(byteArrayOf(1, 2, 3))
+        }
+        val assetId = "asset-writer-${System.nanoTime()}"
+        try {
+            database.genMediaDao().insertOrGet(
+                MediaAssetEntity(
+                    path = relativePath,
+                    modelId = "test-image-model",
+                    prompt = "writer integration",
+                    createAt = 1,
+                    assetId = assetId,
+                    storageState = MediaAssetEntity.STORAGE_AVAILABLE,
+                    updatedAt = 1,
+                ),
+            )
+            database.genMediaDao().insertJournalIgnore(
+                MediaMigrationJournalEntity(
+                    journalId = MediaStableIds.derived(
+                        "media-journal",
+                        "asset",
+                        assetId,
+                        MediaV2Values.STAGE_REFERENCE_BACKFILL,
+                    ),
+                    scopeKind = "asset",
+                    scopeKey = assetId,
+                    stage = MediaV2Values.STAGE_REFERENCE_BACKFILL,
+                    state = MediaV2Values.JOURNAL_COMPLETE,
+                    updatedAt = 2,
+                ),
+            )
+            val initialMessage = UIMessage(
+                id = Uuid.parse(messageId(91)),
+                role = MessageRole.ASSISTANT,
+                parts = listOf(UIMessagePart.Image(imageFile.toURI().toString(), assetId = assetId)),
+                createdAt = LocalDateTime.parse("2026-08-02T12:00:00"),
+            )
+            val inserted = writer.insert(conversation("writer-media", listOf(node(91, initialMessage))))
+            val insertedRefs = database.genMediaDao().getExactV2References(inserted.id.toString())
+
+            assertEquals(1, insertedRefs.size)
+            assertEquals(assetId, insertedRefs.single().assetId)
+            assertEquals(messageId(91), insertedRefs.single().messageId)
+            assertEquals(
+                MediaV2Values.JOURNAL_COMPLETE,
+                database.genMediaDao().getJournal(
+                    "asset",
+                    assetId,
+                    MediaV2Values.STAGE_REFERENCE_BACKFILL,
+                )?.state,
+            )
+
+            val updated = writer.update(
+                inserted.copy(messageNodes = listOf(node(91, message(91, "image removed")))),
+            )
+            assertTrue(database.genMediaDao().getExactV2References(updated.id.toString()).isEmpty())
+            assertEquals(
+                MediaV2Values.JOURNAL_COMPLETE,
+                database.genMediaDao().getJournal(
+                    "asset",
+                    assetId,
+                    MediaV2Values.STAGE_REFERENCE_BACKFILL,
+                )?.state,
+            )
+
+            assertTrue(writer.delete(updated.id.toString()))
+            assertTrue(database.genMediaDao().getExactV2References(updated.id.toString()).isEmpty())
+            assertNull(database.conversationDao().getConversationById(updated.id.toString()))
+        } finally {
+            imageFile.delete()
+        }
+    }
+
+    @Test
+    fun legacyPromotionCreatesExactMediaReferenceBeforeReadyCommit() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val relativePath = "chat_generated_images/legacy-writer-${System.nanoTime()}.png"
+        val imageFile = File(context.filesDir, relativePath).apply {
+            parentFile?.mkdirs()
+            writeBytes(byteArrayOf(4, 5, 6))
+        }
+        val assetId = "asset-legacy-writer-${System.nanoTime()}"
+        try {
+            database.genMediaDao().insertOrGet(
+                MediaAssetEntity(
+                    path = relativePath,
+                    modelId = "legacy-image-model",
+                    prompt = "legacy promotion",
+                    createAt = 1,
+                    assetId = assetId,
+                    storageState = MediaAssetEntity.STORAGE_AVAILABLE,
+                    updatedAt = 1,
+                ),
+            )
+            database.genMediaDao().insertJournalIgnore(
+                MediaMigrationJournalEntity(
+                    journalId = MediaStableIds.derived(
+                        "media-journal",
+                        "asset",
+                        assetId,
+                        MediaV2Values.STAGE_REFERENCE_BACKFILL,
+                    ),
+                    scopeKind = "asset",
+                    scopeKey = assetId,
+                    stage = MediaV2Values.STAGE_REFERENCE_BACKFILL,
+                    state = MediaV2Values.JOURNAL_PENDING,
+                    updatedAt = 1,
+                ),
+            )
+            val imageMessage = UIMessage(
+                id = Uuid.parse(messageId(92)),
+                role = MessageRole.ASSISTANT,
+                parts = listOf(UIMessagePart.Image(imageFile.toURI().toString(), assetId = assetId)),
+                createdAt = LocalDateTime.parse("2026-08-02T12:00:00"),
+            )
+            val legacy = conversation("legacy-writer-media", listOf(node(92, imageMessage)))
+            database.conversationDao().insert(legacy.toLegacyEntity(revision = 3))
+            database.messageNodeDao().insertAll(rawLegacyNodes(legacy))
+
+            val promoted = writer.update(requireNotNull(repository.getConversationById(legacy.id)))
+            val refs = database.genMediaDao().getExactV2References(promoted.id.toString())
+
+            assertEquals(
+                ConversationV2Values.STORAGE_VERSION_V2,
+                database.conversationMigrationDao()
+                    .getConversationState(promoted.id.toString())
+                    ?.storageVersion,
+            )
+            assertEquals(1, refs.size)
+            assertEquals(assetId, refs.single().assetId)
+            assertEquals(messageId(92), refs.single().messageId)
+        } finally {
+            imageFile.delete()
+        }
     }
 
     private fun coordinator() = ConversationV2BackfillCoordinator(

@@ -17,6 +17,8 @@ import me.rerere.rikkahub.data.db.entity.ConversationV2Values
 import me.rerere.rikkahub.data.db.entity.MessageBranchGroupEntity
 import me.rerere.rikkahub.data.db.entity.MessageFtsOutboxEntity
 import me.rerere.rikkahub.data.db.entity.MessagePartEntity
+import me.rerere.rikkahub.data.db.media.ConversationMediaReferenceIndexer
+import me.rerere.rikkahub.data.db.media.MediaReferenceBackfillScheduler
 import me.rerere.rikkahub.data.model.Conversation
 import java.time.Instant
 import kotlin.uuid.Uuid
@@ -31,11 +33,13 @@ class ConversationV2Writer internal constructor(
     private val projector: ConversationV2ShadowProjector,
     private val codec: ConversationV2Codec,
     private val json: Json,
+    private val mediaReferenceIndexer: ConversationMediaReferenceIndexer,
+    private val mediaReferenceBackfillScheduler: MediaReferenceBackfillScheduler,
     private val nowMillis: () -> Long = System::currentTimeMillis,
 ) {
     suspend fun insert(conversation: Conversation): Conversation {
         val encoded = codec.encode(conversation)
-        return database.withTransaction {
+        val persisted = database.withTransaction {
             val conversationId = conversation.id.toString()
             val revision = 0L
             conversationDAO.insert(
@@ -56,16 +60,22 @@ class ConversationV2Writer internal constructor(
                 previousAttempts = 0,
                 previousInferenceFlagsJson = null,
             )
+            mediaReferenceIndexer.replaceReadyConversationReferencesInTransaction(
+                conversationId = conversationId,
+                now = nowMillis(),
+            )
             clearInternalMarker(conversationId)
             projector.loadReady(conversationId)
                 ?: throw ConversationV2IntegrityException(conversationId, "Inserted READY graph is unavailable")
             conversation.normalized(encoded, revision)
         }
+        mediaReferenceBackfillScheduler.requestBackfill()
+        return persisted
     }
 
     suspend fun update(conversation: Conversation): Conversation {
         val encoded = codec.encode(conversation)
-        return database.withTransaction {
+        val persisted = database.withTransaction {
             val conversationId = conversation.id.toString()
             val state = migrationDAO.getConversationState(conversationId)
                 ?: throw ConversationV2WriteConflictException(
@@ -106,6 +116,8 @@ class ConversationV2Writer internal constructor(
                 )
             }
         }
+        mediaReferenceBackfillScheduler.requestBackfill()
+        return persisted
     }
 
     internal suspend fun patchMetadata(
@@ -113,7 +125,7 @@ class ConversationV2Writer internal constructor(
         patch: ConversationMetadataPatch,
     ): Conversation {
         val patched = patch.applyTo(conversation)
-        return database.withTransaction {
+        val persisted = database.withTransaction {
             val conversationId = conversation.id.toString()
             val state = migrationDAO.getConversationState(conversationId)
                 ?: throw ConversationV2WriteConflictException(
@@ -162,19 +174,26 @@ class ConversationV2Writer internal constructor(
                 )
             }
         }
+        mediaReferenceBackfillScheduler.requestBackfill()
+        return persisted
     }
 
-    suspend fun delete(conversationId: String): Boolean = database.withTransaction {
-        val state = migrationDAO.getConversationState(conversationId) ?: return@withTransaction false
-        val targetRevision = Math.addExact(state.revision, 1L)
-        enqueueFtsEvent(
-            namespace = "fts-delete",
-            conversationId = conversationId,
-            targetRevision = targetRevision,
-            operation = ConversationV2Values.OUTBOX_DELETE,
-        )
-        conversationDAO.deleteById(conversationId)
-        true
+    suspend fun delete(conversationId: String): Boolean {
+        val deleted = database.withTransaction {
+            val state = migrationDAO.getConversationState(conversationId) ?: return@withTransaction false
+            val targetRevision = Math.addExact(state.revision, 1L)
+            enqueueFtsEvent(
+                namespace = "fts-delete",
+                conversationId = conversationId,
+                targetRevision = targetRevision,
+                operation = ConversationV2Values.OUTBOX_DELETE,
+            )
+            mediaReferenceIndexer.deleteConversationExactRefsInTransaction(conversationId)
+            conversationDAO.deleteById(conversationId)
+            true
+        }
+        if (deleted) mediaReferenceBackfillScheduler.requestBackfill()
+        return deleted
     }
 
     private suspend fun updateReady(
@@ -207,6 +226,10 @@ class ConversationV2Writer internal constructor(
             writtenGraph,
             previousJournal.attempts,
             previousJournal.inferenceFlagsJson,
+        )
+        mediaReferenceIndexer.replaceReadyConversationReferencesInTransaction(
+            conversationId = conversationId,
+            now = nowMillis(),
         )
         clearInternalMarker(conversationId)
         projector.loadReady(conversationId)
@@ -244,6 +267,10 @@ class ConversationV2Writer internal constructor(
             writtenGraph,
             previousJournal?.attempts ?: 0,
             previousJournal?.inferenceFlagsJson,
+        )
+        mediaReferenceIndexer.replaceReadyConversationReferencesInTransaction(
+            conversationId = conversationId,
+            now = nowMillis(),
         )
         clearInternalMarker(conversationId)
         projector.loadReady(conversationId)

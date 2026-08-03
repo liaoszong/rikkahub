@@ -18,7 +18,7 @@ import me.rerere.rikkahub.data.db.entity.MessageMediaRefEntity
 import me.rerere.pale.media.MediaStableIds
 
 @Dao
-interface GenMediaDAO {
+interface GenMediaDAO : ConversationMediaReferenceDAO {
     @Query(
         "SELECT * FROM GenMediaEntity " +
             "WHERE visibility = 'visible' ORDER BY create_at DESC",
@@ -506,9 +506,9 @@ interface GenMediaDAO {
 
     @Query(
         "SELECT COUNT(*) FROM media_migration_journal WHERE scope_kind = 'asset' " +
-            "AND scope_key = :assetId AND stage = 'reference_backfill' AND state != 'complete'",
+            "AND scope_key = :assetId AND stage = 'reference_backfill' AND state = 'complete'",
     )
-    suspend fun countPendingReferenceBackfills(assetId: String): Int
+    suspend fun countCompletedReferenceBackfills(assetId: String): Int
 
     @Query(
         "UPDATE GenMediaEntity SET lifecycle = 'delete_pending', visibility = 'hidden', " +
@@ -528,7 +528,7 @@ interface GenMediaDAO {
         val asset = getById(id) ?: return MediaAssetDeleteResult.NOT_FOUND
         val mustFailClosed = countIncomingRelations(asset.assetId) > 0 ||
             countMessageReferences(asset.assetId) > 0 ||
-            countPendingReferenceBackfills(asset.assetId) > 0
+            countCompletedReferenceBackfills(asset.assetId) != 1
         if (mustFailClosed) {
             require(markDeletePending(id, asset.assetId, now) == 1)
             return MediaAssetDeleteResult.DEFERRED_REFERENCED
