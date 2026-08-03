@@ -35,6 +35,24 @@ enum class BillableBoundary {
     @SerialName("result_received") RESULT_RECEIVED,
     @SerialName("result_committed") RESULT_COMMITTED,
     @SerialName("unknown") UNKNOWN,
+
+    ;
+
+    fun canAdvanceTo(next: BillableBoundary): Boolean {
+        if (this == next) return true
+        if (this == UNKNOWN) return false
+        if (next == UNKNOWN) return true
+        return knownRank(next) > knownRank(this)
+    }
+
+    private fun knownRank(boundary: BillableBoundary): Int = when (boundary) {
+        NOT_SENT -> 0
+        SENT -> 1
+        RESPONSE_STARTED -> 2
+        RESULT_RECEIVED -> 3
+        RESULT_COMMITTED -> 4
+        UNKNOWN -> error("UNKNOWN has no known billing rank")
+    }
 }
 
 /** Pure transition authority shared by UI, services, persistence, and recovery. */

@@ -114,10 +114,50 @@ value class RequestAttemptId(override val value: String) : StableId {
 
 @Serializable
 @JvmInline
+value class RequestOutputId(override val value: String) : StableId {
+    init { validateStableId(value) }
+
+    companion object { fun random() = RequestOutputId(newStableId()) }
+}
+
+@Serializable
+@JvmInline
 value class ToolInvocationId(override val value: String) : StableId {
     init { validateStableId(value) }
 
     companion object { fun random() = ToolInvocationId(newStableId()) }
+}
+
+@Serializable
+@JvmInline
+value class ToolPermissionId(override val value: String) : StableId {
+    init { validateStableId(value) }
+
+    companion object { fun random() = ToolPermissionId(newStableId()) }
+}
+
+@Serializable
+@JvmInline
+value class RequestAuditEventId(override val value: String) : StableId {
+    init { validateStableId(value) }
+
+    companion object { fun random() = RequestAuditEventId(newStableId()) }
+}
+
+@Serializable
+@JvmInline
+value class RequestMigrationJournalId(override val value: String) : StableId {
+    init { validateStableId(value) }
+
+    companion object { fun random() = RequestMigrationJournalId(newStableId()) }
+}
+
+@Serializable
+@JvmInline
+value class ToolAuditEventId(override val value: String) : StableId {
+    init { validateStableId(value) }
+
+    companion object { fun random() = ToolAuditEventId(newStableId()) }
 }
 
 @Serializable

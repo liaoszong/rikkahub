@@ -39,4 +39,26 @@ class StableIdsTest {
         assertThrows(IllegalArgumentException::class.java) { MediaAssetId("") }
         assertThrows(IllegalArgumentException::class.java) { MediaAssetId("images/a.png") }
     }
+
+    @Test
+    fun `request ledger identities never reuse provider identifiers`() {
+        val request = RequestId.random()
+        val attempt = RequestAttemptId.random()
+        val output = RequestOutputId.random()
+        val invocation = ToolInvocationId.random()
+        val permission = ToolPermissionId.random()
+        val migration = RequestMigrationJournalId.random()
+
+        assertEquals(
+            6,
+            setOf(
+                request.value,
+                attempt.value,
+                output.value,
+                invocation.value,
+                permission.value,
+                migration.value,
+            ).size,
+        )
+    }
 }

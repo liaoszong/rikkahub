@@ -64,4 +64,35 @@ class RequestLifecycleTest {
             ),
         )
     }
+
+    @Test
+    fun `billing boundary is monotonic and unknown cannot be downgraded`() {
+        assertTrue(BillableBoundary.NOT_SENT.canAdvanceTo(BillableBoundary.SENT))
+        assertTrue(BillableBoundary.SENT.canAdvanceTo(BillableBoundary.RESULT_RECEIVED))
+        assertTrue(BillableBoundary.SENT.canAdvanceTo(BillableBoundary.UNKNOWN))
+        assertFalse(BillableBoundary.RESULT_RECEIVED.canAdvanceTo(BillableBoundary.SENT))
+        assertFalse(BillableBoundary.UNKNOWN.canAdvanceTo(BillableBoundary.SENT))
+    }
+
+    @Test
+    fun `committing attempt cannot dispatch or cancel`() {
+        assertFalse(
+            RequestAttemptLifecycle.canTransition(
+                RequestAttemptState.COMMITTING,
+                RequestAttemptState.DISPATCHING,
+            ),
+        )
+        assertFalse(
+            RequestAttemptLifecycle.canTransition(
+                RequestAttemptState.COMMITTING,
+                RequestAttemptState.CANCELLED,
+            ),
+        )
+        assertTrue(
+            RequestAttemptLifecycle.canTransition(
+                RequestAttemptState.COMMITTING,
+                RequestAttemptState.SUCCEEDED,
+            ),
+        )
+    }
 }
