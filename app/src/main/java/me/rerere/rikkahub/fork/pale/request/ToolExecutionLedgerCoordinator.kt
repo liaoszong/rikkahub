@@ -269,6 +269,7 @@ class ToolExecutionLedgerCoordinator(
             schemaDigest = sha256(schemaJson),
             input = tool.input,
             sideEffectClass = sideEffect.name.lowercase(Locale.ROOT),
+            ownsExternalDispatch = definition.ledgerOwnsExternalDispatch,
             requiresApproval = requiresApproval,
         )
         val inputDigest = sha256(json.encodeToString(inputDescriptor))
@@ -277,6 +278,7 @@ class ToolExecutionLedgerCoordinator(
                 policyVersion = POLICY_VERSION,
                 kind = kind.name.lowercase(Locale.ROOT),
                 sideEffectClass = sideEffect.name.lowercase(Locale.ROOT),
+                ownsExternalDispatch = definition.ledgerOwnsExternalDispatch,
                 requiresApproval = requiresApproval,
                 authorityId = serverId,
             ),
@@ -526,6 +528,7 @@ private data class ToolInputDescriptor(
     val schemaDigest: String,
     val input: String,
     val sideEffectClass: String,
+    val ownsExternalDispatch: Boolean,
     val requiresApproval: Boolean,
 )
 
@@ -534,6 +537,7 @@ private data class ToolCapabilitySnapshot(
     val policyVersion: Int,
     val kind: String,
     val sideEffectClass: String,
+    val ownsExternalDispatch: Boolean,
     val requiresApproval: Boolean,
     val authorityId: String?,
 )

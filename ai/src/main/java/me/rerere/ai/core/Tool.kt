@@ -22,6 +22,12 @@ data class Tool(
     @Transient val ledgerAuthorityId: String? = null,
     /** Provider-neutral side-effect hint: none/read_only/reversible_write/irreversible/unknown. */
     @Transient val ledgerSideEffectClass: String? = null,
+    /**
+     * False for a local orchestration tool whose paid/network effects are represented by child
+     * ledger requests. This prevents the parent tool invocation from claiming the same billable
+     * boundary as its children.
+     */
+    @Transient val ledgerOwnsExternalDispatch: Boolean = true,
 )
 
 /** Runtime-only context for tools that need conversation attachments or progressive UI updates. */

@@ -347,6 +347,38 @@ class ToolExecutionLedgerCoordinatorTest {
     }
 
     @Test
+    fun startupDefersImageAggregateUntilConversationBarrierIsDurable() = runTest {
+        createParent()
+        val definition = definition(needsApproval = false, name = "generate_image")
+        val tool = tool(ToolApprovalState.Auto, name = "generate_image")
+        coordinator.prepare(PARENT_REQUEST_ID, ledgerContext(), tool, definition)
+        val session = coordinator.openExecution(ledgerContext(), tool, definition)
+        session.startLocal()
+        session.releaseForLocalRepair(IllegalStateException("image child recovery pending"))
+        repository.createRequest(
+            NewRequestSpec(
+                requestId = RequestId.random(),
+                intentKey = "image-child-for-parent-barrier",
+                kind = RequestKind.IMAGE_GENERATION,
+                inputDigest = "image-input",
+                capabilitySnapshotJson = "{}",
+                resolverVersion = 1,
+                actor = AuditActor.system("test"),
+                parentRequestId = RequestId(TOOL_REQUEST_ID),
+                conversationId = CONVERSATION_ID,
+                messageId = MESSAGE_ID,
+                partId = "reserved-image-asset",
+            ),
+        )
+
+        val report = reconciler().reconcilePending()
+
+        assertEquals(1, report.deferred)
+        assertEquals("running", repository.getRequest(RequestId(TOOL_REQUEST_ID))!!.requestState)
+        assertEquals("not_sent", repository.getRequest(RequestId(TOOL_REQUEST_ID))!!.billableBoundary)
+    }
+
+    @Test
     fun startupRejectsDurableResultThatChangedAfterInvocationSuccess() = runTest {
         createParent()
         val definition = definition(needsApproval = false)

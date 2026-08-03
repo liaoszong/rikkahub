@@ -16,6 +16,8 @@ enum class ChatImageSlotStatus {
     @SerialName("succeeded") SUCCEEDED,
     @SerialName("failed") FAILED,
     @SerialName("cancelled") CANCELLED,
+    @SerialName("interrupted") INTERRUPTED,
+    @SerialName("unknown_outcome") UNKNOWN_OUTCOME,
 }
 
 @Serializable
@@ -49,11 +51,17 @@ data class ChatImageGenerationState(
         get() = slots.isNotEmpty() && slots.all {
             it.status == ChatImageSlotStatus.SUCCEEDED ||
                 it.status == ChatImageSlotStatus.FAILED ||
-                it.status == ChatImageSlotStatus.CANCELLED
+                it.status == ChatImageSlotStatus.CANCELLED ||
+                it.status == ChatImageSlotStatus.INTERRUPTED ||
+                it.status == ChatImageSlotStatus.UNKNOWN_OUTCOME
         }
 
     val succeededCount: Int get() = slots.count { it.status == ChatImageSlotStatus.SUCCEEDED }
-    val failedCount: Int get() = slots.count { it.status == ChatImageSlotStatus.FAILED }
+    val failedCount: Int get() = slots.count {
+        it.status == ChatImageSlotStatus.FAILED ||
+            it.status == ChatImageSlotStatus.INTERRUPTED ||
+            it.status == ChatImageSlotStatus.UNKNOWN_OUTCOME
+    }
 }
 
 private val chatImageGenerationJson = Json { ignoreUnknownKeys = true }
@@ -135,4 +143,6 @@ fun ChatImageGenerationState?.withFallbackImages(
 private val ChatImageGenerationSlot.isTerminal: Boolean
     get() = status == ChatImageSlotStatus.SUCCEEDED ||
         status == ChatImageSlotStatus.FAILED ||
-        status == ChatImageSlotStatus.CANCELLED
+        status == ChatImageSlotStatus.CANCELLED ||
+        status == ChatImageSlotStatus.INTERRUPTED ||
+        status == ChatImageSlotStatus.UNKNOWN_OUTCOME

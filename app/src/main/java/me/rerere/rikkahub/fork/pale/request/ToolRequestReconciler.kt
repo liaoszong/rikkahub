@@ -23,6 +23,7 @@ data class ToolRequestReconcileReport(
     val cancelled: Int,
     val failed: Int,
     val failures: List<String>,
+    val deferred: Int = 0,
 )
 
 /** Repairs only durable local tool results; it never executes a tool during startup. */
@@ -43,6 +44,7 @@ class ToolRequestReconciler(
         var unknown = 0
         var cancelled = 0
         var failed = 0
+        var deferred = 0
         val failures = mutableListOf<String>()
         candidates.forEach { request ->
             runCatching {
@@ -53,6 +55,15 @@ class ToolRequestReconciler(
                 val invocation = repository.getInvocations(RequestId(request.requestId)).singleOrNull()
                     ?: throw RequestLedgerConflict("Tool request must own exactly one invocation")
                 val durableTool = durableTool(request, invocation)
+                if (durableTool == null && invocation.toolName == "generate_image" &&
+                    repository.getImageRequestsByParent(RequestId(request.requestId)).isNotEmpty()
+                ) {
+                    // ImageTaskRecoveryCoordinator exclusively owns this local aggregate until
+                    // its exact conversation result is durable. Cancelling it here would sever
+                    // already-paid child evidence from the parent forever.
+                    deferred++
+                    return@runCatching
+                }
                 if (durableTool != null) {
                     repairDurableResult(request, attempt, invocation, durableTool)
                     committed++
@@ -153,6 +164,7 @@ class ToolRequestReconciler(
             cancelled = cancelled,
             failed = failed,
             failures = failures,
+            deferred = deferred,
         )
     }
 

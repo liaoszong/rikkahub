@@ -122,7 +122,7 @@ class GenMediaRepository(
                 parentAssetId = registration.parentAssetId,
                 updatedAt = now,
             )
-            dao.registerAssetGraph(
+            val registered = dao.registerAssetGraph(
                 buildGraphWrite(
                     managedFile = updatedManagedFile,
                     asset = asset,
@@ -130,6 +130,35 @@ class GenMediaRepository(
                     referenceInputs = registration.referenceInputs,
                 ),
             )
+            if (registered.modelId == LEGACY_CHAT_MODEL_ID && registered.prompt.isBlank() &&
+                registration.modelId != LEGACY_CHAT_MODEL_ID
+            ) {
+                val upgradedAt = maxOf(now, registered.updatedAt + 1)
+                val upgraded = dao.upgradeLegacyChatPlaceholder(
+                    id = registered.id,
+                    assetId = registered.assetId,
+                    modelId = asset.modelId,
+                    modelDisplayName = asset.modelDisplayName,
+                    providerId = asset.providerId,
+                    prompt = asset.prompt,
+                    type = asset.type,
+                    sourcePaths = asset.sourcePaths,
+                    origin = asset.origin,
+                    conversationId = asset.conversationId,
+                    messageNodeId = asset.messageNodeId,
+                    toolCallId = asset.toolCallId,
+                    parentAssetId = asset.parentAssetId,
+                    updatedAt = upgradedAt,
+                    expectedUpdatedAt = registered.updatedAt,
+                )
+                val current = requireNotNull(dao.getByAssetId(registered.assetId))
+                check(upgraded == 1 || current.modelId != LEGACY_CHAT_MODEL_ID || current.prompt.isNotBlank()) {
+                    "Legacy chat media placeholder upgrade lost a concurrent write: ${registered.assetId}"
+                }
+                current
+            } else {
+                registered
+            }
         }
         mediaReferenceBackfillScheduler.requestBackfill()
         return committed

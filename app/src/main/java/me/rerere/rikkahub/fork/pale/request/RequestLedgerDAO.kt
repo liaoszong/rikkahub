@@ -73,6 +73,30 @@ interface RequestLedgerDAO {
         limit: Int,
     ): List<RequestLedgerEntity>
 
+    @Query(
+        "SELECT * FROM request_ledger WHERE parent_request_id = :parentRequestId " +
+            "AND request_kind = 'image_generation' ORDER BY created_at, request_id",
+    )
+    suspend fun getImageRequestsByParent(parentRequestId: String): List<RequestLedgerEntity>
+
+    @Query(
+        "SELECT parent.* FROM request_ledger AS parent WHERE parent.request_state IN (:states) " +
+            "AND EXISTS (SELECT 1 FROM request_ledger AS child " +
+            "WHERE child.parent_request_id = parent.request_id " +
+            "AND child.request_kind = 'image_generation') " +
+            "ORDER BY parent.updated_at, parent.request_id LIMIT :limit",
+    )
+    suspend fun getImageParentRequestsByState(states: List<String>, limit: Int): List<RequestLedgerEntity>
+
+    @Query(
+        "SELECT parent.* FROM request_ledger AS parent " +
+            "WHERE EXISTS (SELECT 1 FROM request_ledger AS child " +
+            "WHERE child.parent_request_id = parent.request_id " +
+            "AND child.request_kind = 'image_generation') " +
+            "ORDER BY parent.updated_at DESC, parent.request_id DESC",
+    )
+    suspend fun getAllImageParentRequests(): List<RequestLedgerEntity>
+
     @Query("SELECT * FROM request_attempt WHERE attempt_id = :attemptId")
     suspend fun getAttempt(attemptId: String): RequestAttemptEntity?
 

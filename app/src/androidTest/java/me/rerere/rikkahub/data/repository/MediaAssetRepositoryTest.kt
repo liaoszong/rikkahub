@@ -20,6 +20,78 @@ import java.io.File
 @RunWith(AndroidJUnit4::class)
 class MediaAssetRepositoryTest {
     @Test
+    fun recoveredLegacyPlaceholderIsUpgradedByDurableTaskMetadata() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(
+            ApplicationProvider.getApplicationContext(),
+            AppDatabase::class.java,
+        ).build()
+        val assetId = "4aa8aa38-805d-4e37-b253-6f113243d85a"
+        val directory = ApplicationProvider.getApplicationContext<android.content.Context>()
+            .cacheDir.resolve("media-placeholder-upgrade-${System.nanoTime()}").apply { mkdirs() }
+        val file = directory.resolve("$assetId.png").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        try {
+            val files = FilesRepository(database.managedFileDao())
+            val managed = files.insert(
+                ManagedFileEntity(
+                    folder = "chat_generated_images",
+                    relativePath = "chat_generated_images/${file.name}",
+                    displayName = file.name,
+                    mimeType = "image/png",
+                    sizeBytes = file.length(),
+                    createdAt = 10,
+                    updatedAt = 10,
+                ),
+            )
+            val repository = GenMediaRepository(
+                dao = database.genMediaDao(),
+                filesRepository = files,
+                metadataProbe = MediaAssetMetadataProbe { _, _ ->
+                    MediaAssetFileMetadata(
+                        mimeType = "image/png",
+                        sizeBytes = 3,
+                        width = 1,
+                        height = 1,
+                        sha256 = SHA_A,
+                        storageState = MediaAssetEntity.STORAGE_AVAILABLE,
+                    )
+                },
+            )
+            repository.reconcileUnregisteredGeneratedFiles(
+                folder = "chat_generated_images",
+                resolveFile = { file },
+            )
+
+            val upgraded = repository.registerGeneratedAsset(
+                managedFile = managed,
+                file = file,
+                registration = GeneratedMediaAssetRegistration(
+                    assetId = assetId,
+                    origin = MediaAssetEntity.ORIGIN_AI_EDITED,
+                    modelId = "real-model",
+                    modelDisplayName = "Real Model",
+                    providerId = "real-provider",
+                    prompt = "edit this image",
+                    createdAt = 11,
+                    conversationId = "conversation-id",
+                    toolCallId = "tool-call-id",
+                ),
+            )
+
+            assertEquals("real-model", upgraded.modelId)
+            assertEquals("Real Model", upgraded.modelDisplayName)
+            assertEquals("real-provider", upgraded.providerId)
+            assertEquals("edit this image", upgraded.prompt)
+            assertEquals(MediaAssetEntity.ORIGIN_AI_EDITED, upgraded.origin)
+            assertEquals(MediaAssetEntity.TYPE_IMAGE_EDIT, upgraded.type)
+            assertEquals("conversation-id", upgraded.conversationId)
+            assertEquals("tool-call-id", upgraded.toolCallId)
+        } finally {
+            directory.deleteRecursively()
+            database.close()
+        }
+    }
+
+    @Test
     fun orphanManagedChatFileRecoversReservedAssetIdentityWithoutProviderReplay() = runBlocking {
         val database = Room.inMemoryDatabaseBuilder(
             ApplicationProvider.getApplicationContext(),

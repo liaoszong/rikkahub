@@ -18,7 +18,7 @@ class ChatImageGenerationStateRecoveryTest {
         )
 
         assertTrue(recovered.isTerminal)
-        assertEquals(ChatImageSlotStatus.FAILED, recovered.slots.single().status)
+        assertEquals(ChatImageSlotStatus.INTERRUPTED, recovered.slots.single().status)
         assertEquals(ImageGenerationFailureKind.PROCESS_INTERRUPTED, recovered.slots.single().failureKind)
         assertEquals(2_000L, recovered.finishedAtEpochMillis)
     }

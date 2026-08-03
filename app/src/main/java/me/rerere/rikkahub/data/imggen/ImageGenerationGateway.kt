@@ -52,9 +52,11 @@ class ProviderImageGenerationGateway(
                     prompt = request.prompt,
                     numOfImages = request.numberOfImages,
                     size = request.size,
-                    requestId = request.requestId.takeIf(String::isNotBlank),
+                    requestId = request.providerRequestId?.takeIf(String::isNotBlank)
+                        ?: request.requestId.takeIf(String::isNotBlank),
                     customHeaders = model.customHeaders,
                     customBody = model.customBodies,
+                    dispatchObserver = request.dispatchObserver,
                 ),
             )
         } else {
@@ -66,9 +68,11 @@ class ProviderImageGenerationGateway(
                     images = request.referenceImages,
                     numOfImages = request.numberOfImages,
                     size = request.size,
-                    requestId = request.requestId.takeIf(String::isNotBlank),
+                    requestId = request.providerRequestId?.takeIf(String::isNotBlank)
+                        ?: request.requestId.takeIf(String::isNotBlank),
                     customHeaders = model.customHeaders,
                     customBody = model.customBodies,
+                    dispatchObserver = request.dispatchObserver,
                 ),
             )
         }

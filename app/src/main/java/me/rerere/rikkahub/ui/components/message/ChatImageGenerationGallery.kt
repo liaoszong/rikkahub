@@ -212,12 +212,17 @@ private fun PendingMainImage(
 ) {
     val failedSlot = state?.slots?.firstOrNull { it.status == ChatImageSlotStatus.FAILED }
     val cancelled = state?.slots?.any { it.status == ChatImageSlotStatus.CANCELLED } == true
+    val interrupted = state?.slots?.any {
+        it.status == ChatImageSlotStatus.INTERRUPTED ||
+            it.status == ChatImageSlotStatus.UNKNOWN_OUTCOME
+    } == true
     val loading = active && state?.isTerminal != true && !missingFile
     val message = when {
         missingFile -> stringResource(R.string.chat_image_generation_file_missing)
         failedSlot?.error?.isNotBlank() == true -> failedSlot.error
         failedSlot != null -> stringResource(R.string.chat_image_generation_failed)
         cancelled -> stringResource(R.string.chat_image_generation_cancelled)
+        interrupted -> stringResource(R.string.chat_image_generation_unavailable)
         loading -> stringResource(
             R.string.chat_image_generation_elapsed,
             formatElapsed(elapsedMillis),
@@ -259,7 +264,10 @@ private fun GalleryThumbnail(
         shape = shape,
         border = if (selected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
         color = when (slot.status) {
-            ChatImageSlotStatus.FAILED -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
+            ChatImageSlotStatus.FAILED,
+            ChatImageSlotStatus.INTERRUPTED,
+            ChatImageSlotStatus.UNKNOWN_OUTCOME,
+            -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.7f)
             else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.76f)
         },
     ) {
@@ -286,6 +294,9 @@ private fun GalleryThumbnail(
                     text = when (slot.status) {
                         ChatImageSlotStatus.FAILED -> stringResource(R.string.chat_image_generation_failed)
                         ChatImageSlotStatus.CANCELLED -> stringResource(R.string.chat_image_generation_cancelled)
+                        ChatImageSlotStatus.INTERRUPTED,
+                        ChatImageSlotStatus.UNKNOWN_OUTCOME,
+                        -> stringResource(R.string.chat_image_generation_unavailable)
                         ChatImageSlotStatus.RUNNING -> "${slot.index + 1}"
                         else -> "${slot.index + 1}"
                     },
@@ -307,15 +318,17 @@ internal fun ChatImageGenerationState.reconcileTerminalTask(
 ): ChatImageGenerationState {
     if (isTerminal || task == null || task.isActive) return this
 
-    val terminalStatus = if (task.phase == ChatImageGenerationTaskPhase.CANCELLED) {
-        ChatImageSlotStatus.CANCELLED
-    } else {
-        ChatImageSlotStatus.FAILED
+    val terminalStatus = when (task.phase) {
+        ChatImageGenerationTaskPhase.CANCELLED -> ChatImageSlotStatus.CANCELLED
+        ChatImageGenerationTaskPhase.INTERRUPTED -> ChatImageSlotStatus.INTERRUPTED
+        ChatImageGenerationTaskPhase.UNKNOWN_OUTCOME -> ChatImageSlotStatus.UNKNOWN_OUTCOME
+        else -> ChatImageSlotStatus.FAILED
     }
     val failureKind = when (task.phase) {
         ChatImageGenerationTaskPhase.CANCELLED -> ImageGenerationFailureKind.USER_CANCELLED
         ChatImageGenerationTaskPhase.INTERRUPTED -> ImageGenerationFailureKind.PROCESS_INTERRUPTED
         ChatImageGenerationTaskPhase.COMPLETED -> ImageGenerationFailureKind.DATABASE_WRITE
+        ChatImageGenerationTaskPhase.UNKNOWN_OUTCOME -> ImageGenerationFailureKind.UNKNOWN
         else -> task.errorKind ?: ImageGenerationFailureKind.UNKNOWN
     }
     val errorMessage = task.errorMessage ?: when (task.phase) {
@@ -328,8 +341,9 @@ internal fun ChatImageGenerationState.reconcileTerminalTask(
         finishedAtEpochMillis = finishedAtEpochMillis ?: task.finishedAtEpochMillis,
         slots = slots.map { slot ->
             if (slot.status == ChatImageSlotStatus.QUEUED || slot.status == ChatImageSlotStatus.RUNNING) {
+                val recoveredStatus = task.slotStatuses.getOrNull(slot.index) ?: terminalStatus
                 slot.copy(
-                    status = terminalStatus,
+                    status = recoveredStatus,
                     error = errorMessage,
                     finishedAtEpochMillis = task.finishedAtEpochMillis,
                     failureKind = failureKind,
@@ -368,6 +382,15 @@ private fun galleryStatusText(
             formatElapsed(elapsedMillis),
         )
         state.slots.any { it.status == ChatImageSlotStatus.CANCELLED } -> stringResource(
+            R.string.chat_image_generation_interrupted,
+            success,
+            total,
+            formatElapsed(elapsedMillis),
+        )
+        state.slots.any {
+            it.status == ChatImageSlotStatus.INTERRUPTED ||
+                it.status == ChatImageSlotStatus.UNKNOWN_OUTCOME
+        } -> stringResource(
             R.string.chat_image_generation_interrupted,
             success,
             total,

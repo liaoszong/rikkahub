@@ -9,7 +9,9 @@ import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.imggen.ImageGenerationGateway
 import me.rerere.rikkahub.data.imggen.ChatImageGenerationTaskController
 import me.rerere.rikkahub.data.repository.MediaAssetRepository
+import me.rerere.rikkahub.fork.pale.request.ImageGenerationLedgerCoordinator
 import me.rerere.tts.provider.TTSManager
+import kotlinx.serialization.json.Json
 
 class LocalTools(
     private val context: Context,
@@ -20,6 +22,8 @@ class LocalTools(
     private val filesManager: FilesManager,
     private val chatImageTaskController: ChatImageGenerationTaskController,
     private val mediaAssetRepository: MediaAssetRepository,
+    private val imageGenerationLedgerCoordinator: ImageGenerationLedgerCoordinator,
+    private val json: Json,
 ) {
     val javascriptTool by lazy { buildJavascriptTool() }
 
@@ -39,11 +43,14 @@ class LocalTools(
 
     val imageGenerationTool by lazy {
         buildImageGenerationTool(
+            context,
             settingsStore,
             imageGenerationGateway,
             filesManager,
             chatImageTaskController,
             mediaAssetRepository,
+            imageGenerationLedgerCoordinator,
+            json,
         )
     }
 

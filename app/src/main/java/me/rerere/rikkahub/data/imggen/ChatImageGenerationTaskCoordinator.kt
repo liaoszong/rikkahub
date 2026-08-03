@@ -14,10 +14,12 @@ import java.util.concurrent.ConcurrentHashMap
 enum class ChatImageGenerationTaskPhase {
     QUEUED,
     RUNNING,
+    RECOVERING,
     COMPLETED,
     FAILED,
     CANCELLED,
     INTERRUPTED,
+    UNKNOWN_OUTCOME,
 }
 
 @Serializable
@@ -30,10 +32,15 @@ data class ChatImageGenerationTaskRecord(
     val modelId: String = "",
     val modelName: String,
     val providerId: String? = null,
+    val size: String = "auto",
+    val referenceImageCount: Int = 0,
     /** Needed to reconcile a paid output whose file commit outlived its MediaAsset insert. */
     val prompt: String = "",
     val mediaOrigin: String = "ai_generated",
     val parentAssetId: String? = null,
+    /** Durable lineage inputs needed when file commit outlives MediaAsset registration. */
+    val referenceAssetIds: List<String> = emptyList(),
+    val referenceSourcePaths: List<String> = emptyList(),
     val requestedImageCount: Int,
     val completedImageCount: Int = 0,
     val failedImageCount: Int = 0,
@@ -41,15 +48,20 @@ data class ChatImageGenerationTaskRecord(
     val reservedOutputAssetIds: List<String> = emptyList(),
     /** Subset of [reservedOutputAssetIds] whose durable file commit completed. */
     val outputAssetIds: List<String> = emptyList(),
+    /** Authoritative per-slot projection; empty only for task records written before pale.6. */
+    val slotStatuses: List<ChatImageSlotStatus> = emptyList(),
     val startedAtEpochMillis: Long,
     val finishedAtEpochMillis: Long? = null,
     val phase: ChatImageGenerationTaskPhase = ChatImageGenerationTaskPhase.QUEUED,
     val errorKind: ImageGenerationFailureKind? = null,
     val errorMessage: String? = null,
+    /** A signal only; slot ledgers decide the authoritative terminal state. */
+    val cancellationRequestedAtEpochMillis: Long? = null,
 ) {
     val isActive: Boolean
         get() = phase == ChatImageGenerationTaskPhase.QUEUED ||
-            phase == ChatImageGenerationTaskPhase.RUNNING
+            phase == ChatImageGenerationTaskPhase.RUNNING ||
+            phase == ChatImageGenerationTaskPhase.RECOVERING
 }
 
 interface ChatImageGenerationTaskStore {
@@ -126,6 +138,7 @@ interface ChatImageGenerationTaskController {
         completedImageCount: Int,
         failedImageCount: Int,
         outputAssetIds: List<String> = emptyList(),
+        slotStatuses: List<ChatImageSlotStatus> = emptyList(),
     )
 
     fun complete(taskId: String)
@@ -139,6 +152,19 @@ interface ChatImageGenerationTaskController {
     fun cancelled(taskId: String)
 
     fun cancel(taskId: String): Boolean
+
+    fun applyRecoveredState(
+        taskId: String,
+        phase: ChatImageGenerationTaskPhase,
+        completedImageCount: Int,
+        failedImageCount: Int,
+        outputAssetIds: List<String>,
+        slotStatuses: List<ChatImageSlotStatus> = emptyList(),
+        errorKind: ImageGenerationFailureKind? = null,
+        errorMessage: String? = null,
+    )
+
+    fun attachRecoveryTask(task: ChatImageGenerationTaskRecord)
 }
 
 class ChatImageGenerationTaskCoordinator(
@@ -213,6 +239,7 @@ class ChatImageGenerationTaskCoordinator(
         completedImageCount: Int,
         failedImageCount: Int,
         outputAssetIds: List<String>,
+        slotStatuses: List<ChatImageSlotStatus>,
     ) {
         synchronized(this) {
             val current = _tasks.value[taskId]
@@ -223,12 +250,16 @@ class ChatImageGenerationTaskCoordinator(
                 mergedAssetIds.all(current.reservedOutputAssetIds::contains)) {
                 "A task cannot commit an unreserved media identity"
             }
+            require(slotStatuses.isEmpty() || slotStatuses.size == current.requestedImageCount) {
+                "Slot status projection must match the requested image count"
+            }
             replaceAndPersist(
                 current.copy(
                     phase = ChatImageGenerationTaskPhase.RUNNING,
                     completedImageCount = completedImageCount.coerceAtLeast(0),
                     failedImageCount = failedImageCount.coerceAtLeast(0),
                     outputAssetIds = mergedAssetIds,
+                    slotStatuses = slotStatuses.ifEmpty { current.slotStatuses },
                 ),
             )
         }
@@ -264,12 +295,11 @@ class ChatImageGenerationTaskCoordinator(
         val callback = synchronized(this) {
             val current = _tasks.value[taskId]?.takeIf(ChatImageGenerationTaskRecord::isActive)
                 ?: return false
+            if (current.cancellationRequestedAtEpochMillis != null) return false
             replaceAndPersist(
                 current.copy(
-                    phase = ChatImageGenerationTaskPhase.CANCELLED,
-                    finishedAtEpochMillis = clock(),
-                    errorKind = ImageGenerationFailureKind.USER_CANCELLED,
-                    errorMessage = "Image generation was cancelled",
+                    cancellationRequestedAtEpochMillis = clock(),
+                    errorMessage = "Image generation cancellation was requested",
                 ),
             )
             cancellationHandlers.remove(taskId)
@@ -296,8 +326,8 @@ class ChatImageGenerationTaskCoordinator(
                 val current = _tasks.value.getValue(taskId)
                 replaceAndPersist(
                     current.copy(
-                        phase = ChatImageGenerationTaskPhase.INTERRUPTED,
-                        finishedAtEpochMillis = clock(),
+                        cancellationRequestedAtEpochMillis =
+                            current.cancellationRequestedAtEpochMillis ?: clock(),
                         errorKind = ImageGenerationFailureKind.PROCESS_INTERRUPTED,
                         errorMessage = reason,
                     ),
@@ -306,6 +336,57 @@ class ChatImageGenerationTaskCoordinator(
             activeIds.mapNotNull(cancellationHandlers::remove)
         }
         callbacks.forEach { it.invoke() }
+    }
+
+    /** Applies the aggregate produced from authoritative per-slot RequestLedger recovery. */
+    override fun applyRecoveredState(
+        taskId: String,
+        phase: ChatImageGenerationTaskPhase,
+        completedImageCount: Int,
+        failedImageCount: Int,
+        outputAssetIds: List<String>,
+        slotStatuses: List<ChatImageSlotStatus>,
+        errorKind: ImageGenerationFailureKind?,
+        errorMessage: String?,
+    ) {
+        require(phase !in ACTIVE_PHASES) { "Recovered task projection must be terminal" }
+        synchronized(this) {
+            val current = _tasks.value[taskId] ?: return
+            require(current.reservedOutputAssetIds.isEmpty() ||
+                outputAssetIds.all(current.reservedOutputAssetIds::contains)) {
+                "Recovered task cannot commit an unreserved media identity"
+            }
+            require(slotStatuses.isEmpty() || slotStatuses.size == current.requestedImageCount) {
+                "Recovered slot projection must match the requested image count"
+            }
+            cancellationHandlers.remove(taskId)
+            replaceAndPersist(
+                current.copy(
+                    phase = phase,
+                    completedImageCount = completedImageCount.coerceAtLeast(0),
+                    failedImageCount = failedImageCount.coerceAtLeast(0),
+                    outputAssetIds = (current.outputAssetIds + outputAssetIds).distinct(),
+                    slotStatuses = slotStatuses.ifEmpty { current.slotStatuses },
+                    finishedAtEpochMillis = current.finishedAtEpochMillis ?: clock(),
+                    errorKind = errorKind,
+                    errorMessage = errorMessage,
+                ),
+            )
+        }
+    }
+
+    override fun attachRecoveryTask(task: ChatImageGenerationTaskRecord) {
+        synchronized(this) {
+            if (_tasks.value.containsKey(task.taskId)) return
+            replaceAndPersist(
+                task.copy(
+                    phase = ChatImageGenerationTaskPhase.RECOVERING,
+                    finishedAtEpochMillis = null,
+                    errorKind = ImageGenerationFailureKind.PROCESS_INTERRUPTED,
+                    errorMessage = "Recovering paid image request state. No provider request will be replayed.",
+                ),
+            )
+        }
     }
 
     private fun finish(
@@ -331,14 +412,13 @@ class ChatImageGenerationTaskCoordinator(
 
     private fun restoreTasks(): List<ChatImageGenerationTaskRecord> {
         val restored = store.load()
-        val now = clock()
         val recovered = restored.map { task ->
             if (task.isActive) {
                 task.copy(
-                    phase = ChatImageGenerationTaskPhase.INTERRUPTED,
-                    finishedAtEpochMillis = now,
+                    phase = ChatImageGenerationTaskPhase.RECOVERING,
+                    finishedAtEpochMillis = null,
                     errorKind = ImageGenerationFailureKind.PROCESS_INTERRUPTED,
-                    errorMessage = "The app process stopped before the task completed. The request was not retried.",
+                    errorMessage = "Recovering paid image request state. No provider request will be replayed.",
                 )
             } else {
                 task
@@ -366,5 +446,10 @@ class ChatImageGenerationTaskCoordinator(
     private companion object {
         const val TAG = "ChatImageTaskCoordinator"
         const val MAX_PERSISTED_TASKS = 32
+        val ACTIVE_PHASES = setOf(
+            ChatImageGenerationTaskPhase.QUEUED,
+            ChatImageGenerationTaskPhase.RUNNING,
+            ChatImageGenerationTaskPhase.RECOVERING,
+        )
     }
 }

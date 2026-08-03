@@ -48,17 +48,17 @@ class ChatImageGenerationTaskCoordinatorTest {
     }
 
     @Test
-    fun `restored active task is interrupted and never restarted`() {
+    fun `restored active task waits for ledger recovery and never restarts provider`() {
         val store = InMemoryStore(listOf(record().copy(phase = ChatImageGenerationTaskPhase.RUNNING)))
         val foreground = FakeForegroundController()
 
         val coordinator = coordinator(store, foreground)
 
         val restored = coordinator.tasks.value.getValue(TASK_ID)
-        assertEquals(ChatImageGenerationTaskPhase.INTERRUPTED, restored.phase)
+        assertEquals(ChatImageGenerationTaskPhase.RECOVERING, restored.phase)
         assertEquals(ImageGenerationFailureKind.PROCESS_INTERRUPTED, restored.errorKind)
         assertEquals(0, foreground.starts)
-        assertFalse(restored.isActive)
+        assertTrue(restored.isActive)
     }
 
     @Test
@@ -77,7 +77,7 @@ class ChatImageGenerationTaskCoordinatorTest {
     }
 
     @Test
-    fun `notification cancellation owns and terminates the matching tool execution`() = runBlocking {
+    fun `notification cancellation is a signal until slot ledgers settle`() = runBlocking {
         val coordinator = coordinator(InMemoryStore(), FakeForegroundController())
         var cancellationCalls = 0
         coordinator.begin(record(), cancelExecution = { cancellationCalls++ })
@@ -85,8 +85,20 @@ class ChatImageGenerationTaskCoordinatorTest {
         assertTrue(coordinator.cancel(TASK_ID))
 
         assertEquals(1, cancellationCalls)
-        assertEquals(ChatImageGenerationTaskPhase.CANCELLED, coordinator.tasks.value.getValue(TASK_ID).phase)
+        val signalled = coordinator.tasks.value.getValue(TASK_ID)
+        assertEquals(ChatImageGenerationTaskPhase.RUNNING, signalled.phase)
+        assertEquals(2_000L, signalled.cancellationRequestedAtEpochMillis)
         assertFalse(coordinator.cancel(TASK_ID))
+
+        coordinator.applyRecoveredState(
+            taskId = TASK_ID,
+            phase = ChatImageGenerationTaskPhase.CANCELLED,
+            completedImageCount = 0,
+            failedImageCount = 0,
+            outputAssetIds = emptyList(),
+            slotStatuses = List(3) { ChatImageSlotStatus.CANCELLED },
+        )
+        assertEquals(ChatImageGenerationTaskPhase.CANCELLED, coordinator.tasks.value.getValue(TASK_ID).phase)
     }
 
     @Test
@@ -100,6 +112,11 @@ class ChatImageGenerationTaskCoordinatorTest {
             completedImageCount = 2,
             failedImageCount = 1,
             outputAssetIds = listOf("asset-1", "asset-2"),
+            slotStatuses = listOf(
+                ChatImageSlotStatus.SUCCEEDED,
+                ChatImageSlotStatus.SUCCEEDED,
+                ChatImageSlotStatus.FAILED,
+            ),
         )
         coordinator.complete(TASK_ID)
 
@@ -108,10 +125,11 @@ class ChatImageGenerationTaskCoordinatorTest {
         assertEquals(2, completed.completedImageCount)
         assertEquals(1, completed.failedImageCount)
         assertEquals(listOf("asset-1", "asset-2"), completed.outputAssetIds)
+        assertEquals(ChatImageSlotStatus.FAILED, completed.slotStatuses.last())
     }
 
     @Test
-    fun `service interruption only terminates tasks owned by that service instance`() = runBlocking {
+    fun `service interruption only signals tasks owned by that service instance`() = runBlocking {
         val coordinator = coordinator(InMemoryStore(), FakeForegroundController())
         coordinator.begin(record(), cancelExecution = {})
         coordinator.begin(
@@ -125,9 +143,14 @@ class ChatImageGenerationTaskCoordinatorTest {
         )
 
         assertEquals(
-            ChatImageGenerationTaskPhase.INTERRUPTED,
+            ChatImageGenerationTaskPhase.RUNNING,
             coordinator.tasks.value.getValue(TASK_ID).phase,
         )
+        assertEquals(
+            ImageGenerationFailureKind.PROCESS_INTERRUPTED,
+            coordinator.tasks.value.getValue(TASK_ID).errorKind,
+        )
+        assertEquals(2_000L, coordinator.tasks.value.getValue(TASK_ID).cancellationRequestedAtEpochMillis)
         assertEquals(
             ChatImageGenerationTaskPhase.RUNNING,
             coordinator.tasks.value.getValue("tool-call-2").phase,
@@ -143,6 +166,8 @@ class ChatImageGenerationTaskCoordinatorTest {
                 prompt = "draw a harbor",
                 mediaOrigin = "ai_edited",
                 parentAssetId = "parent-asset",
+                referenceAssetIds = listOf("reference-asset"),
+                referenceSourcePaths = listOf("uploads/reference.png"),
             ),
         ).toPendingMediaRegistrations().getValue("asset-1")
 
@@ -155,6 +180,14 @@ class ChatImageGenerationTaskCoordinatorTest {
         assertEquals("conversation-1", registration.conversationId)
         assertEquals(TASK_ID, registration.toolCallId)
         assertEquals("parent-asset", registration.parentAssetId)
+        assertEquals(
+            listOf("reference-asset", null),
+            registration.referenceInputs.map { it.assetId },
+        )
+        assertEquals(
+            listOf(null, "uploads/reference.png"),
+            registration.referenceInputs.map { it.sourcePath },
+        )
     }
 
     private fun coordinator(

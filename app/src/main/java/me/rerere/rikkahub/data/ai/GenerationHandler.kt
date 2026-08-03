@@ -383,8 +383,12 @@ class GenerationHandler(
                             val args = argsResult.getOrThrow()
                             if (toolLedgerSession != null) {
                                 try {
-                                    toolLedgerSession.startExternal()
-                                    toolCrossedExternalBoundary = true
+                                    if (toolDef.ledgerOwnsExternalDispatch) {
+                                        toolLedgerSession.startExternal()
+                                        toolCrossedExternalBoundary = true
+                                    } else {
+                                        toolLedgerSession.startLocal()
+                                    }
                                 } catch (cancellation: CancellationException) {
                                     toolLedgerSession.finishCancellation(
                                         externalBoundaryCrossed = toolCrossedExternalBoundary,

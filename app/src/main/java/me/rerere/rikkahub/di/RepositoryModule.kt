@@ -17,6 +17,16 @@ import me.rerere.rikkahub.fork.pale.request.ChatProviderStepCoordinator
 import me.rerere.rikkahub.fork.pale.request.ChatRequestReconciler
 import me.rerere.rikkahub.fork.pale.request.ToolExecutionLedgerCoordinator
 import me.rerere.rikkahub.fork.pale.request.ToolRequestReconciler
+import me.rerere.rikkahub.fork.pale.request.ImageGenerationLedgerCoordinator
+import me.rerere.rikkahub.fork.pale.request.DurableImageSlotOutput
+import me.rerere.rikkahub.fork.pale.request.DurableImageSlotResolver
+import me.rerere.rikkahub.fork.pale.request.ImageRequestReconciler
+import me.rerere.rikkahub.fork.pale.request.ImageTaskRecoveryCoordinator
+import me.rerere.rikkahub.fork.pale.request.ConversationImageToolResultWriter
+import me.rerere.rikkahub.fork.pale.request.DurableImageToolResultWriter
+import me.rerere.rikkahub.fork.pale.request.DurableImageTaskSource
+import me.rerere.rikkahub.data.imggen.ChatImageGenerationTaskController
+import me.rerere.rikkahub.data.imggen.findCommittedGeneratedImage
 import me.rerere.workspace.ProotShellRunner
 import me.rerere.workspace.RootfsInstaller
 import me.rerere.workspace.WorkspaceBindMount
@@ -66,6 +76,55 @@ val repositoryModule = module {
 
     single {
         ToolExecutionLedgerCoordinator(repository = get(), json = get())
+    }
+
+    single {
+        ImageGenerationLedgerCoordinator(repository = get())
+    }
+
+    single {
+        val context: Context = get()
+        ImageRequestReconciler(
+            repository = get(),
+            durableOutputResolver = DurableImageSlotResolver { candidate ->
+                findCommittedGeneratedImage(context, candidate.expectedAssetId)?.let { committed ->
+                    DurableImageSlotOutput(
+                        contentDigest = committed.sha256,
+                        assetId = committed.assetId,
+                        sourceId = candidate.expectedSourceId,
+                        relativePath = committed.relativePath,
+                        mimeType = committed.mimeType,
+                        byteSize = committed.byteSize,
+                    )
+                }
+            },
+        )
+    }
+
+    single {
+        ConversationImageToolResultWriter(
+            context = get(),
+            conversationRepository = get(),
+            requestRepository = get(),
+        )
+    }
+
+    single<DurableImageToolResultWriter> {
+        get<ConversationImageToolResultWriter>()
+    }
+
+    single<DurableImageTaskSource> {
+        get<ConversationImageToolResultWriter>()
+    }
+
+    single {
+        ImageTaskRecoveryCoordinator(
+            context = get(),
+            requestRepository = get(),
+            taskController = get<ChatImageGenerationTaskController>(),
+            toolResultWriter = get(),
+            taskSource = get(),
+        )
     }
 
     single {

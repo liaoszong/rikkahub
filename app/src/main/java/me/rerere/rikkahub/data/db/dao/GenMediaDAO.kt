@@ -122,6 +122,32 @@ interface GenMediaDAO : ConversationMediaReferenceDAO {
     )
     suspend fun restore(assetId: String, restoredAt: Long): Int
 
+    @Query(
+        "UPDATE GenMediaEntity SET model_id = :modelId, model_display_name = :modelDisplayName, " +
+            "provider_id = :providerId, prompt = :prompt, type = :type, source_paths = :sourcePaths, " +
+            "origin = :origin, conversation_id = :conversationId, message_node_id = :messageNodeId, " +
+            "tool_call_id = :toolCallId, parent_asset_id = :parentAssetId, updated_at = :updatedAt " +
+            "WHERE id = :id AND asset_id = :assetId AND model_id = 'legacy-chat-image' " +
+            "AND prompt = '' AND updated_at = :expectedUpdatedAt",
+    )
+    suspend fun upgradeLegacyChatPlaceholder(
+        id: Int,
+        assetId: String,
+        modelId: String,
+        modelDisplayName: String?,
+        providerId: String?,
+        prompt: String,
+        type: String,
+        sourcePaths: String?,
+        origin: String,
+        conversationId: String?,
+        messageNodeId: String?,
+        toolCallId: String?,
+        parentAssetId: String?,
+        updatedAt: Long,
+        expectedUpdatedAt: Long,
+    ): Int
+
     /**
      * Registers a file exactly once. The unique path index is the cross-process
      * authority; the transaction turns a concurrent/replayed registration into

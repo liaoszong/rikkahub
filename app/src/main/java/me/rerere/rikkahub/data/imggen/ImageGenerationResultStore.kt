@@ -10,12 +10,15 @@ import me.rerere.rikkahub.data.db.entity.MediaAssetEntity
 import me.rerere.rikkahub.data.files.FileFolders
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.repository.GeneratedMediaAssetRegistration
+import me.rerere.rikkahub.data.repository.MediaAssetReferenceInput
 import me.rerere.rikkahub.data.repository.GenMediaRepository
 import java.io.File
 import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
 import java.util.UUID
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
@@ -27,6 +30,111 @@ data class ImageMediaReconciliationResult(
     val missingFiles: Int = 0,
     val failures: List<String> = emptyList(),
 )
+
+/** Durable file evidence used by Image RequestLedger recovery without consulting UI task state. */
+data class CommittedGeneratedImage(
+    val assetId: String,
+    val file: File,
+    val relativePath: String,
+    val sha256: String,
+    val mimeType: String,
+    val byteSize: Long,
+)
+
+/**
+ * Resolves the deterministic generated-image file reserved for one slot. A duplicate extension is
+ * treated as corruption instead of guessing which paid output is authoritative.
+ */
+fun findCommittedGeneratedImage(context: Context, assetId: String): CommittedGeneratedImage? {
+    val canonicalAssetId = runCatching { UUID.fromString(assetId).toString() }.getOrNull()
+        ?: return null
+    if (canonicalAssetId != assetId) return null
+    val root = File(context.filesDir, FileFolders.CHAT_GENERATED_IMAGES).canonicalFile
+    val candidates = root.listFiles { file ->
+        file.isFile && file.nameWithoutExtension == canonicalAssetId &&
+            file.extension.lowercase() in COMMITTED_IMAGE_EXTENSIONS
+    }.orEmpty()
+    check(candidates.size <= 1) { "Multiple files are bound to generated asset $assetId" }
+    val file = candidates.singleOrNull()?.canonicalFile ?: return null
+    check(file.parentFile == root) { "Generated image path escapes its managed folder" }
+    if (file.length() <= 0L) return null
+    val mimeType = when (file.extension.lowercase()) {
+        "png" -> "image/png"
+        "jpg", "jpeg" -> "image/jpeg"
+        "webp" -> "image/webp"
+        "gif" -> "image/gif"
+        else -> error("Unsupported generated image extension")
+    }
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(file.absolutePath, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    if (bounds.outMimeType?.normalizedImageMime() != mimeType) return null
+    if (!hasCompleteContainerBoundary(file, file.extension.lowercase())) return null
+    var sampleSize = 1
+    while (bounds.outWidth / sampleSize > DECODE_PROBE_MAX_DIMENSION ||
+        bounds.outHeight / sampleSize > DECODE_PROBE_MAX_DIMENSION
+    ) {
+        sampleSize *= 2
+    }
+    val probe = BitmapFactory.decodeFile(
+        file.absolutePath,
+        BitmapFactory.Options().apply { inSampleSize = sampleSize },
+    ) ?: return null
+    probe.recycle()
+    val digest = MessageDigest.getInstance("SHA-256")
+    file.inputStream().buffered().use { input ->
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            if (read > 0) digest.update(buffer, 0, read)
+        }
+    }
+    return CommittedGeneratedImage(
+        assetId = canonicalAssetId,
+        file = file,
+        relativePath = "${FileFolders.CHAT_GENERATED_IMAGES}/${file.name}",
+        sha256 = digest.digest().joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) },
+        mimeType = mimeType,
+        byteSize = file.length(),
+    )
+}
+
+private val COMMITTED_IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "gif")
+
+/** Cheap completeness fence before a file is accepted as paid-output recovery evidence. */
+private fun hasCompleteContainerBoundary(file: File, extension: String): Boolean = runCatching {
+    RandomAccessFile(file, "r").use { input ->
+        when (extension) {
+            "png" -> {
+                if (input.length() < 12L) return@use false
+                input.seek(input.length() - 12L)
+                val trailer = ByteArray(12).also(input::readFully)
+                trailer.copyOfRange(0, 8).contentEquals(
+                    byteArrayOf(0, 0, 0, 0, 'I'.code.toByte(), 'E'.code.toByte(), 'N'.code.toByte(), 'D'.code.toByte()),
+                )
+            }
+            "jpg", "jpeg" -> {
+                if (input.length() < 2L) return@use false
+                input.seek(input.length() - 2L)
+                input.readUnsignedByte() == 0xff && input.readUnsignedByte() == 0xd9
+            }
+            "gif" -> {
+                if (input.length() < 1L) return@use false
+                input.seek(input.length() - 1L)
+                input.readUnsignedByte() == 0x3b
+            }
+            "webp" -> {
+                if (input.length() < 12L) return@use false
+                val header = ByteArray(12).also(input::readFully)
+                String(header, 0, 4, Charsets.US_ASCII) == "RIFF" &&
+                    String(header, 8, 4, Charsets.US_ASCII) == "WEBP" &&
+                    header.readUInt32LittleEndian(4)?.plus(8L) == input.length()
+            }
+            else -> false
+        }
+    }
+}.getOrDefault(false)
 
 /**
  * One-time and crash-recovery bridge for files created by older releases. It deliberately
@@ -314,6 +422,14 @@ internal fun Iterable<ChatImageGenerationTaskRecord>.toPendingMediaRegistrations
             conversationId = task.conversationId,
             toolCallId = task.toolCallId,
             parentAssetId = task.parentAssetId,
+            referenceInputs = buildList {
+                task.referenceAssetIds.forEach { assetId ->
+                    add(MediaAssetReferenceInput(assetId = assetId))
+                }
+                task.referenceSourcePaths.forEach { sourcePath ->
+                    add(MediaAssetReferenceInput(sourcePath = sourcePath))
+                }
+            },
         )
     }
 }.toMap()

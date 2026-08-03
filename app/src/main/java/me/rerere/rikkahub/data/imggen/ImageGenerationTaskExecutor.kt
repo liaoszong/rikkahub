@@ -3,15 +3,19 @@ package me.rerere.rikkahub.data.imggen
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
 import me.rerere.ai.ui.ImageGenerationItem
+import me.rerere.pale.request.RequestState
+import me.rerere.rikkahub.fork.pale.request.ImageGenerationLedgerSession
 import java.io.IOException
 
 data class ImageGenerationExecution(
     val requestId: String,
     val attempt: Int,
     val request: ImageGenerationRequest,
+    val ledgerSession: ImageGenerationLedgerSession? = null,
 ) {
     init {
         require(requestId.isNotBlank()) { "requestId must not be blank" }
@@ -52,11 +56,13 @@ sealed interface ImageGenerationExecutionEvent {
         override val requestId: String,
         override val attempt: Int,
         val failure: ImageGenerationExecutionFailure,
+        val ledgerState: RequestState? = null,
     ) : ImageGenerationExecutionEvent
 
     data class Cancelled(
         override val requestId: String,
         override val attempt: Int,
+        val ledgerState: RequestState? = null,
     ) : ImageGenerationExecutionEvent
 }
 
@@ -87,18 +93,41 @@ class ImageGenerationTaskExecutor(
         val attempt = execution.attempt
         var finalImageCount = 0
         var nextPreviewIndex = 0
+        val ledgerSession = execution.ledgerSession
         onEvent(ImageGenerationExecutionEvent.Running(requestId, attempt))
         try {
-            gateway.generate(execution.request).collect { item ->
-                if (item.partial) {
-                    val index = item.partialImageIndex ?: nextPreviewIndex
-                    nextPreviewIndex = maxOf(nextPreviewIndex, index)
-                    onEvent(ImageGenerationExecutionEvent.Preview(requestId, attempt, item, index))
-                } else {
-                    val index = finalImageCount++
-                    nextPreviewIndex = finalImageCount
-                    onEvent(ImageGenerationExecutionEvent.FinalImage(requestId, attempt, item, index))
-                }
+            ledgerSession?.prepareDispatch()
+            val providerRequest = execution.request.copy(
+                providerRequestId = ledgerSession?.providerRequestId
+                    ?: execution.request.providerRequestId,
+                dispatchObserver = ledgerSession?.dispatchObserver
+                    ?: execution.request.dispatchObserver,
+            )
+            val collectProvider: suspend () -> Unit = {
+                // One ledger slot owns exactly one final image. Stop after the first final item so
+                // a non-conforming provider cannot overwrite the reserved MediaAsset identity.
+                gateway.generate(providerRequest)
+                    .transformWhile { item ->
+                        emit(item)
+                        item.partial
+                    }
+                    .collect { item ->
+                        ledgerSession?.markResponseStarted()
+                        if (item.partial) {
+                            val index = item.partialImageIndex ?: nextPreviewIndex
+                            nextPreviewIndex = maxOf(nextPreviewIndex, index)
+                            onEvent(ImageGenerationExecutionEvent.Preview(requestId, attempt, item, index))
+                        } else {
+                            val index = finalImageCount++
+                            nextPreviewIndex = finalImageCount
+                            onEvent(ImageGenerationExecutionEvent.FinalImage(requestId, attempt, item, index))
+                        }
+                    }
+            }
+            if (ledgerSession != null) {
+                ledgerSession.withLeaseHeartbeat { collectProvider() }
+            } else {
+                collectProvider()
             }
             if (finalImageCount == 0) {
                 throw ImageGenerationException(
@@ -109,13 +138,49 @@ class ImageGenerationTaskExecutor(
             onEvent(ImageGenerationExecutionEvent.Succeeded(requestId, attempt, finalImageCount))
             return ImageGenerationExecutionResult.Success(finalImageCount)
         } catch (cancelled: CancellationException) {
-            withContext(NonCancellable) {
-                onEvent(ImageGenerationExecutionEvent.Cancelled(requestId, attempt))
+            val ledgerState = withContext(NonCancellable) {
+                ledgerSession?.terminalState()?.takeIf { it == RequestState.SUCCEEDED }
+                    ?: if (finalImageCount > 0) {
+                        // A final provider item may already have been atomically committed by the
+                        // event sink. Cancellation during local metadata work is repairable and
+                        // must not turn that exact file into an irreversible INTERRUPTED result.
+                        ledgerSession?.releaseForLocalRepair(cancelled)
+                        ledgerSession?.terminalState()
+                    } else {
+                        runCatching { ledgerSession?.finishCancellation() }.getOrNull()
+                    }
+            }
+            if (ledgerState != RequestState.SUCCEEDED) {
+                withContext(NonCancellable) {
+                    onEvent(ImageGenerationExecutionEvent.Cancelled(requestId, attempt, ledgerState))
+                }
             }
             throw cancelled
         } catch (error: Throwable) {
+            val alreadySucceeded = ledgerSession?.terminalState() == RequestState.SUCCEEDED
+            if (alreadySucceeded) {
+                onEvent(ImageGenerationExecutionEvent.Succeeded(requestId, attempt, finalImageCount.coerceAtLeast(1)))
+                return ImageGenerationExecutionResult.Success(finalImageCount.coerceAtLeast(1))
+            }
+            val ledgerState = withContext(NonCancellable) {
+                if (finalImageCount > 0) {
+                    // The provider has returned its final paid payload. From here, failures belong
+                    // to the local file/Room commit chain; preserve RESPONSE_STARTED or
+                    // RESULT_RECEIVED so exact-file startup reconciliation can finish it.
+                    ledgerSession?.releaseForLocalRepair(error)
+                    ledgerSession?.terminalState()
+                } else {
+                    runCatching {
+                        ledgerSession?.finishFailure(responseProvedFailure = error.provesProviderFailure())
+                    }.getOrElse { ledgerFailure ->
+                        ledgerSession?.releaseForLocalRepair(error)
+                        error.addSuppressed(ledgerFailure)
+                        null
+                    }
+                }
+            }
             val failure = classifyFailure(error)
-            onEvent(ImageGenerationExecutionEvent.Failed(requestId, attempt, failure))
+            onEvent(ImageGenerationExecutionEvent.Failed(requestId, attempt, failure, ledgerState))
             return ImageGenerationExecutionResult.Failure(failure)
         }
     }
@@ -139,4 +204,10 @@ class ImageGenerationTaskExecutor(
         }
         return ImageGenerationExecutionFailure(kind, message)
     }
+
+    private fun Throwable.provesProviderFailure(): Boolean =
+        this is ImageGenerationException && kind in setOf(
+            ImageGenerationFailureKind.SERVER,
+            ImageGenerationFailureKind.RESPONSE_PARSE,
+        )
 }

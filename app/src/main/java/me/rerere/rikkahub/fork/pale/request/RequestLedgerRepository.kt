@@ -3,7 +3,10 @@ package me.rerere.rikkahub.fork.pale.request
 import androidx.room.withTransaction
 import java.security.MessageDigest
 import java.util.Locale
+import java.util.UUID
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import me.rerere.pale.id.RequestAttemptId
@@ -26,6 +29,8 @@ import me.rerere.pale.request.ToolPermissionDecision
 import me.rerere.pale.request.ToolPermissionScope
 import me.rerere.pale.request.ToolSideEffectClass
 import me.rerere.rikkahub.data.db.AppDatabase
+
+private const val IMAGE_TASK_DESCRIPTOR_EVENT = "image_task_descriptor_v1"
 
 /**
  * The only write authority for Room 29 request, attempt, output, permission, and tool evidence.
@@ -56,6 +61,133 @@ class RequestLedgerRepository(
         dao.getInvocations(requestId.value)
 
     suspend fun getOutputs(requestId: RequestId): List<RequestOutputEntity> = dao.getOutputs(requestId.value)
+
+    suspend fun getImageRequestsByParent(parentRequestId: RequestId): List<RequestLedgerEntity> =
+        dao.getImageRequestsByParent(parentRequestId.value)
+
+    suspend fun getImageParentRequestsByState(
+        states: List<RequestState>,
+        limit: Int = 500,
+    ): List<RequestLedgerEntity> = dao.getImageParentRequestsByState(
+        states.map { it.name.lowercase(Locale.ROOT) },
+        limit,
+    )
+
+    suspend fun getAllImageParentRequests(): List<RequestLedgerEntity> =
+        dao.getAllImageParentRequests()
+
+    suspend fun recordImageTaskDescriptor(
+        parentRequestId: RequestId,
+        payload: JsonObject,
+        actor: AuditActor,
+    ) = database.withTransaction {
+        dao.getRequest(parentRequestId.value) ?: throw RequestLedgerMissing(parentRequestId.value)
+        val payloadJson = payload.toString()
+        val existing = dao.getRequestAudit(parentRequestId.value)
+            .singleOrNull { it.eventKind == IMAGE_TASK_DESCRIPTOR_EVENT }
+        if (existing != null) {
+            require(existing.payloadDigest == sha256(payloadJson)) {
+                "Image task descriptor changed for ${parentRequestId.value}"
+            }
+            return@withTransaction
+        }
+        appendRequestAudit(
+            requestId = parentRequestId.value,
+            eventKind = IMAGE_TASK_DESCRIPTOR_EVENT,
+            actor = actor,
+            payload = payload,
+            now = nowMillis(),
+        )
+    }
+
+    suspend fun getImageTaskDescriptor(parentRequestId: RequestId): JsonObject? =
+        dao.getRequestAudit(parentRequestId.value)
+            .singleOrNull { it.eventKind == IMAGE_TASK_DESCRIPTOR_EVENT }
+            ?.payloadJson
+            ?.let { payload -> Json.parseToJsonElement(payload).jsonObject }
+
+    /**
+     * Converges a local aggregate whose Conversation/Tool target was deleted after every paid
+     * child had already become terminal. This never dispatches a provider call.
+     */
+    suspend fun settleOrphanedImageParent(
+        parent: RequestLedgerEntity,
+        invocation: ToolInvocationEntity,
+        children: List<RequestLedgerEntity>,
+        leaseDurationMillis: Long = 30_000L,
+    ): RequestState {
+        val currentState = RequestState.valueOf(parent.requestState.uppercase(Locale.ROOT))
+        if (currentState.isTerminal) return currentState
+        require(children.isNotEmpty() && children.all {
+            RequestState.valueOf(it.requestState.uppercase(Locale.ROOT)).isTerminal
+        }) { "Orphaned image parent can settle only after every child is terminal" }
+        val activeAttempt = parent.activeAttemptId?.let { getAttempt(RequestAttemptId(it)) }
+        val actor = AuditActor.system("image-orphan-recovery")
+        val owner = "image-orphan:${parent.requestId}"
+        val attemptId = activeAttempt?.attemptId?.let(::RequestAttemptId) ?: RequestAttemptId(
+            UUID.nameUUIDFromBytes("image-orphan:${parent.requestId}".encodeToByteArray()).toString(),
+        )
+        val session = RequestDispatchSession.open(
+            repository = this,
+            request = parent.toNewRequestSpec(actor),
+            owner = owner,
+            leaseDurationMillis = leaseDurationMillis,
+            attemptId = attemptId,
+            idempotencyKey = activeAttempt?.idempotencyKey ?: "image-orphan-${parent.requestId}",
+            requestFingerprint = activeAttempt?.requestFingerprint ?: parent.inputDigest,
+            actor = actor,
+            transportKind = activeAttempt?.transportKind ?: parent.apiSurface,
+            ownerReplicaId = activeAttempt?.ownerReplicaId,
+            foregroundTaskId = activeAttempt?.foregroundTaskId,
+        )
+        val attempt = getAttempt(session.attemptId)
+            ?: throw RequestLedgerMissing(session.attemptId.value)
+        val boundary = BillableBoundary.valueOf(attempt.billableBoundary.uppercase(Locale.ROOT))
+        val latestInvocation = getInvocation(ToolInvocationId(invocation.invocationId)) ?: invocation
+        val invocationState = ToolExecutionState.valueOf(latestInvocation.executionState.uppercase(Locale.ROOT))
+        val orphanMustFail = invocationState in setOf(
+            ToolExecutionState.COMMITTING,
+            ToolExecutionState.SUCCEEDED,
+            ToolExecutionState.FAILED,
+        ) || boundary == BillableBoundary.RESULT_RECEIVED
+        val invocationTerminalState = when {
+            invocationState in setOf(
+                ToolExecutionState.SUCCEEDED,
+                ToolExecutionState.FAILED,
+                ToolExecutionState.CANCELLED,
+                ToolExecutionState.UNKNOWN_OUTCOME,
+            ) -> null
+            orphanMustFail -> ToolExecutionState.FAILED
+            else -> ToolExecutionState.CANCELLED
+        }
+        if (invocationTerminalState != null) {
+            advanceInvocation(
+                AdvanceToolInvocationCommand(
+                    lease = session.lease,
+                    invocationId = ToolInvocationId(latestInvocation.invocationId),
+                    nextApprovalState = ToolApprovalState.valueOf(
+                        latestInvocation.approvalState.uppercase(Locale.ROOT),
+                    ),
+                    nextExecutionState = invocationTerminalState,
+                    actor = actor,
+                    errorKind = "conversation_deleted",
+                ),
+            )
+        }
+        when (boundary) {
+            BillableBoundary.RESULT_RECEIVED -> session.markKnownFailure()
+            BillableBoundary.UNKNOWN -> session.markUnknownOutcome()
+            BillableBoundary.RESULT_COMMITTED -> throw RequestLedgerConflict(
+                "Non-terminal orphaned image parent already committed a result",
+            )
+            else -> session.finishTransportFailure(
+                cancelled = !orphanMustFail,
+            )
+        }
+        return checkNotNull(getRequest(RequestId(parent.requestId)))
+            .requestState
+            .let { RequestState.valueOf(it.uppercase(Locale.ROOT)) }
+    }
 
     suspend fun getChatRequestsForMessage(
         conversationId: String,
@@ -525,8 +657,8 @@ class RequestLedgerRepository(
             dao.getPermissionById(current.permissionId) ?: throw RequestLedgerMissing(current.permissionId)
         }
 
-    suspend fun createInvocation(spec: NewToolInvocationSpec): ToolInvocationEntity =
-        database.withTransaction {
+    suspend fun createInvocation(spec: NewToolInvocationSpec): ToolInvocationEntity {
+        return database.withTransaction {
             val now = nowMillis()
             val request = requireLease(spec.lease, now)
             check(request.activeAttemptId == spec.attemptId.value) {
@@ -603,6 +735,7 @@ class RequestLedgerRepository(
             )
             invocation
         }
+    }
 
     suspend fun advanceInvocation(command: AdvanceToolInvocationCommand): ToolInvocationEntity =
         database.withTransaction {
@@ -1158,6 +1291,30 @@ private fun RequestLedgerEntity.matches(spec: NewRequestSpec): Boolean =
         resolverVersion == spec.resolverVersion &&
         toolCatalogDigest == spec.toolCatalogDigest &&
         approvalState == spec.approvalState.dbValue()
+
+private fun RequestLedgerEntity.toNewRequestSpec(actor: AuditActor) = NewRequestSpec(
+    requestId = RequestId(requestId),
+    intentKey = intentKey,
+    kind = RequestKind.valueOf(requestKind.uppercase(Locale.ROOT)),
+    inputDigest = inputDigest,
+    capabilitySnapshotJson = capabilitySnapshotJson,
+    resolverVersion = resolverVersion,
+    actor = actor,
+    parentRequestId = parentRequestId?.let(::RequestId),
+    conversationId = conversationId,
+    assistantId = assistantId,
+    messageId = messageId,
+    partId = partId,
+    workspaceId = workspaceId,
+    mcpServerId = mcpServerId,
+    credentialRefId = credentialRefId,
+    providerKind = providerKind,
+    providerId = providerId,
+    modelId = modelId,
+    apiSurface = apiSurface,
+    toolCatalogDigest = toolCatalogDigest,
+    approvalState = ToolApprovalState.valueOf(approvalState.uppercase(Locale.ROOT)),
+)
 
 private fun RequestOutputEntity.matches(
     command: CommitRequestOutputCommand,

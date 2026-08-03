@@ -315,6 +315,34 @@ class FilesManager(
         mimeType: String,
         createdAt: Long = System.currentTimeMillis(),
     ): ManagedFileEntity = withContext(Dispatchers.IO) {
+        val target = commitManagedBytesWithIdentity(
+            folder = folder,
+            bytes = bytes,
+            assetId = assetId,
+            mimeType = mimeType,
+        )
+        registerExistingManagedFile(
+            folder = folder,
+            file = target,
+            displayName = displayName,
+            mimeType = mimeType,
+            createdAt = createdAt,
+        )
+    }
+
+    /**
+     * Commits bytes under a stable generated-asset identity without touching Room.
+     *
+     * Paid-output callers must be able to record the rename/fsync boundary before any
+     * repairable ManagedFile or MediaAsset metadata write. [registerExistingManagedFile]
+     * remains the separate idempotent metadata step.
+     */
+    suspend fun commitManagedBytesWithIdentity(
+        folder: String,
+        bytes: ByteArray,
+        assetId: String,
+        mimeType: String,
+    ): File = withContext(Dispatchers.IO) {
         val canonicalAssetId = runCatching { UUID.fromString(assetId).toString() }
             .getOrElse { throw IllegalArgumentException("Media asset id must be a UUID", it) }
         require(canonicalAssetId == assetId) { "Media asset id must use canonical UUID form" }
@@ -336,13 +364,7 @@ class FilesManager(
         } else {
             writeManagedAtomically(target, bytes)
         }
-        registerExistingManagedFile(
-            folder = folder,
-            file = target,
-            displayName = displayName,
-            mimeType = mimeType,
-            createdAt = createdAt,
-        )
+        target
     }
 
     /**

@@ -10,9 +10,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.db.AppDatabase
 import me.rerere.rikkahub.data.db.conversation.ConversationV2ShadowProjector
 import me.rerere.rikkahub.data.db.conversation.ConversationV2Writer
+import me.rerere.rikkahub.data.db.conversation.ConversationV2WriteConflictException
 import me.rerere.rikkahub.data.db.conversation.ConversationMetadataPatch
 import me.rerere.rikkahub.data.db.fts.MessageFtsManager
 import me.rerere.rikkahub.data.db.fts.MessageFtsOutboxProcessor
@@ -373,6 +375,52 @@ class ConversationRepository(
         val persisted = conversationV2Writer.patchMetadata(conversation, patch)
         messageFtsOutboxProcessor.requestDrain()
         return persisted
+    }
+
+    /**
+     * Revision-aware repair boundary for a single durable tool part. Cold-start recovery must not
+     * write a stale whole-conversation snapshot over a concurrently resumed chat session.
+     */
+    suspend fun updateToolResult(
+        conversationId: Uuid,
+        requestId: String,
+        toolCallId: String,
+        transform: (UIMessagePart.Tool) -> UIMessagePart.Tool,
+    ): Boolean {
+        var lastConflict: ConversationV2WriteConflictException? = null
+        repeat(3) {
+            val current = getConversationById(conversationId) ?: return false
+            var matches = 0
+            val updatedNodes = current.messageNodes.map { node ->
+                node.copy(
+                    messages = node.messages.map { message ->
+                        message.copy(
+                            parts = message.parts.map { part ->
+                                if (part is UIMessagePart.Tool && part.requestId == requestId &&
+                                    part.toolCallId == toolCallId
+                                ) {
+                                    matches++
+                                    transform(part)
+                                } else {
+                                    part
+                                }
+                            },
+                        )
+                    },
+                )
+            }
+            if (matches == 0) return false
+            check(matches == 1) { "Tool result identity is not unique in conversation $conversationId" }
+            val updated = current.copy(messageNodes = updatedNodes, updateAt = Instant.now())
+            if (updatedNodes == current.messageNodes) return true
+            try {
+                updateConversation(updated)
+                return true
+            } catch (conflict: ConversationV2WriteConflictException) {
+                lastConflict = conflict
+            }
+        }
+        throw checkNotNull(lastConflict)
     }
 
     suspend fun getConversationIdsInFolder(folderId: Uuid): List<Uuid> =
