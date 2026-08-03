@@ -42,6 +42,10 @@ class RequestLedgerRepository(
     private val toolAuditId: () -> String = { ToolAuditEventId.random().value },
     private val faultInjector: RequestLedgerFaultInjector = RequestLedgerFaultInjector.NONE,
 ) {
+    suspend fun getRequest(requestId: RequestId): RequestLedgerEntity? = dao.getRequest(requestId.value)
+
+    suspend fun getAttempt(attemptId: RequestAttemptId): RequestAttemptEntity? = dao.getAttempt(attemptId.value)
+
     suspend fun createRequest(spec: NewRequestSpec): RequestLedgerEntity = database.withTransaction {
         require(spec.intentKey.isNotBlank()) { "intentKey must not be blank" }
         require(spec.inputDigest.isNotBlank()) { "inputDigest must not be blank" }
@@ -131,6 +135,35 @@ class RequestLedgerRepository(
             now = now,
         )
     }
+
+    suspend fun renewRequestLease(lease: RequestLease, leaseDurationMillis: Long): RequestLease =
+        database.withTransaction {
+            require(leaseDurationMillis > 0) { "lease duration must be positive" }
+            val now = nowMillis()
+            requireLease(lease, now)
+            val leaseUntil = Math.addExact(now, leaseDurationMillis)
+            if (dao.renewRequestLease(
+                    requestId = lease.requestId.value,
+                    owner = lease.owner,
+                    fencingEpoch = lease.fencingEpoch,
+                    now = now,
+                    leaseUntil = leaseUntil,
+                ) != 1
+            ) {
+                throw RequestLedgerLeaseConflict(lease.requestId.value)
+            }
+            appendRequestAudit(
+                requestId = lease.requestId.value,
+                eventKind = "lease_renewed",
+                actor = AuditActor.system(lease.owner),
+                payload = buildJsonObject {
+                    put("fencing_epoch", lease.fencingEpoch)
+                    put("lease_until", leaseUntil)
+                },
+                now = now,
+            )
+            RequestLease(lease.requestId, lease.owner, lease.fencingEpoch, leaseUntil)
+        }
 
     suspend fun beginAttempt(command: BeginAttemptCommand): RequestAttemptEntity = database.withTransaction {
         val now = nowMillis()

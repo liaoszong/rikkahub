@@ -130,6 +130,20 @@ interface RequestLedgerDAO {
     ): Int
 
     @Query(
+        "UPDATE request_ledger SET lease_until = :leaseUntil, updated_at = :now " +
+            "WHERE request_id = :requestId AND lease_owner = :owner " +
+            "AND fencing_epoch = :fencingEpoch AND lease_until > :now " +
+            "AND request_state NOT IN ('succeeded', 'cancelled')",
+    )
+    suspend fun renewRequestLease(
+        requestId: String,
+        owner: String,
+        fencingEpoch: Long,
+        now: Long,
+        leaseUntil: Long,
+    ): Int
+
+    @Query(
         "UPDATE request_ledger SET request_state = :nextState, " +
             "billable_boundary = :nextBoundary, " +
             "billable_at = CASE WHEN billable_at IS NULL AND :nextBoundary != 'not_sent' " +
