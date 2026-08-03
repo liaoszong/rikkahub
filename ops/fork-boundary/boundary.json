@@ -14,6 +14,6 @@
     ".github/workflows/quality-gate.yml",
     "release.cmd"
   ],
-  "knownIntegrationPathCount": 173,
-  "knownIntegrationPathSetSha256": "4fe3fda05189dde2740c2bdf2ce05b96f2baffc7590045c700632cc5537d30b8"
+  "knownIntegrationPathCount": 200,
+  "knownIntegrationPathSetSha256": "bc295321604c37edca133b9f909ba1bfbebac23e09dce644de6e74b9d97ad69d"
 }
