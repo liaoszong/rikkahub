@@ -465,11 +465,11 @@ private fun ChatPageContent(
                         chatListState.requestScrollToItem(index)
                     }
                 },
-                onToolApproval = { toolCallId, approved, reason ->
-                    vm.handleToolApproval(toolCallId, approved, reason)
+                onToolApproval = { requestId, toolCallId, approved, reason ->
+                    vm.handleToolApproval(requestId, toolCallId, approved, reason)
                 },
-                onToolAnswer = { toolCallId, answer ->
-                    vm.handleToolAnswer(toolCallId, answer)
+                onToolAnswer = { requestId, toolCallId, answer ->
+                    vm.handleToolAnswer(requestId, toolCallId, answer)
                 },
                 onToggleFavorite = { node ->
                     vm.toggleMessageFavorite(node)

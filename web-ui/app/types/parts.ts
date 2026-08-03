@@ -50,6 +50,7 @@ export interface ReasoningPart extends BaseMessagePart {
 export interface ToolPart extends BaseMessagePart {
   type: "tool";
   toolCallId: string;
+  requestId: string;
   toolName: string;
   input: string;
   output: UIMessagePart[];

@@ -13,12 +13,15 @@ import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.rikkahub.data.db.media.ConversationMediaReferenceBackfillProcessor
 import me.rerere.rikkahub.fork.pale.request.RequestLedgerRepository
+import me.rerere.rikkahub.fork.pale.request.ChatProviderStepCoordinator
+import me.rerere.rikkahub.fork.pale.request.ChatRequestReconciler
 import me.rerere.workspace.ProotShellRunner
 import me.rerere.workspace.RootfsInstaller
 import me.rerere.workspace.WorkspaceBindMount
 import me.rerere.workspace.WorkspaceManager
 import org.koin.dsl.module
 import java.io.File
+import kotlin.uuid.Uuid
 
 val repositoryModule = module {
     single {
@@ -53,6 +56,26 @@ val repositoryModule = module {
     // repository rather than a DAO so state, billing boundary, lease, and audit never drift.
     single {
         RequestLedgerRepository(database = get())
+    }
+
+    single {
+        ChatProviderStepCoordinator(repository = get(), json = get())
+    }
+
+    single {
+        val conversationRepository: ConversationRepository = get()
+        ChatRequestReconciler(
+            requestRepository = get(),
+            coordinator = get(),
+            loadDurableMessage = { conversationId, messageId ->
+                runCatching {
+                    conversationRepository.getConversationById(Uuid.parse(conversationId))
+                }.getOrNull()?.messageNodes
+                    ?.asSequence()
+                    ?.flatMap { it.messages.asSequence() }
+                    ?.singleOrNull { it.id.toString() == messageId }
+            },
+        )
     }
 
     single {

@@ -48,6 +48,16 @@ interface RequestLedgerDAO {
     fun observeConversationRequests(conversationId: String): Flow<List<RequestLedgerEntity>>
 
     @Query(
+        "SELECT * FROM request_ledger WHERE conversation_id = :conversationId " +
+            "AND message_id = :messageId AND request_kind = 'chat_generation' " +
+            "ORDER BY created_at, request_id",
+    )
+    suspend fun getChatRequestsForMessage(
+        conversationId: String,
+        messageId: String,
+    ): List<RequestLedgerEntity>
+
+    @Query(
         "SELECT * FROM request_ledger WHERE request_state IN (:states) " +
             "ORDER BY updated_at, request_id LIMIT :limit",
     )
@@ -253,6 +263,7 @@ interface RequestLedgerDAO {
     @Query(
         "UPDATE request_attempt SET attempt_state = :nextState, " +
             "billable_boundary = :nextBoundary, " +
+            "checkpoint_digest = COALESCE(:checkpointDigest, checkpoint_digest), " +
             "sent_at = COALESCE(sent_at, :sentAt), " +
             "acknowledged_at = COALESCE(acknowledged_at, :acknowledgedAt), " +
             "first_byte_at = COALESCE(first_byte_at, :firstByteAt), " +
@@ -301,6 +312,7 @@ interface RequestLedgerDAO {
         resultReceivedAt: Long?,
         commitStartedAt: Long?,
         finishedAt: Long?,
+        checkpointDigest: String? = null,
         now: Long,
     ): Int
 

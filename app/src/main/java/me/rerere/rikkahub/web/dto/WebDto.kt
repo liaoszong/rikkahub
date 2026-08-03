@@ -25,6 +25,7 @@ data class RegenerateRequest(
 
 @Serializable
 data class ToolApprovalRequest(
+    val requestId: String,
     val toolCallId: String,
     val approved: Boolean,
     val reason: String = "",

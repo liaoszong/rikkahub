@@ -221,20 +221,28 @@ class ChatVM(
     }
 
     fun handleToolApproval(
+        requestId: String,
         toolCallId: String,
         approved: Boolean,
         reason: String = ""
     ) {
         analytics.logEvent("ai_tool_approval", null)
-        chatService.handleToolApproval(_conversationId, toolCallId, approved, reason)
+        chatService.handleToolApproval(_conversationId, requestId, toolCallId, approved, reason)
     }
 
     fun handleToolAnswer(
+        requestId: String,
         toolCallId: String,
         answer: String,
     ) {
         analytics.logEvent("ai_tool_answer", null)
-        chatService.handleToolApproval(_conversationId, toolCallId, approved = true, answer = answer)
+        chatService.handleToolApproval(
+            _conversationId,
+            requestId,
+            toolCallId,
+            approved = true,
+            answer = answer,
+        )
     }
 
     fun stopGeneration() {

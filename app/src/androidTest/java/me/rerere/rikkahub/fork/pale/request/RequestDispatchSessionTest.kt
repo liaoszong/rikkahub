@@ -54,7 +54,7 @@ class RequestDispatchSessionTest {
         val firstResponseRevision = dao.getAttempt(ATTEMPT_ID)!!.stateRevision
         session.markResponseStarted()
         assertEquals(firstResponseRevision, dao.getAttempt(ATTEMPT_ID)!!.stateRevision)
-        session.markResultReceived()
+        session.markResultReceived("checkpoint")
         session.commitOutputAndSucceed(outputCommand(session))
 
         val request = dao.getRequest(REQUEST_ID)!!
@@ -119,6 +119,46 @@ class RequestDispatchSessionTest {
     }
 
     @Test
+    fun transportFailureBeforeHandoffRemainsNotSent() = runTest {
+        val session = openSession()
+        session.prepareDispatch()
+
+        session.finishTransportFailure(cancelled = false)
+
+        val attempt = dao.getAttempt(ATTEMPT_ID)!!
+        assertEquals("failed", attempt.attemptState)
+        assertEquals("not_sent", attempt.billableBoundary)
+        assertNull(dao.getRequest(REQUEST_ID)!!.leaseOwner)
+    }
+
+    @Test
+    fun transportFailureAfterHandoffWithoutResponseIsUnknown() = runTest {
+        val session = openSession()
+        session.dispatchObserver.onDispatch()
+
+        session.finishTransportFailure(cancelled = false)
+
+        val attempt = dao.getAttempt(ATTEMPT_ID)!!
+        assertEquals("unknown_outcome", attempt.attemptState)
+        assertEquals("unknown", attempt.billableBoundary)
+        assertNull(dao.getRequest(REQUEST_ID)!!.leaseOwner)
+    }
+
+    @Test
+    fun transportFailureAfterFirstResponseIsInterrupted() = runTest {
+        val session = openSession()
+        session.dispatchObserver.onDispatch()
+        session.markResponseStarted()
+
+        session.finishTransportFailure(cancelled = false)
+
+        val attempt = dao.getAttempt(ATTEMPT_ID)!!
+        assertEquals("interrupted", attempt.attemptState)
+        assertEquals("response_started", attempt.billableBoundary)
+        assertNull(dao.getRequest(REQUEST_ID)!!.leaseOwner)
+    }
+
+    @Test
     fun expiredLeaseCannotReachDispatchBoundary() = runTest {
         val session = openSession(leaseDurationMillis = 100)
         now += 101
@@ -177,7 +217,7 @@ class RequestDispatchSessionTest {
         session.renewLease()
         now = 1_101 // Past the original lease, inside the renewed lease.
         session.markResponseStarted()
-        session.markResultReceived()
+        session.markResultReceived("checkpoint")
 
         now = 1_180
         session.renewLease()
@@ -222,7 +262,7 @@ class RequestDispatchSessionTest {
             session.markResponseStarted()
             delay(10)
             now = 1_010
-            session.markResultReceived()
+            session.markResultReceived("checkpoint")
             session.commitOutputAndSucceed(outputCommand(session))
         }
 

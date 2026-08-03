@@ -44,7 +44,7 @@ import { VideoPart as VideoPartRenderer } from "./video-part";
 interface ToolPartProps {
   tool: UIToolPart;
   loading?: boolean;
-  onToolApproval?: (toolCallId: string, approved: boolean, reason: string, answer?: string) => void | Promise<void>;
+  onToolApproval?: (requestId: string, toolCallId: string, approved: boolean, reason: string, answer?: string) => void | Promise<void>;
   isFirst?: boolean;
   isLast?: boolean;
 }
@@ -296,7 +296,7 @@ function AskUserToolStep({
     const payload = JSON.stringify({
       answers: Object.fromEntries(questions.map((q) => [q.id, answers[q.id] ?? ""])),
     });
-    void onToolApproval(tool.toolCallId, true, "", payload);
+    void onToolApproval(tool.requestId, tool.toolCallId, true, "", payload);
   };
 
   const setAnswer = (questionId: string, value: string) => {
@@ -462,7 +462,7 @@ export function ToolPart({
   const handleApprove = async (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
     if (!onToolApproval) return;
-    await onToolApproval(tool.toolCallId, true, "");
+    await onToolApproval(tool.requestId, tool.toolCallId, true, "");
   };
 
   const handleDeny = async (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -470,7 +470,7 @@ export function ToolPart({
     if (!onToolApproval) return;
     const reason = window.prompt(t("tool_part.deny_reason_prompt"), "");
     if (reason === null) return;
-    await onToolApproval(tool.toolCallId, false, reason);
+    await onToolApproval(tool.requestId, tool.toolCallId, false, reason);
   };
 
   return (

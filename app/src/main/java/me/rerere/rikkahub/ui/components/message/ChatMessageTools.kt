@@ -59,8 +59,8 @@ private const val ASK_USER_TOOL_NAME = "ask_user"
 fun ChainOfThoughtScope.ChatMessageToolStep(
     tool: UIMessagePart.Tool,
     loading: Boolean = false,
-    onToolApproval: ((toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
-    onToolAnswer: ((toolCallId: String, answer: String) -> Unit)? = null,
+    onToolApproval: ((requestId: String, toolCallId: String, approved: Boolean, reason: String) -> Unit)? = null,
+    onToolAnswer: ((requestId: String, toolCallId: String, answer: String) -> Unit)? = null,
 ) {
     // ask_user 是交互式问答流程, 不走注册式渲染框架
     if (tool.toolName == ASK_USER_TOOL_NAME) {
@@ -139,7 +139,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
                         )
                     }
                     FilledTonalIconButton(
-                        onClick = { onToolApproval(tool.toolCallId, true, "") },
+                        onClick = { onToolApproval(tool.requestId, tool.toolCallId, true, "") },
                         modifier = Modifier.size(28.dp),
                     ) {
                         Icon(
@@ -186,7 +186,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
             onDismiss = { showDenyDialog = false },
             onConfirm = { reason ->
                 showDenyDialog = false
-                onToolApproval(tool.toolCallId, false, reason)
+                onToolApproval(tool.requestId, tool.toolCallId, false, reason)
             }
         )
     }
@@ -213,7 +213,7 @@ fun ChainOfThoughtScope.ChatMessageToolStep(
 private fun ChainOfThoughtScope.AskUserToolStep(
     tool: UIMessagePart.Tool,
     loading: Boolean,
-    onToolAnswer: ((toolCallId: String, answer: String) -> Unit)?,
+    onToolAnswer: ((requestId: String, toolCallId: String, answer: String) -> Unit)?,
 ) {
     val isPending = tool.approvalState is ToolApprovalState.Pending
     val isAnswered = tool.approvalState is ToolApprovalState.Answered
@@ -402,7 +402,7 @@ private fun ChainOfThoughtScope.AskUserToolStep(
                                     }
                                 })
                             }
-                            onToolAnswer(tool.toolCallId, answerPayload.toString())
+                            onToolAnswer(tool.requestId, tool.toolCallId, answerPayload.toString())
                         },
                         enabled = questions.all { q ->
                             when (q.selectionType) {

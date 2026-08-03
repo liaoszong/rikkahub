@@ -580,6 +580,7 @@ const ConversationTimeline = React.memo(
     onRegenerate: (messageId: string) => Promise<void>;
     onSelectBranch: (nodeId: string, selectIndex: number) => Promise<void>;
     onToolApproval: (
+      requestId: string,
       toolCallId: string,
       approved: boolean,
       reason: string,
@@ -817,9 +818,10 @@ function ConversationsPageInner() {
   );
 
   const handleToolApproval = React.useCallback(
-    async (toolCallId: string, approved: boolean, reason: string, answer?: string) => {
+    async (requestId: string, toolCallId: string, approved: boolean, reason: string, answer?: string) => {
       if (!activeId) return;
       await api.post<{ status: string }>(`conversations/${activeId}/tool-approval`, {
+        requestId,
         toolCallId,
         approved,
         reason,

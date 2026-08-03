@@ -4,10 +4,12 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.withContext
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.Serializable
@@ -48,6 +50,10 @@ import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.AssistantMemory
 import me.rerere.rikkahub.data.repository.MemoryRepository
+import me.rerere.rikkahub.fork.pale.request.ChatGenerationLedgerContext
+import me.rerere.rikkahub.fork.pale.request.ChatProviderStepCoordinator
+import me.rerere.rikkahub.fork.pale.request.ChatProviderStepOpenResult
+import me.rerere.rikkahub.fork.pale.request.ChatProviderStepSession
 import me.rerere.rikkahub.utils.applyPlaceholders
 import java.util.Locale
 import kotlin.time.Clock
@@ -69,6 +75,7 @@ class GenerationHandler(
     private val providerManager: ProviderManager,
     private val json: Json,
     private val memoryRepo: MemoryRepository,
+    private val chatProviderStepCoordinator: ChatProviderStepCoordinator,
 ) {
     fun generateText(
         settings: Settings,
@@ -86,6 +93,7 @@ class GenerationHandler(
         conversationLorebookIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
         toolExecutionContextId: String? = null,
+        ledgerContext: ChatGenerationLedgerContext? = null,
     ): Flow<GenerationChunk> = flow {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
@@ -128,7 +136,7 @@ class GenerationHandler(
 
             // Skip generation if we have approved/denied tool calls to handle
             if (pendingTools.isEmpty()) {
-                generateInternal(
+                val providerStep = generateInternal(
                     assistant = assistant,
                     settings = settings,
                     messages = messages,
@@ -164,8 +172,10 @@ class GenerationHandler(
                     conversationModeInjectionIds = conversationModeInjectionIds,
                     conversationLorebookIds = conversationLorebookIds,
                     workspaceCwd = workspaceCwd,
+                    ledgerContext = ledgerContext,
                 )
-                messages = messages.visualTransforms(
+                try {
+                    messages = messages.visualTransforms(
                     transformers = outputTransformers,
                     context = context,
                     model = model,
@@ -186,48 +196,53 @@ class GenerationHandler(
                             .toLocalDateTime(TimeZone.currentSystemDefault())
                     )
                     emit(GenerationChunk.Messages(messages))
+                    providerStep?.commitDurableOutput(messages.last())
                     // no tool calls, break
                     break
                 }
-
-                // A model step that only requested tools is not the end of the user turn.
-                // Keep its usage, but do not mark it finished or show a completion notification yet.
-                emit(GenerationChunk.Messages(messages))
 
                 // Check for tools that need approval
                 var hasPendingApproval = false
                 val updatedTools = tools.map { tool ->
                     val toolDef = toolsInternal.find { it.name == tool.toolName }
+                    val stableToolRequestId = tool.requestId.ifBlank {
+                        providerStep?.stableToolRequestId(tool.toolCallId).orEmpty()
+                    }
                     when {
                         // Tool needs approval and state is Auto -> set to Pending
                         toolDef?.needsApproval(tool.inputAsJson()) == true &&
                             tool.approvalState is ToolApprovalState.Auto -> {
                             hasPendingApproval = true
-                            tool.copy(approvalState = ToolApprovalState.Pending)
+                            tool.copy(
+                                approvalState = ToolApprovalState.Pending,
+                                requestId = stableToolRequestId,
+                            )
                         }
                         // State is Pending -> keep waiting
                         tool.approvalState is ToolApprovalState.Pending -> {
                             hasPendingApproval = true
-                            tool
+                            tool.copy(requestId = stableToolRequestId)
                         }
 
-                        else -> tool
+                        else -> tool.copy(requestId = stableToolRequestId)
                     }
                 }
 
                 // If any tools were updated to Pending, update the message and break
-                if (updatedTools != tools) {
-                    val lastMessage = messages.last()
-                    val updatedParts = lastMessage.parts.map { part ->
-                        if (part is UIMessagePart.Tool) {
-                            updatedTools.find { it.toolCallId == part.toolCallId } ?: part
-                        } else {
-                            part
-                        }
+                val lastMessage = messages.last()
+                val updatedParts = lastMessage.parts.map { part ->
+                    if (part is UIMessagePart.Tool) {
+                        updatedTools.find { it.toolCallId == part.toolCallId } ?: part
+                    } else {
+                        part
                     }
-                    messages = messages.dropLast(1) + lastMessage.copy(parts = updatedParts)
-                    emit(GenerationChunk.Messages(messages))
                 }
+                messages = messages.dropLast(1) + lastMessage.copy(parts = updatedParts)
+
+                // This emission is a durable barrier: ChatService's collector first updates the
+                // exact response message, then the coordinator persists it before SUCCEEDED.
+                emit(GenerationChunk.Messages(messages))
+                providerStep?.commitDurableOutput(messages.last())
 
                 // If there are pending approvals, break and wait for user
                 if (hasPendingApproval) {
@@ -235,7 +250,11 @@ class GenerationHandler(
                     break
                 }
 
-                toolsToProcess = updatedTools
+                    toolsToProcess = updatedTools
+                } catch (failure: Throwable) {
+                    providerStep?.releaseForLocalRepair(failure)
+                    throw failure
+                }
             } else {
                 // Resuming after user interaction - use the resumable tools directly.
                 Log.i(TAG, "generateText: resuming with ${pendingTools.size} resumable tools")
@@ -300,6 +319,9 @@ class GenerationHandler(
                         )
                         messages = messages.dropLast(1) + runningMessage
                         emit(GenerationChunk.Messages(messages))
+                        // Persist RUNNING before invoking a side-effecting tool. A process death
+                        // then fails closed instead of treating the approved invocation as fresh.
+                        ledgerContext?.persistCurrentConversation()
 
                         runCatching {
                             val toolDef = toolsInternal.find { toolDef -> toolDef.name == runningTool.toolName }
@@ -379,17 +401,18 @@ class GenerationHandler(
                 } else part
             }
             messages = messages.dropLast(1) + lastMessage.copy(parts = updatedParts)
-            emit(
-                GenerationChunk.Messages(
-                    messages.transforms(
-                        transformers = outputTransformers,
-                        context = context,
-                        model = model,
-                        assistant = assistant,
-                        settings = settings
-                    )
-                )
+            val durableToolMessages = messages.transforms(
+                transformers = outputTransformers,
+                context = context,
+                model = model,
+                assistant = assistant,
+                settings = settings,
             )
+            messages = durableToolMessages
+            emit(GenerationChunk.Messages(durableToolMessages))
+            // Tool output is part of the next provider request identity. It must be durable before
+            // the loop is allowed to cross another billable transport boundary.
+            ledgerContext?.persistCurrentConversation()
         }
 
     }.flowOn(Dispatchers.IO)
@@ -411,7 +434,16 @@ class GenerationHandler(
         conversationModeInjectionIds: Set<Uuid> = emptySet(),
         conversationLorebookIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
-    ) {
+        ledgerContext: ChatGenerationLedgerContext? = null,
+    ): ChatProviderStepSession? {
+        val providerMessages = if (
+            messages.lastOrNull()?.role == MessageRole.ASSISTANT &&
+            messages.lastOrNull()?.parts?.isEmpty() == true
+        ) {
+            messages.dropLast(1)
+        } else {
+            messages
+        }
         val internalMessages = buildList {
             val system = buildString {
                 val effectiveSystemPrompt =
@@ -432,11 +464,11 @@ class GenerationHandler(
                 // 工具prompt
                 tools.forEach { tool ->
                     appendLine()
-                    append(tool.systemPrompt(model, messages))
+                    append(tool.systemPrompt(model, providerMessages))
                 }
             }
             if (system.isNotBlank()) add(UIMessage.system(prompt = system))
-            addAll(messages.limitContext(assistant.contextMessageLimit))
+            addAll(providerMessages.limitContext(assistant.contextMessageLimit))
         }.transforms(
             transformers = transformers,
             context = context,
@@ -450,7 +482,7 @@ class GenerationHandler(
         )
 
         var messages: List<UIMessage> = messages
-        val params = TextGenerationParams(
+        val baseParams = TextGenerationParams(
             model = model,
             temperature = assistant.temperature,
             topP = assistant.topP,
@@ -466,17 +498,79 @@ class GenerationHandler(
                 addAll(model.customBodies)
             }
         )
-        if (stream) {
-            providerImpl.streamText(
-                providerSetting = provider,
+        val openResult = ledgerContext?.let {
+            chatProviderStepCoordinator.openTextStep(
+                context = it,
                 messages = internalMessages,
-                params = params
-            ).collect {
-                messages = messages.handleMessageChunk(chunk = it, model = model)
-                it.usage?.let { usage ->
+                params = baseParams,
+                provider = provider,
+                tools = tools,
+            )
+        }
+        val providerStep = when (openResult) {
+            is ChatProviderStepOpenResult.Dispatch -> openResult.step
+            is ChatProviderStepOpenResult.RepairCommit -> {
+                try {
+                    messages = messages.map { message ->
+                        if (message.id == openResult.durableMessage.id) openResult.durableMessage else message
+                    }
+                    onUpdateMessages(messages)
+                    openResult.step.commitDurableOutput(openResult.durableMessage)
+                    return openResult.step
+                } catch (failure: Throwable) {
+                    openResult.step.releaseForLocalRepair(failure)
+                    throw failure
+                }
+            }
+
+            is ChatProviderStepOpenResult.AlreadySucceeded -> {
+                messages = messages.map { message ->
+                    if (message.id == openResult.durableMessage.id) openResult.durableMessage else message
+                }
+                onUpdateMessages(messages)
+                return openResult.step
+            }
+
+            null -> null
+        }
+        val params = baseParams.copy(
+            dispatchObserver = providerStep?.dispatchObserver ?: baseParams.dispatchObserver,
+        )
+
+        suspend fun executeProvider() {
+            if (stream) {
+                providerImpl.streamText(
+                    providerSetting = provider,
+                    messages = internalMessages,
+                    params = params
+                ).collect {
+                    providerStep?.markResponseStarted()
+                    messages = messages.handleMessageChunk(chunk = it, model = model)
+                    it.usage?.let { usage ->
+                        messages = messages.mapIndexed { index, message ->
+                            if (index == messages.lastIndex) {
+                                message.copy(usage = message.usage.merge(usage))
+                            } else {
+                                message
+                            }
+                        }
+                    }
+                    onUpdateMessages(messages)
+                }
+            } else {
+                val chunk = providerImpl.generateText(
+                    providerSetting = provider,
+                    messages = internalMessages,
+                    params = params,
+                )
+                providerStep?.markResponseStarted()
+                messages = messages.handleMessageChunk(chunk = chunk, model = model)
+                chunk.usage?.let { usage ->
                     messages = messages.mapIndexed { index, message ->
                         if (index == messages.lastIndex) {
-                            message.copy(usage = message.usage.merge(usage))
+                            message.copy(
+                                usage = message.usage.merge(usage)
+                            )
                         } else {
                             message
                         }
@@ -484,26 +578,28 @@ class GenerationHandler(
                 }
                 onUpdateMessages(messages)
             }
-        } else {
-            val chunk = providerImpl.generateText(
-                providerSetting = provider,
-                messages = internalMessages,
-                params = params,
-            )
-            messages = messages.handleMessageChunk(chunk = chunk, model = model)
-            chunk.usage?.let { usage ->
-                messages = messages.mapIndexed { index, message ->
-                    if (index == messages.lastIndex) {
-                        message.copy(
-                            usage = message.usage.merge(usage)
-                        )
-                    } else {
-                        message
-                    }
+        }
+
+        try {
+            if (providerStep != null) {
+                providerStep.prepareDispatch()
+                providerStep.withLeaseHeartbeat {
+                    executeProvider()
+                }
+            } else {
+                executeProvider()
+            }
+        } catch (failure: Throwable) {
+            if (providerStep != null) {
+                withContext(NonCancellable) {
+                    runCatching { providerStep.finishTransportFailure(failure) }
+                        .exceptionOrNull()
+                        ?.let(failure::addSuppressed)
                 }
             }
-            onUpdateMessages(messages)
+            throw failure
         }
+        return providerStep
     }
 
     private fun maybeTruncateToolOutput(

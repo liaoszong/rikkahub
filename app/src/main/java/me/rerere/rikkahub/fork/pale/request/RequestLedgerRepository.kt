@@ -46,6 +46,21 @@ class RequestLedgerRepository(
 
     suspend fun getAttempt(attemptId: RequestAttemptId): RequestAttemptEntity? = dao.getAttempt(attemptId.value)
 
+    suspend fun getOutputs(requestId: RequestId): List<RequestOutputEntity> = dao.getOutputs(requestId.value)
+
+    suspend fun getChatRequestsForMessage(
+        conversationId: String,
+        messageId: String,
+    ): List<RequestLedgerEntity> = dao.getChatRequestsForMessage(conversationId, messageId)
+
+    suspend fun getRequestsByState(
+        states: List<RequestState>,
+        limit: Int = 500,
+    ): List<RequestLedgerEntity> = dao.getRequestsByState(
+        states.map { it.name.lowercase(Locale.ROOT) },
+        limit,
+    )
+
     suspend fun createRequest(spec: NewRequestSpec): RequestLedgerEntity = database.withTransaction {
         require(spec.intentKey.isNotBlank()) { "intentKey must not be blank" }
         require(spec.inputDigest.isNotBlank()) { "inputDigest must not be blank" }
@@ -312,6 +327,7 @@ class RequestLedgerRepository(
                         command.nextState == RequestAttemptState.SUCCEEDED
                 },
                 finishedAt = now.takeIf { terminal },
+                checkpointDigest = command.checkpointDigest,
                 now = now,
             ) != 1
         ) {
@@ -831,6 +847,7 @@ data class AdvanceAttemptCommand(
     val nextState: RequestAttemptState,
     val nextBoundary: BillableBoundary,
     val actor: AuditActor,
+    val checkpointDigest: String? = null,
 )
 
 data class CommitRequestOutputCommand(

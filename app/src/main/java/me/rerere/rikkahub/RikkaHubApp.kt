@@ -36,6 +36,7 @@ import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.db.conversation.ConversationV2BackfillCoordinator
 import me.rerere.rikkahub.data.db.fts.MessageFtsOutboxProcessor
 import me.rerere.rikkahub.data.db.media.ConversationMediaReferenceBackfillProcessor
+import me.rerere.rikkahub.fork.pale.request.ChatRequestReconciler
 import me.rerere.rikkahub.service.WebServerService
 import me.rerere.rikkahub.utils.CrashHandler
 import me.rerere.rikkahub.utils.DatabaseUtil
@@ -212,10 +213,21 @@ class RikkaHubApp : Application() {
     private fun backfillConversationStoreV2() {
         get<AppScope>().launch(Dispatchers.IO) {
             runCatching {
-                get<ConversationV2BackfillCoordinator>().runPending()
-            }.onSuccess { result ->
+                val result = get<ConversationV2BackfillCoordinator>().runPending()
+                val requestRecovery = get<ChatRequestReconciler>().reconcilePending()
+                result to requestRecovery
+            }.onSuccess { (result, requestRecovery) ->
                 get<MessageFtsOutboxProcessor>().requestDrain()
                 get<ConversationMediaReferenceBackfillProcessor>().requestBackfill()
+                if (requestRecovery.inspected > 0 || requestRecovery.failures.isNotEmpty()) {
+                    Log.i(
+                        TAG,
+                        "reconcileChatRequests: inspected=${requestRecovery.inspected} " +
+                            "committed=${requestRecovery.committed} unknown=${requestRecovery.unknown} " +
+                            "interrupted=${requestRecovery.interrupted} failed=${requestRecovery.failed} " +
+                            "errors=${requestRecovery.failures.size}",
+                    )
+                }
                 if (result.inspected > 0) {
                     Log.i(
                         TAG,

@@ -67,8 +67,9 @@ class RequestDispatchSession private constructor(
         )
     }
 
-    suspend fun markResultReceived() = callbackMutex.withLock {
-        markResultReceivedLocked()
+    suspend fun markResultReceived(checkpointDigest: String) = callbackMutex.withLock {
+        require(checkpointDigest.isNotBlank()) { "Result checkpoint digest must not be blank" }
+        markResultReceivedLocked(checkpointDigest)
     }
 
     /**
@@ -78,7 +79,7 @@ class RequestDispatchSession private constructor(
     suspend fun commitOutputAndSucceed(command: CommitRequestOutputCommand) = callbackMutex.withLock {
         require(command.lease.sameFenceAs(lease)) { "Output command belongs to a different request fence" }
         require(command.attemptId == attemptId) { "Output command belongs to a different attempt" }
-        markResultReceivedLocked()
+        markResultReceivedLocked(command.contentDigest)
         val output = repository.commitOutput(command.copy(lease = lease))
         repository.advanceAttempt(
             AdvanceAttemptCommand(
@@ -119,6 +120,36 @@ class RequestDispatchSession private constructor(
             finishTerminalLocked(RequestAttemptState.CANCELLED, BillableBoundary.NOT_SENT)
         } else {
             finishTerminalLocked(RequestAttemptState.UNKNOWN_OUTCOME, BillableBoundary.UNKNOWN)
+        }
+    }
+
+    /**
+     * Maps an incomplete provider call without guessing whether a SENT request was billed.
+     * A partial response is interrupted, a handoff with no response is unknown, and failures
+     * before transport ownership remain safe to retry.
+     */
+    suspend fun finishTransportFailure(cancelled: Boolean) = callbackMutex.withLock {
+        val attempt = requireAttempt()
+        when (attempt.billableBoundary()) {
+            BillableBoundary.NOT_SENT -> finishTerminalLocked(
+                state = if (cancelled) RequestAttemptState.CANCELLED else RequestAttemptState.FAILED,
+                boundary = BillableBoundary.NOT_SENT,
+            )
+
+            BillableBoundary.SENT -> finishTerminalLocked(
+                state = RequestAttemptState.UNKNOWN_OUTCOME,
+                boundary = BillableBoundary.UNKNOWN,
+            )
+
+            BillableBoundary.RESPONSE_STARTED -> finishTerminalLocked(
+                state = RequestAttemptState.INTERRUPTED,
+                boundary = BillableBoundary.RESPONSE_STARTED,
+            )
+
+            BillableBoundary.RESULT_RECEIVED,
+            BillableBoundary.RESULT_COMMITTED,
+            BillableBoundary.UNKNOWN,
+            -> error("Provider transport failure cannot finish from ${attempt.billableBoundary()}")
         }
     }
 
@@ -180,7 +211,7 @@ class RequestDispatchSession private constructor(
         true
     }
 
-    private suspend fun markResultReceivedLocked() {
+    private suspend fun markResultReceivedLocked(checkpointDigest: String) {
         var attempt = requireAttempt()
         if (attempt.billableBoundary().isAtLeast(BillableBoundary.RESULT_RECEIVED)) return
         if (!attempt.billableBoundary().isAtLeast(BillableBoundary.RESPONSE_STARTED)) {
@@ -206,6 +237,7 @@ class RequestDispatchSession private constructor(
                 nextState = RequestAttemptState.COMMITTING,
                 nextBoundary = BillableBoundary.RESULT_RECEIVED,
                 actor = actor,
+                checkpointDigest = checkpointDigest,
             ),
         )
     }

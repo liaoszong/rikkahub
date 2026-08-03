@@ -95,6 +95,7 @@ import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.FolderRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
+import me.rerere.rikkahub.fork.pale.request.ChatGenerationLedgerContext
 import me.rerere.rikkahub.web.BadRequestException
 import me.rerere.rikkahub.web.NotFoundException
 import me.rerere.rikkahub.utils.applyPlaceholders
@@ -135,6 +136,45 @@ private data class ConversationDeletionOutcome(
     val files: List<Uri>,
     val deletedFromStore: Boolean,
 )
+
+internal fun Conversation.withToolApproval(
+    requestId: String,
+    toolCallId: String,
+    approvalState: ToolApprovalState,
+): Conversation {
+    val matchingParts = messageNodes.flatMap { node ->
+        node.messages.flatMap { message ->
+            message.parts.filterIsInstance<UIMessagePart.Tool>()
+        }
+    }.filter { tool ->
+        tool.toolCallId == toolCallId && tool.requestId == requestId
+    }
+    check(matchingParts.size == 1) {
+        "Tool approval identity must resolve exactly one invocation: " +
+            "requestId=$requestId toolCallId=$toolCallId matches=${matchingParts.size}"
+    }
+    check(matchingParts.single().isPending) { "Tool invocation is no longer awaiting approval" }
+    return copy(
+        messageNodes = messageNodes.map { node ->
+            node.copy(
+                messages = node.messages.map { message ->
+                    message.copy(
+                        parts = message.parts.map { part ->
+                            if (part is UIMessagePart.Tool &&
+                                part.requestId == requestId &&
+                                part.toolCallId == toolCallId
+                            ) {
+                                part.copy(approvalState = approvalState)
+                            } else {
+                                part
+                            }
+                        },
+                    )
+                },
+            )
+        },
+    )
+}
 
 enum class ChatErrorSolution {
     CheckTitleModelSettings,
@@ -504,6 +544,7 @@ class ChatService(
 
     fun handleToolApproval(
         conversationId: Uuid,
+        requestId: String,
         toolCallId: String,
         approved: Boolean,
         reason: String = "",
@@ -519,25 +560,7 @@ class ChatService(
                 }
 
                 val updatedConversation = mutateAndSaveConversation(conversationId) { current ->
-                    current.copy(
-                        messageNodes = current.messageNodes.map { node ->
-                            node.copy(
-                                messages = node.messages.map { msg ->
-                                    msg.copy(
-                                        parts = msg.parts.map { part ->
-                                            when {
-                                                part is UIMessagePart.Tool && part.toolCallId == toolCallId -> {
-                                                    part.copy(approvalState = newApprovalState)
-                                                }
-
-                                                else -> part
-                                            }
-                                        }
-                                    )
-                                }
-                            )
-                        }
-                    )
+                    current.withToolApproval(requestId, toolCallId, newApprovalState)
                 }
 
                 // Check if there are still pending tools
@@ -597,7 +620,8 @@ class ChatService(
 
             // check invalid messages
             checkInvalidMessages(conversationId)
-            val conversation = getConversationFlow(conversationId).value
+            val prepared = prepareResponseTarget(conversationId, messageRange)
+            val conversation = prepared.conversation
 
             // start generating
             val session = getOrCreateSession(conversationId)
@@ -605,13 +629,7 @@ class ChatService(
                 settings = settings,
                 model = model,
                 processingStatus = session.processingStatus,
-                messages = conversation.currentMessages.let {
-                    if (messageRange != null) {
-                        it.subList(messageRange.start, messageRange.endInclusive + 1)
-                    } else {
-                        it
-                    }
-                },
+                messages = prepared.messages,
                 assistant = assistant,
                 conversationSystemPrompt = conversation.customSystemPrompt,
                 conversationModeInjectionIds = conversation.modeInjectionIds,
@@ -677,6 +695,21 @@ class ChatService(
                         )
                     }
                 },
+                ledgerContext = ChatGenerationLedgerContext(
+                    conversationId = conversationId.toString(),
+                    assistantId = assistant.id.toString(),
+                    responseMessageId = prepared.responseMessage.id.toString(),
+                    workspaceId = assistant.workspaceId?.toString(),
+                    persistCurrentConversation = {
+                        persistCurrentConversation(conversationId)
+                    },
+                    loadResponseMessage = {
+                        getConversationFlow(conversationId).value
+                            .getMessageNodeByMessageId(prepared.responseMessage.id)
+                            ?.messages
+                            ?.firstOrNull { it.id == prepared.responseMessage.id }
+                    },
+                ),
             ).onCompletion {
                 // 可能被取消了，或者意外结束，兜底更新
                 val updatedConversation = updateConversationState(conversationId) { current ->
@@ -730,6 +763,10 @@ class ChatService(
             // 兜底取消 Live Update 通知（生成开始前失败时 onCompletion 不会执行）
             appEventBus.tryEmit(AppEvent.ChatGenerationEnded(conversationId, senderName, null))
 
+            // Cancellation has already been mapped into RequestLedger by the provider-step
+            // coordinator. Preserve structured cancellation instead of reporting normal success.
+            if (it is CancellationException) throw it
+
             it.printStackTrace()
             addError(it, conversationId, title = context.getString(R.string.error_title_generation))
             Logging.log(TAG, "handleMessageComplete: $it")
@@ -745,6 +782,75 @@ class ChatService(
                 generateSuggestion(conversationId, finalConversation)
             }
         }
+    }
+
+    private data class PreparedResponseTarget(
+        val conversation: Conversation,
+        val messages: List<UIMessage>,
+        val responseMessage: UIMessage,
+    )
+
+    /**
+     * Persists the assistant branch identity before a potentially billable provider handoff.
+     * Tool-approval resumes reuse their existing assistant message; fresh sends/regenerations get
+     * a new stable alternative so the ledger never depends on a transient streaming chunk ID.
+     */
+    private suspend fun prepareResponseTarget(
+        conversationId: Uuid,
+        messageRange: ClosedRange<Int>?,
+    ): PreparedResponseTarget {
+        if (messageRange != null) {
+            require(messageRange.start == 0) { "Regeneration ranges must start at the conversation root" }
+        }
+        val current = getConversationFlow(conversationId).value
+        val resumableResponse = if (messageRange == null) {
+            current.currentMessages.lastOrNull()?.takeIf { message ->
+                message.role == MessageRole.ASSISTANT && message.getTools().any { it.canResumeExecution }
+            }
+        } else {
+            null
+        }
+        val responseMessage = resumableResponse ?: UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = emptyList(),
+        )
+        val preparedConversation = if (resumableResponse != null) {
+            current
+        } else {
+            mutateAndSaveConversation(conversationId) { conversation ->
+                if (messageRange == null) {
+                    conversation.copy(
+                        messageNodes = conversation.messageNodes + responseMessage.toMessageNode(),
+                    )
+                } else {
+                    val targetIndex = messageRange.endInclusive + 1
+                    val targetNode = conversation.messageNodes.getOrNull(targetIndex)
+                        ?: error("Regeneration target node $targetIndex no longer exists")
+                    check(targetNode.role == MessageRole.ASSISTANT) {
+                        "Regeneration target must be an assistant message"
+                    }
+                    val alternatives = targetNode.messages + responseMessage
+                    conversation.copy(
+                        messageNodes = conversation.messageNodes.mapIndexed { index, node ->
+                            if (index == targetIndex) {
+                                node.copy(messages = alternatives, selectIndex = alternatives.lastIndex)
+                            } else {
+                                node
+                            }
+                        },
+                    )
+                }
+            }
+        }
+        val messages = if (messageRange == null) {
+            preparedConversation.currentMessages
+        } else {
+            preparedConversation.currentMessages.subList(0, messageRange.endInclusive + 2)
+        }
+        check(messages.last().id == responseMessage.id) {
+            "Prepared response branch is not the generation target"
+        }
+        return PreparedResponseTarget(preparedConversation, messages, responseMessage)
     }
 
     private suspend fun createWorkspaceToolsIfReady(workspaceId: String?, cwd: String? = null): List<Tool> {
