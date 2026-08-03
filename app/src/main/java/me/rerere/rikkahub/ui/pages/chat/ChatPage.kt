@@ -109,11 +109,16 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
 
     val setting by vm.settings.collectAsStateWithLifecycle()
     val conversation by vm.conversation.collectAsStateWithLifecycle()
+    val conversationDeleted by vm.conversationDeleted.collectAsStateWithLifecycle()
     val loadingJob by vm.conversationJob.collectAsStateWithLifecycle()
     val processingStatus by vm.processingStatus.collectAsStateWithLifecycle()
     val currentChatModel by vm.currentChatModel.collectAsStateWithLifecycle()
     val enableWebSearch by vm.enableWebSearch.collectAsStateWithLifecycle()
     val errors by vm.errors.collectAsStateWithLifecycle()
+
+    LaunchedEffect(conversationDeleted) {
+        if (conversationDeleted) navigateToChatPage(navController)
+    }
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val softwareKeyboardController = LocalSoftwareKeyboardController.current
@@ -442,17 +447,7 @@ private fun ChatPageContent(
                     }
                 },
                 onUpdateMessage = { newNode ->
-                    vm.updateConversation(
-                        conversation.copy(
-                            messageNodes = conversation.messageNodes.map { node ->
-                                if (node.id == newNode.id) {
-                                    newNode
-                                } else {
-                                    node
-                                }
-                            }
-                        ))
-                    vm.saveConversationAsync()
+                    vm.selectMessageNode(newNode.id, newNode.selectIndex)
                 },
                 onClickSuggestion = { suggestion ->
                     inputState.editingMessage = null
@@ -480,8 +475,10 @@ private fun ChatPageContent(
                     vm.toggleMessageFavorite(node)
                 },
                 onConversationSystemPromptChange = { newPrompt ->
-                    vm.updateConversation(conversation.copy(customSystemPrompt = newPrompt))
-                    vm.saveConversationAsync()
+                    vm.updateConversationContextMetadata(
+                        baseline = conversation,
+                        edited = conversation.copy(customSystemPrompt = newPrompt),
+                    )
                 },
             )
         }
@@ -686,9 +683,11 @@ private fun ChatFilesPickerSheet(
                     )
                 )
             },
-            onUpdateConversation = {
-                vm.updateConversation(it)
-                vm.saveConversationAsync()
+            onUpdateConversation = { edited ->
+                vm.updateConversationContextMetadata(
+                    baseline = conversation,
+                    edited = edited,
+                )
             },
             showInjectionSheet = showInjectionSheet,
             onShowInjectionSheetChange = { showInjectionSheet = it },

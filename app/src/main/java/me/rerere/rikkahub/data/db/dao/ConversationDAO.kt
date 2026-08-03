@@ -51,6 +51,9 @@ interface ConversationDAO {
     @Query("SELECT id FROM conversationentity")
     suspend fun getAllIds(): List<String>
 
+    @Query("SELECT id FROM conversationentity WHERE folder_id = :folderId ORDER BY id")
+    suspend fun getIdsByFolder(folderId: String): List<String>
+
     @Query("SELECT * FROM conversationentity WHERE id = :id")
     suspend fun getConversationById(id: String): ConversationEntity?
 
@@ -95,15 +98,6 @@ interface ConversationDAO {
 
     @Query("SELECT * FROM conversationentity WHERE is_pinned = 1 ORDER BY update_at DESC")
     fun getPinnedConversations(): Flow<List<ConversationEntity>>
-
-    @Query("UPDATE conversationentity SET is_pinned = :isPinned WHERE id = :id")
-    suspend fun updatePinStatus(id: String, isPinned: Boolean)
-
-    @Query("UPDATE conversationentity SET folder_id = :folderId WHERE id = :id")
-    suspend fun updateFolderId(id: String, folderId: String)
-
-    @Query("UPDATE conversationentity SET folder_id = '' WHERE folder_id = :folderId")
-    suspend fun clearFolder(folderId: String)
 
     @Query("SELECT COUNT(*) FROM conversationentity")
     suspend fun countAll(): Int

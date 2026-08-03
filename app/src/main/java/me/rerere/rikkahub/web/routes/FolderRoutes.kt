@@ -13,7 +13,6 @@ import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.repository.FolderRepository
 import me.rerere.rikkahub.service.ChatService
 import me.rerere.rikkahub.web.BadRequestException
-import me.rerere.rikkahub.web.ConflictException
 import me.rerere.rikkahub.web.NotFoundException
 import me.rerere.rikkahub.web.dto.CreateFolderRequest
 import me.rerere.rikkahub.web.dto.RenameFolderRequest
@@ -63,11 +62,6 @@ fun Route.folderRoutes(
         delete("/{id}") {
             val uuid = call.parameters["id"].toUuid("folder id")
             folderRepo.getFolderById(uuid) ?: throw NotFoundException("Folder not found")
-
-            // Refuse to delete while a conversation inside is still generating
-            if (chatService.hasGeneratingConversationInFolder(uuid)) {
-                throw ConflictException("Folder has a generating conversation")
-            }
 
             chatService.deleteFolder(uuid)
             call.respond(HttpStatusCode.NoContent)

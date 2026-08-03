@@ -56,7 +56,9 @@ class ChatVM(
     private val favoriteRepository: FavoriteRepository,
 ) : ViewModel() {
     private val _conversationId: Uuid = Uuid.parse(id)
+    private val conversationLease = chatService.acquireConversationReference(_conversationId)
     val conversation: StateFlow<Conversation> = chatService.getConversationFlow(_conversationId)
+    val conversationDeleted: StateFlow<Boolean> = chatService.getConversationDeletedFlow(_conversationId)
     var chatListInitialized by mutableStateOf(false) // 聊天列表是否已经滚动到底部
 
     // 聊天输入状态 - 保存在 ViewModel 中避免 TransactionTooLargeException
@@ -77,9 +79,6 @@ class ChatVM(
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
     init {
-        // 添加对话引用
-        chatService.addConversationReference(_conversationId)
-
         // 初始化对话
         viewModelScope.launch {
             chatService.initializeConversation(_conversationId)
@@ -91,8 +90,7 @@ class ChatVM(
 
     override fun onCleared() {
         super.onCleared()
-        // 移除对话引用
-        chatService.removeConversationReference(_conversationId)
+        conversationLease.close()
     }
 
     // 用户设置
@@ -245,44 +243,37 @@ class ChatVM(
         }
     }
 
-    fun saveConversationAsync() {
+    fun updateConversationContextMetadata(
+        baseline: Conversation,
+        edited: Conversation,
+    ) {
         viewModelScope.launch {
-            chatService.saveConversation(_conversationId, conversation.value)
+            chatService.updateConversationContextMetadata(_conversationId, baseline, edited)
         }
     }
 
     fun updateTitle(title: String) {
         viewModelScope.launch {
-            val updatedConversation = conversation.value.copy(title = title)
-            chatService.saveConversation(_conversationId, updatedConversation)
+            chatService.updateConversationTitle(_conversationId, title)
         }
     }
 
     fun deleteConversation(conversation: Conversation): Job =
         viewModelScope.launch {
-            conversationRepo.deleteConversation(conversation)
+            chatService.deleteConversation(conversation.id)
         }
 
     fun updatePinnedStatus(conversation: Conversation) {
         viewModelScope.launch {
-            conversationRepo.togglePinStatus(conversation.id)
+            chatService.toggleConversationPin(conversation.id)
         }
     }
 
     fun moveConversationToAssistant(conversation: Conversation, targetAssistantId: Uuid) {
         viewModelScope.launch {
-            val conversationFull = conversationRepo.getConversationById(conversation.id) ?: return@launch
-            // 文件夹是助手内分组，切换助手后原文件夹在新助手下不可见，需清空归属避免会话丢失
-            val updatedConversation = conversationFull.copy(
-                assistantId = targetAssistantId,
-                folderId = null,
-            )
-            if (conversation.id == _conversationId) {
-                chatService.saveConversation(_conversationId, updatedConversation)
-                settingsStore.updateAssistant(targetAssistantId)
-            } else {
-                conversationRepo.updateConversation(updatedConversation)
-            }
+            // 文件夹是助手内分组，切换助手后原文件夹在新助手下不可见，需清空归属避免会话丢失。
+            chatService.moveConversationToAssistant(conversation.id, targetAssistantId)
+            if (conversation.id == _conversationId) settingsStore.updateAssistant(targetAssistantId)
         }
     }
 
@@ -304,12 +295,14 @@ class ChatVM(
     }
 
     fun clearTranslationField(messageId: Uuid) {
-        chatService.clearTranslationField(_conversationId, messageId)
+        viewModelScope.launch {
+            chatService.clearTranslationField(_conversationId, messageId)
+        }
     }
 
-    fun updateConversation(newConversation: Conversation) {
-        chatService.updateConversationState(_conversationId) {
-            newConversation
+    fun selectMessageNode(nodeId: Uuid, selectIndex: Int) {
+        viewModelScope.launch {
+            chatService.selectMessageNode(_conversationId, nodeId, selectIndex)
         }
     }
 

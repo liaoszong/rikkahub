@@ -8,8 +8,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import me.rerere.rikkahub.data.model.Conversation
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.uuid.Uuid
 
 private const val TAG = "ConversationSession"
@@ -19,13 +20,18 @@ class ConversationSession(
     val id: Uuid,
     initial: Conversation,
     private val scope: CoroutineScope,
-    private val onIdle: (Uuid) -> Unit,
+    private val onIdle: (ConversationSession) -> Unit,
 ) {
     // 会话状态
     val state = MutableStateFlow(initial)
+    private val _deleted = MutableStateFlow(false)
+    val deleted: StateFlow<Boolean> = _deleted.asStateFlow()
 
-    // 原子引用计数
-    private val refCount = AtomicInteger(0)
+    private val lifecycleLock = Any()
+    private var refCount = 0
+    private var closed = false
+    private var generationBlocked = false
+    private var generationEpoch = 0L
 
     // 处理状态（如 OCR 识别中）
     val processingStatus = MutableStateFlow<String?>(null)
@@ -34,74 +40,180 @@ class ConversationSession(
     private val _generationJob = MutableStateFlow<Job?>(null)
     val generationJob: StateFlow<Job?> = _generationJob.asStateFlow()
     val isGenerating: Boolean get() = _generationJob.value?.isActive == true
-    val isInUse: Boolean get() = refCount.get() > 0 || isGenerating
+    val isInUse: Boolean get() = synchronized(lifecycleLock) { refCount > 0 || isGenerating }
+    val isClosed: Boolean get() = synchronized(lifecycleLock) { closed }
+
+    // 同一会话的持久化必须串行，避免不同 coroutine 用相同 revision 并发覆盖。
+    private val persistenceMutex = Mutex()
+
+    @Volatile
+    private var durableStateLoaded = false
 
     // 空闲检查任务
     private var idleCheckJob: Job? = null
 
-    fun acquire(): Int = refCount.incrementAndGet().also {
-        cancelIdleCheck()
-        Log.d(TAG, "acquire $id (refs=$it)")
+    init {
+        synchronized(lifecycleLock) { scheduleIdleCheckLocked() }
     }
 
-    fun release(): Int = refCount.decrementAndGet().also {
-        Log.d(TAG, "release $id (refs=$it)")
-        if (it <= 0) scheduleIdleCheck()
+    fun tryAcquire(logChange: Boolean = true): Boolean {
+        val refs = synchronized(lifecycleLock) {
+            if (closed) return false
+            refCount += 1
+            cancelIdleCheckLocked()
+            refCount
+        }
+        if (logChange) Log.d(TAG, "acquire $id (refs=$refs)")
+        return true
     }
 
-    // 作用域 API - 短请求（REST）
-    inline fun <T> withRef(block: () -> T): T {
-        acquire()
+    fun tryAcquireGeneration(logChange: Boolean = true): ConversationGenerationLease? {
+        val acquired = synchronized(lifecycleLock) {
+            if (closed || generationBlocked) return null
+            refCount += 1
+            cancelIdleCheckLocked()
+            generationEpoch to refCount
+        }
+        if (logChange) Log.d(TAG, "acquireGeneration $id (refs=${acquired.second})")
+        return ConversationGenerationLease(this, acquired.first)
+    }
+
+    fun release(logChange: Boolean = true): Int {
+        val refs = synchronized(lifecycleLock) {
+            check(refCount > 0) { "Conversation session $id released without a matching lease" }
+            refCount -= 1
+            if (refCount == 0 && !closed) scheduleIdleCheckLocked()
+            refCount
+        }
+        if (logChange) Log.d(TAG, "release $id (refs=$refs)")
+        return refs
+    }
+
+    suspend fun <T> withPersistenceLock(block: suspend () -> T): T {
+        if (!tryAcquire(logChange = false)) throw ConversationSessionClosedException(id)
         try {
-            return block()
+            persistenceMutex.lock()
+            try {
+                if (isClosed) throw ConversationSessionClosedException(id)
+                return block()
+            } finally {
+                persistenceMutex.unlock()
+            }
         } finally {
-            release()
+            release(logChange = false)
         }
     }
 
-    // 作用域 API - 长连接（SSE、挂起函数）
-    suspend inline fun <T> withRefSuspend(block: () -> T): T {
-        acquire()
-        try {
-            return block()
-        } finally {
-            release()
-        }
+    fun markDurableStateLoaded() {
+        durableStateLoaded = true
     }
 
-    fun setJob(job: Job?) {
-        val previousJob = _generationJob.value
-        _generationJob.value = job
+    fun hasDurableStateLoaded(): Boolean = durableStateLoaded
+
+    fun markDeleted() {
+        _deleted.value = true
+    }
+
+    fun markRestored() {
+        _deleted.value = false
+    }
+
+    internal fun attachGenerationJob(job: Job, expectedEpoch: Long): Job? {
+        val previousJob = synchronized(lifecycleLock) {
+            if (closed || generationBlocked || generationEpoch != expectedEpoch) {
+                throw ConversationGenerationRejectedException(id)
+            }
+            _generationJob.value.also { _generationJob.value = job }
+        }
         previousJob?.cancel()
-        job?.invokeOnCompletion {
-            val releasedOwnership = _generationJob.compareAndSet(job, null)
-            if (releasedOwnership && refCount.get() <= 0) {
-                scheduleIdleCheck()
+        job.invokeOnCompletion {
+            synchronized(lifecycleLock) {
+                val releasedOwnership = _generationJob.compareAndSet(job, null)
+                if (releasedOwnership && refCount == 0 && !closed) {
+                    scheduleIdleCheckLocked()
+                }
             }
         }
+        return previousJob
+    }
+
+    fun blockGenerationJobs(): Job? {
+        val generationJob = synchronized(lifecycleLock) {
+            generationBlocked = true
+            generationEpoch = Math.addExact(generationEpoch, 1L)
+            _generationJob.value
+        }
+        generationJob?.cancel()
+        return generationJob
+    }
+
+    fun resumeGenerationJobs() = synchronized(lifecycleLock) {
+        check(!closed) { "Cannot resume generation jobs on closed session $id" }
+        generationBlocked = false
     }
 
     fun getJob(): Job? = _generationJob.value
 
-    private fun scheduleIdleCheck() {
+    fun tryCloseIfIdle(): Boolean = synchronized(lifecycleLock) {
+        if (closed || refCount > 0 || isGenerating) return@synchronized false
+        closed = true
+        cancelIdleCheckLocked()
+        true
+    }
+
+    private fun scheduleIdleCheckLocked() {
         idleCheckJob?.cancel()
         idleCheckJob = scope.launch {
             delay(IDLE_TIMEOUT_MS)
-            if (refCount.get() <= 0 && !isGenerating) {
-                onIdle(id)
-            }
+            onIdle(this@ConversationSession)
         }
     }
 
-    private fun cancelIdleCheck() {
+    private fun cancelIdleCheckLocked() {
         idleCheckJob?.cancel()
         idleCheckJob = null
     }
 
     fun cleanup() {
-        _generationJob.value?.cancel()
-        _generationJob.value = null
-        idleCheckJob?.cancel()
-        idleCheckJob = null
+        val generationJob = synchronized(lifecycleLock) {
+            closed = true
+            generationBlocked = true
+            generationEpoch = Math.addExact(generationEpoch, 1L)
+            cancelIdleCheckLocked()
+            _generationJob.value.also { _generationJob.value = null }
+        }
+        generationJob?.cancel()
+    }
+}
+
+class ConversationSessionClosedException(id: Uuid) :
+    IllegalStateException("Conversation session $id is closed")
+
+class ConversationGenerationRejectedException(id: Uuid) :
+    IllegalStateException("Conversation session $id rejected a stale generation lease")
+
+class ConversationSessionLease internal constructor(
+    private val session: ConversationSession,
+) : AutoCloseable {
+    private val released = AtomicBoolean(false)
+
+    override fun close() {
+        if (released.compareAndSet(false, true)) session.release(logChange = false)
+    }
+}
+
+class ConversationGenerationLease internal constructor(
+    private val session: ConversationSession,
+    private val epoch: Long,
+) : AutoCloseable {
+    private val released = AtomicBoolean(false)
+
+    fun attach(job: Job): Job? {
+        check(!released.get()) { "Generation lease for ${session.id} is already released" }
+        return session.attachGenerationJob(job, epoch)
+    }
+
+    override fun close() {
+        if (released.compareAndSet(false, true)) session.release(logChange = false)
     }
 }

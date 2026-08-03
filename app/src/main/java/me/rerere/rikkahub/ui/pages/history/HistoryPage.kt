@@ -48,6 +48,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.data.model.Conversation
@@ -115,16 +117,30 @@ fun HistoryPage(vm: HistoryVM = koinViewModel()) {
                     },
                     onDelete = {
                         scope.launch {
-                            // 先获取完整的对话数据（包含 messageNodes），用于撤销恢复
-                            val fullConversation = vm.getFullConversation(conversation.id) ?: conversation
-                            vm.deleteConversation(conversation)
-                            val result = snackbarHostState.showSnackbar(
-                                message = snackMessageDeleted,
-                                actionLabel = snackMessageUndo,
-                                withDismissAction = true,
-                            )
-                            if (result == SnackbarResult.ActionPerformed) {
-                                vm.restoreConversation(fullConversation)
+                            val deletion = vm.deleteConversation(conversation.id) ?: return@launch
+                            var resolved = false
+                            try {
+                                val result = snackbarHostState.showSnackbar(
+                                    message = snackMessageDeleted,
+                                    actionLabel = snackMessageUndo,
+                                    withDismissAction = true,
+                                )
+                                withContext(NonCancellable) {
+                                    if (result == SnackbarResult.ActionPerformed) {
+                                        resolved = vm.restoreConversation(deletion) != null
+                                    }
+                                    if (!resolved) {
+                                        vm.finalizeDeletedConversation(deletion)
+                                        resolved = true
+                                    }
+                                }
+                            } finally {
+                                if (!resolved) {
+                                    withContext(NonCancellable) {
+                                        vm.finalizeDeletedConversation(deletion)
+                                        resolved = true
+                                    }
+                                }
                             }
                         }
                     },

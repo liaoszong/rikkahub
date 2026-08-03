@@ -306,6 +306,18 @@ interface ConversationMigrationDAO {
     ): Int
 
     @Query(
+        "UPDATE conversation_migration_journal SET source_revision = :targetRevision, " +
+            "updated_at = :now WHERE conversation_id = :conversationId AND phase = 'READY' " +
+            "AND source_revision = :expectedRevision",
+    )
+    suspend fun advanceReadyRevision(
+        conversationId: String,
+        expectedRevision: Long,
+        targetRevision: Long,
+        now: Long,
+    ): Int
+
+    @Query(
         "UPDATE conversation_migration_journal SET phase = 'QUARANTINED', " +
             "last_error_code = :reasonCode, last_error_detail = :detail, " +
             "lease_owner = NULL, lease_until = NULL, updated_at = :now " +

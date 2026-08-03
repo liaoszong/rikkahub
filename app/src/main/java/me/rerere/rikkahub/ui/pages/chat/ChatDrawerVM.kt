@@ -159,15 +159,9 @@ class ChatDrawerVM(
         }
     }
 
-    /**
-     * 删除文件夹。若文件夹内有正在生成回复的会话，拒绝删除并返回 false（UI 层据此提示用户）。
-     */
+    /** 删除文件夹；活跃会话会由 ChatService 串行清空 folderId。 */
     fun deleteFolder(folderId: Uuid): Boolean {
-        if (chatService.hasGeneratingConversationInFolder(folderId)) {
-            return false
-        }
         viewModelScope.launch {
-            // 经 ChatService 删除：会同步清空活跃 session 内存态的 folderId，避免整对象保存写回已删文件夹
             chatService.deleteFolder(folderId)
             if (_selectedFolderId.value == folderId) {
                 _selectedFolderId.value = null

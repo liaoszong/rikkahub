@@ -101,7 +101,6 @@ class ConversationV2CutoverTest {
             messageNodeDAO = database.messageNodeDao(),
             favoriteDAO = database.favoriteDao(),
             database = database,
-            filesManager = FilesManager(context, FilesRepository(database.managedFileDao()), appScope),
             messageFtsManager = ftsManager,
             messageFtsOutboxProcessor = ftsProcessor,
             conversationV2Writer = writer,
@@ -434,6 +433,112 @@ class ConversationV2CutoverTest {
         assertTrue(before.envelopeExtrasJson.orEmpty().contains("providerTrace"))
         assertEquals(before.envelopeExtrasJson, after.envelopeExtrasJson)
         assertEquals(before.revision, after.revision)
+    }
+
+    @Test
+    fun readyMetadataPatchAdvancesJournalWithoutRewritingGraph() = runBlocking {
+        val inserted = writer.insert(conversation("metadata", listOf(node(21, message(21, "stable")))))
+        val beforeGraph = graphIdentity(inserted.id.toString())
+        val folderId = Uuid.parse("50000000-0000-0000-0000-000000000021")
+
+        val patched = writer.patchMetadata(
+            inserted,
+            ConversationMetadataPatch(
+                title = ConversationMetadataField.Set("renamed"),
+                chatSuggestions = ConversationMetadataField.Set(listOf("next")),
+                isPinned = ConversationMetadataField.Set(true),
+                folderId = ConversationMetadataField.Set(folderId),
+            ),
+        )
+
+        val afterGraph = graphIdentity(inserted.id.toString())
+        val journal = requireNotNull(
+            database.conversationMigrationDao().getJournal(inserted.id.toString()),
+        )
+        val stored = requireNotNull(repository.getConversationById(inserted.id))
+        val latestFts = requireNotNull(
+            database.messageFtsOutboxDao().getLatestEvent(inserted.id.toString()),
+        )
+        assertEquals(beforeGraph, afterGraph)
+        assertEquals(1L, patched.storageRevision)
+        assertEquals(1L, journal.sourceRevision)
+        assertEquals("renamed", stored.title)
+        assertEquals(listOf("next"), stored.chatSuggestions)
+        assertTrue(stored.isPinned)
+        assertEquals(folderId, stored.folderId)
+        assertEquals(1L, latestFts.targetRevision)
+        assertNull(lastWriterMarker(inserted.id.toString()))
+    }
+
+    @Test
+    fun readyMetadataPatchDoesNotWriteUnselectedSnapshotFields() = runBlocking {
+        val inserted = writer.insert(
+            conversation("metadata-scope", listOf(node(24, message(24, "stable")))).copy(
+                chatSuggestions = listOf("durable"),
+                updateAt = Instant.ofEpochMilli(2400),
+            ),
+        )
+        val staleSnapshot = inserted.copy(
+            chatSuggestions = listOf("stale"),
+            customSystemPrompt = "stale prompt",
+            updateAt = Instant.ofEpochMilli(9999),
+        )
+
+        val patched = writer.patchMetadata(
+            staleSnapshot,
+            ConversationMetadataPatch(title = ConversationMetadataField.Set("renamed only")),
+        )
+
+        val stored = requireNotNull(repository.getConversationById(inserted.id))
+        assertEquals("renamed only", stored.title)
+        assertEquals(listOf("durable"), stored.chatSuggestions)
+        assertEquals(null, stored.customSystemPrompt)
+        assertEquals(Instant.ofEpochMilli(2400), stored.updateAt)
+        assertEquals("renamed only", patched.title)
+        assertEquals(listOf("durable"), patched.chatSuggestions)
+        assertEquals(null, patched.customSystemPrompt)
+        assertEquals(Instant.ofEpochMilli(2400), patched.updateAt)
+    }
+
+    @Test
+    fun staleMetadataPatchIsRejectedByRevisionCas() = runBlocking {
+        val inserted = writer.insert(conversation("metadata-cas", listOf(node(22, message(22, "stable")))))
+        writer.patchMetadata(
+            inserted,
+            ConversationMetadataPatch(title = ConversationMetadataField.Set("winner")),
+        )
+
+        assertThrows(ConversationV2WriteConflictException::class.java) {
+            runBlocking {
+                writer.patchMetadata(
+                    inserted,
+                    ConversationMetadataPatch(isPinned = ConversationMetadataField.Set(true)),
+                )
+            }
+        }
+        Unit
+    }
+
+    @Test
+    fun legacyMetadataPatchPromotesBeforeApplyingPatch() = runBlocking {
+        val legacy = conversation("metadata-legacy", listOf(node(23, message(23, "legacy"))))
+        database.conversationDao().insert(legacy.toLegacyEntity(revision = 4))
+        database.messageNodeDao().insertAll(rawLegacyNodes(legacy))
+        val loaded = requireNotNull(repository.getConversationById(legacy.id))
+
+        val patched = writer.patchMetadata(
+            loaded,
+            ConversationMetadataPatch(isPinned = ConversationMetadataField.Set(true)),
+        )
+
+        val state = requireNotNull(
+            database.conversationMigrationDao().getConversationState(legacy.id.toString()),
+        )
+        assertEquals(ConversationV2Values.STORAGE_VERSION_V2, state.storageVersion)
+        assertEquals(5L, state.revision)
+        assertEquals(5L, patched.storageRevision)
+        assertTrue(requireNotNull(repository.getConversationById(legacy.id)).isPinned)
+        assertEquals("legacy", projector.loadReady(legacy.id.toString())?.nodes?.single()?.messages?.single()?.text())
     }
 
     private fun coordinator() = ConversationV2BackfillCoordinator(

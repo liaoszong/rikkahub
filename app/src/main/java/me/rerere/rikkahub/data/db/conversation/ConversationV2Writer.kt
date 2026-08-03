@@ -18,6 +18,8 @@ import me.rerere.rikkahub.data.db.entity.MessageBranchGroupEntity
 import me.rerere.rikkahub.data.db.entity.MessageFtsOutboxEntity
 import me.rerere.rikkahub.data.db.entity.MessagePartEntity
 import me.rerere.rikkahub.data.model.Conversation
+import java.time.Instant
+import kotlin.uuid.Uuid
 
 class ConversationV2Writer internal constructor(
     private val database: AppDatabase,
@@ -101,6 +103,62 @@ class ConversationV2Writer internal constructor(
                 else -> throw ConversationV2IntegrityException(
                     conversationId,
                     "Cannot update unknown storage version ${state.storageVersion}",
+                )
+            }
+        }
+    }
+
+    internal suspend fun patchMetadata(
+        conversation: Conversation,
+        patch: ConversationMetadataPatch,
+    ): Conversation {
+        val patched = patch.applyTo(conversation)
+        return database.withTransaction {
+            val conversationId = conversation.id.toString()
+            val state = migrationDAO.getConversationState(conversationId)
+                ?: throw ConversationV2WriteConflictException(
+                    conversationId,
+                    expectedRevision = conversation.storageRevision,
+                    actualRevision = null,
+                )
+            if (state.revision != conversation.storageRevision) {
+                throw ConversationV2WriteConflictException(
+                    conversationId,
+                    expectedRevision = conversation.storageRevision,
+                    actualRevision = state.revision,
+                )
+            }
+            val journal = migrationDAO.getJournal(conversationId)
+            when (state.storageVersion) {
+                ConversationV2Values.STORAGE_VERSION_V2 -> {
+                    val readyJournal = journal?.takeIf {
+                        it.phase == ConversationV2Values.MIGRATION_READY
+                    } ?: throw ConversationV2IntegrityException(
+                        conversationId,
+                        "Cannot patch v2 metadata without a READY journal",
+                    )
+                    projector.loadForState(state, readyJournal)
+                    patchReadyMetadata(conversation, patch, state.revision, readyJournal)
+                }
+
+                ConversationV2Values.STORAGE_VERSION_LEGACY -> {
+                    if (journal?.phase == ConversationV2Values.MIGRATION_READY) {
+                        throw ConversationV2IntegrityException(
+                            conversationId,
+                            "Cannot patch legacy metadata with a READY journal",
+                        )
+                    }
+                    promoteLegacy(
+                        patched,
+                        codec.encode(patched),
+                        state.revision,
+                        journal,
+                    )
+                }
+
+                else -> throw ConversationV2IntegrityException(
+                    conversationId,
+                    "Cannot patch unknown storage version ${state.storageVersion}",
                 )
             }
         }
@@ -191,6 +249,64 @@ class ConversationV2Writer internal constructor(
         projector.loadReady(conversationId)
             ?: throw ConversationV2IntegrityException(conversationId, "Promoted READY graph is unavailable")
         return conversation.normalized(encoded, targetRevision)
+    }
+
+    private suspend fun patchReadyMetadata(
+        conversation: Conversation,
+        patch: ConversationMetadataPatch,
+        actualRevision: Long,
+        readyJournal: ConversationMigrationJournalEntity,
+    ): Conversation {
+        val conversationId = conversation.id.toString()
+        val currentEntity = conversationDAO.getConversationById(conversationId)
+            ?: throw ConversationV2WriteConflictException(
+                conversationId,
+                expectedRevision = conversation.storageRevision,
+                actualRevision = null,
+            )
+        val updatedEntity = currentEntity.withMetadataPatch(patch)
+        if (updatedEntity == currentEntity) {
+            projector.loadReady(conversationId)
+                ?: throw ConversationV2IntegrityException(conversationId, "Unchanged metadata READY graph is unavailable")
+            return conversation.withMetadataFrom(currentEntity)
+        }
+
+        val targetRevision = claimRevision(
+            conversationId = conversationId,
+            expectedRevision = conversation.storageRevision,
+            actualRevision = actualRevision,
+            storageVersion = ConversationV2Values.STORAGE_VERSION_V2,
+        )
+        val claimedEntity = updatedEntity.copy(
+            revision = targetRevision,
+            lastWriterReplicaId = CONVERSATION_V2_INTERNAL_WRITER_MARKER,
+        )
+        updateClaimedEntity(claimedEntity)
+        if (
+            migrationDAO.advanceReadyRevision(
+                conversationId = conversationId,
+                expectedRevision = readyJournal.sourceRevision,
+                targetRevision = targetRevision,
+                now = nowMillis(),
+            ) != 1
+        ) {
+            throw ConversationV2IntegrityException(
+                conversationId,
+                "READY journal revision could not advance with metadata",
+            )
+        }
+        if (updatedEntity.title != currentEntity.title) {
+            enqueueFtsEvent(
+                namespace = "fts-metadata-write",
+                conversationId = conversationId,
+                targetRevision = targetRevision,
+                operation = ConversationV2Values.OUTBOX_UPSERT,
+            )
+        }
+        clearInternalMarker(conversationId)
+        projector.loadReady(conversationId)
+            ?: throw ConversationV2IntegrityException(conversationId, "Metadata-patched READY graph is unavailable")
+        return conversation.withMetadataFrom(claimedEntity)
     }
 
     private suspend fun claimRevision(
@@ -394,6 +510,43 @@ class ConversationV2Writer internal constructor(
         storageVersion = storageVersion,
         lastWriterReplicaId = internalMarker,
     )
+
+    private fun ConversationEntity.withMetadataPatch(patch: ConversationMetadataPatch): ConversationEntity = copy(
+        assistantId = patch.assistantId.resolveTo(assistantId) { it.toString() },
+        title = patch.title.resolveTo(title),
+        chatSuggestions = patch.chatSuggestions.resolveTo(chatSuggestions) { json.encodeToString(it) },
+        isPinned = patch.isPinned.resolveTo(isPinned),
+        customSystemPrompt = patch.customSystemPrompt.resolveTo(customSystemPrompt) { it.orEmpty() },
+        modeInjectionIds = patch.modeInjectionIds.resolveTo(modeInjectionIds) { json.encodeToString(it) },
+        lorebookIds = patch.lorebookIds.resolveTo(lorebookIds) { json.encodeToString(it) },
+        workspaceCwd = patch.workspaceCwd.resolveTo(workspaceCwd) { it.orEmpty() },
+        folderId = patch.folderId.resolveTo(folderId) { it?.toString().orEmpty() },
+    )
+
+    private fun Conversation.withMetadataFrom(entity: ConversationEntity): Conversation = copy(
+        assistantId = Uuid.parse(entity.assistantId),
+        title = entity.title,
+        chatSuggestions = json.decodeFromString(entity.chatSuggestions),
+        isPinned = entity.isPinned,
+        createAt = Instant.ofEpochMilli(entity.createAt),
+        updateAt = Instant.ofEpochMilli(entity.updateAt),
+        customSystemPrompt = entity.customSystemPrompt.ifEmpty { null },
+        modeInjectionIds = json.decodeFromString(entity.modeInjectionIds),
+        lorebookIds = json.decodeFromString(entity.lorebookIds),
+        workspaceCwd = entity.workspaceCwd.ifEmpty { null },
+        folderId = entity.folderId.ifEmpty { null }?.let(Uuid::parse),
+        storageRevision = entity.revision,
+    )
+
+    private fun <T> ConversationMetadataField<T>.resolveTo(current: T): T = when (this) {
+        ConversationMetadataField.Keep -> current
+        is ConversationMetadataField.Set -> value
+    }
+
+    private fun <T, R> ConversationMetadataField<T>.resolveTo(current: R, map: (T) -> R): R = when (this) {
+        ConversationMetadataField.Keep -> current
+        is ConversationMetadataField.Set -> map(value)
+    }
 }
 
 class ConversationV2WriteConflictException(

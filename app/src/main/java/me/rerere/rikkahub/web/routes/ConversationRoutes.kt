@@ -12,12 +12,13 @@ import io.ktor.server.sse.heartbeat
 import io.ktor.server.sse.sse
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.takeWhile
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.repository.ConversationRepository
-import me.rerere.rikkahub.data.repository.FolderRepository
 import me.rerere.rikkahub.service.ChatService
 import me.rerere.rikkahub.web.BadRequestException
 import me.rerere.rikkahub.web.NotFoundException
@@ -47,7 +48,6 @@ import kotlin.uuid.Uuid
 fun Route.conversationRoutes(
     chatService: ChatService,
     conversationRepo: ConversationRepository,
-    folderRepo: FolderRepository,
     settingsStore: SettingsStore
 ) {
     route("/conversations") {
@@ -153,20 +153,17 @@ fun Route.conversationRoutes(
         // DELETE /api/conversations/{id} - Delete conversation
         delete("/{id}") {
             val uuid = call.parameters["id"].toUuid("conversation id")
-            val conversation = conversationRepo.getConversationById(uuid)
-                ?: throw NotFoundException("Conversation not found")
-
-            conversationRepo.deleteConversation(conversation)
+            if (!chatService.deleteConversation(uuid)) throw NotFoundException("Conversation not found")
             call.respond(HttpStatusCode.NoContent)
         }
 
         // POST /api/conversations/{id}/pin - Toggle pinned status
         post("/{id}/pin") {
             val uuid = call.parameters["id"].toUuid("conversation id")
-            val conversation = conversationRepo.getConversationById(uuid)
+            conversationRepo.getConversationById(uuid)
                 ?: throw NotFoundException("Conversation not found")
 
-            chatService.saveConversation(uuid, conversation.copy(isPinned = !conversation.isPinned))
+            chatService.toggleConversationPin(uuid)
             call.respond(HttpStatusCode.OK, mapOf("status" to "updated"))
         }
 
@@ -190,10 +187,9 @@ fun Route.conversationRoutes(
                 throw BadRequestException("Title must not be blank")
             }
 
-            val conversation = conversationRepo.getConversationById(uuid)
+            conversationRepo.getConversationById(uuid)
                 ?: throw NotFoundException("Conversation not found")
-
-            chatService.saveConversation(uuid, conversation.copy(title = title))
+            chatService.updateConversationTitle(uuid, title)
             call.respond(HttpStatusCode.OK, mapOf("status" to "updated"))
         }
 
@@ -218,11 +214,11 @@ fun Route.conversationRoutes(
                 modeInjectionIds = request.modeInjectionIds,
                 lorebookIds = request.lorebookIds,
             )
-            val updatedConversation = conversation.copy(
+            val updatedConversation = chatService.updateConversationInjections(
+                conversationId = uuid,
                 modeInjectionIds = modeInjectionIds,
                 lorebookIds = lorebookIds,
             )
-            chatService.saveConversation(uuid, updatedConversation)
 
             val isGenerating = chatService.getGenerationJobStateFlow(uuid).first() != null
             call.respond(HttpStatusCode.OK, updatedConversation.toDto(isGenerating))
@@ -239,10 +235,9 @@ fun Route.conversationRoutes(
                 throw BadRequestException("Assistant not found")
             }
 
-            val conversation = conversationRepo.getConversationById(uuid)
+            conversationRepo.getConversationById(uuid)
                 ?: throw NotFoundException("Conversation not found")
-
-            chatService.saveConversation(uuid, conversation.copy(assistantId = targetAssistantId))
+            chatService.moveConversationToAssistant(uuid, targetAssistantId)
             call.respond(HttpStatusCode.OK, mapOf("status" to "updated"))
         }
 
@@ -251,18 +246,7 @@ fun Route.conversationRoutes(
             val uuid = call.parameters["id"].toUuid("conversation id")
             val request = call.receive<MoveConversationToFolderRequest>()
 
-            val conversation = conversationRepo.getConversationById(uuid)
-                ?: throw NotFoundException("Conversation not found")
-
             val targetFolderId = request.folderId?.takeIf { it.isNotBlank() }?.toUuid("folder id")
-            if (targetFolderId != null) {
-                val folder = folderRepo.getFolderById(targetFolderId)
-                    ?: throw NotFoundException("Folder not found")
-                if (folder.assistantId != conversation.assistantId) {
-                    throw BadRequestException("Folder belongs to another assistant")
-                }
-            }
-
             chatService.moveConversationToFolder(uuid, targetFolderId)
             call.respond(HttpStatusCode.OK, mapOf("status" to "updated"))
         }
@@ -367,14 +351,14 @@ fun Route.conversationRoutes(
             val id = call.parameters["id"] ?: return@sse
             val uuid = runCatching { Uuid.parse(id) }.getOrNull() ?: return@sse
 
-            chatService.initializeConversation(uuid)
-            chatService.addConversationReference(uuid)
-
-            heartbeat {
-                period = 1.seconds
-            }
-
+            val conversationLease = chatService.acquireConversationReference(uuid)
             try {
+                chatService.initializeConversation(uuid)
+
+                heartbeat {
+                    period = 1.seconds
+                }
+
                 var sequence = 0L
                 var previousDto: ConversationDto? = null
 
@@ -403,7 +387,13 @@ fun Route.conversationRoutes(
                     ConversationStreamPayload.BatchErrors(events)
                 }
 
-                merge(conversationEvents, errorEvents).collect { payload ->
+                val deletionEvents = chatService.getConversationDeletedFlow(uuid)
+                    .filter { it }
+                    .map { ConversationStreamPayload.Deleted }
+
+                merge(conversationEvents, errorEvents, deletionEvents)
+                    .takeWhile { payload -> payload !is ConversationStreamPayload.Deleted }
+                    .collect { payload ->
                     when (payload) {
                         is ConversationStreamPayload.Conversation -> {
                             sequence += 1
@@ -442,10 +432,12 @@ fun Route.conversationRoutes(
                                 send(data = json, event = "error")
                             }
                         }
+
+                        ConversationStreamPayload.Deleted -> Unit
                     }
                 }
             } finally {
-                chatService.removeConversationReference(uuid)
+                conversationLease.close()
             }
         }
     }
@@ -454,6 +446,7 @@ fun Route.conversationRoutes(
 private sealed interface ConversationStreamPayload {
     data class Conversation(val value: ConversationDto) : ConversationStreamPayload
     data class BatchErrors(val messages: List<String>) : ConversationStreamPayload
+    data object Deleted : ConversationStreamPayload
 }
 
 private data class ConversationInjectionIds(

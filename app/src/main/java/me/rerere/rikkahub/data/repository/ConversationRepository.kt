@@ -13,6 +13,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.data.db.AppDatabase
 import me.rerere.rikkahub.data.db.conversation.ConversationV2ShadowProjector
 import me.rerere.rikkahub.data.db.conversation.ConversationV2Writer
+import me.rerere.rikkahub.data.db.conversation.ConversationMetadataPatch
 import me.rerere.rikkahub.data.db.fts.MessageFtsManager
 import me.rerere.rikkahub.data.db.fts.MessageFtsOutboxProcessor
 import me.rerere.rikkahub.data.db.fts.MessageSearchSort
@@ -20,7 +21,6 @@ import me.rerere.rikkahub.data.db.dao.ConversationDAO
 import me.rerere.rikkahub.data.db.dao.FavoriteDAO
 import me.rerere.rikkahub.data.db.dao.MessageNodeDAO
 import me.rerere.rikkahub.data.db.entity.ConversationEntity
-import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.utils.JsonInstant
@@ -32,7 +32,6 @@ class ConversationRepository(
     private val messageNodeDAO: MessageNodeDAO,
     private val favoriteDAO: FavoriteDAO,
     private val database: AppDatabase,
-    private val filesManager: FilesManager,
     private val messageFtsManager: MessageFtsManager,
     private val messageFtsOutboxProcessor: MessageFtsOutboxProcessor,
     private val conversationV2Writer: ConversationV2Writer,
@@ -298,18 +297,12 @@ class ConversationRepository(
         return persisted
     }
 
-    suspend fun deleteConversation(conversation: Conversation) {
-        // 获取完整的 Conversation（包含 messageNodes）以正确清理文件
-        val fullConversation = if (conversation.messageNodes.isEmpty()) {
-            getConversationById(conversation.id) ?: conversation
-        } else {
-            conversation
-        }
-        val deleted = conversationV2Writer.delete(conversation.id.toString())
+    internal suspend fun deleteConversationById(conversationId: Uuid): Boolean {
+        val deleted = conversationV2Writer.delete(conversationId.toString())
         if (deleted) {
             messageFtsOutboxProcessor.requestDrain()
-            filesManager.deleteChatFiles(fullConversation.files)
         }
+        return deleted
     }
 
     suspend fun searchMessages(
@@ -319,12 +312,6 @@ class ConversationRepository(
 
     suspend fun rebuildAllIndexes(onProgress: (current: Int, total: Int) -> Unit = { _, _ -> }) {
         messageFtsOutboxProcessor.rebuildAll(onProgress)
-    }
-
-    suspend fun deleteConversationOfAssistant(assistantId: Uuid) {
-        getConversationsOfAssistant(assistantId).first().forEach { conversation ->
-            deleteConversation(conversation)
-        }
     }
 
     fun conversationToConversationEntity(conversation: Conversation): ConversationEntity {
@@ -379,22 +366,17 @@ class ConversationRepository(
             }
     }
 
-    suspend fun togglePinStatus(conversationId: Uuid) {
-        conversationDAO.updatePinStatus(
-            id = conversationId.toString(),
-            isPinned = !(getConversationById(conversationId)?.isPinned ?: false)
-        )
+    internal suspend fun patchConversationMetadata(
+        conversation: Conversation,
+        patch: ConversationMetadataPatch,
+    ): Conversation {
+        val persisted = conversationV2Writer.patchMetadata(conversation, patch)
+        messageFtsOutboxProcessor.requestDrain()
+        return persisted
     }
 
-    /**
-     * 单列更新会话的文件夹归属，folderId 为 null 表示移出文件夹（未归类）。
-     */
-    suspend fun updateConversationFolderId(conversationId: Uuid, folderId: Uuid?) {
-        conversationDAO.updateFolderId(
-            id = conversationId.toString(),
-            folderId = folderId?.toString() ?: ""
-        )
-    }
+    suspend fun getConversationIdsInFolder(folderId: Uuid): List<Uuid> =
+        conversationDAO.getIdsByFolder(folderId.toString()).map(Uuid::parse)
 
     private fun conversationSummaryToConversation(entity: LightConversationEntity): Conversation {
         return Conversation(

@@ -14,6 +14,8 @@ import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.repository.ConversationRepository
+import me.rerere.rikkahub.service.ChatService
+import me.rerere.rikkahub.service.ReversibleConversationDeletion
 import kotlin.uuid.Uuid
 
 private const val TAG = "HistoryVM"
@@ -21,6 +23,7 @@ private const val TAG = "HistoryVM"
 class HistoryVM(
     private val conversationRepo: ConversationRepository,
     private val settingsStore: SettingsStore,
+    private val chatService: ChatService,
 ) : ViewModel() {
     val assistant = settingsStore.settingsFlow
         .map { it.getCurrentAssistant() }
@@ -32,35 +35,29 @@ class HistoryVM(
         Log.e(TAG, "Error: ${it.message}")
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    fun deleteConversation(conversation: Conversation) {
-        viewModelScope.launch {
-            conversationRepo.deleteConversation(conversation)
-        }
-    }
+    suspend fun deleteConversation(conversationId: Uuid): ReversibleConversationDeletion? =
+        chatService.deleteConversationReversibly(conversationId)
 
     fun deleteAllConversations() {
         val assistant = assistant.value ?: return
         viewModelScope.launch {
-            conversationRepo.deleteConversationOfAssistant(assistant.id)
+            chatService.deleteConversationsOfAssistant(assistant.id)
         }
     }
 
     fun togglePinStatus(conversationId: Uuid) {
         viewModelScope.launch {
-            conversationRepo.togglePinStatus(conversationId)
+            chatService.toggleConversationPin(conversationId)
         }
     }
 
     fun getPinnedConversations(): Flow<List<Conversation>> =
         conversationRepo.getPinnedConversations()
 
-    fun restoreConversation(conversation: Conversation) {
-        viewModelScope.launch {
-            conversationRepo.insertConversation(conversation)
-        }
-    }
+    suspend fun restoreConversation(deletion: ReversibleConversationDeletion): Conversation? =
+        chatService.restoreDeletedConversation(deletion)
 
-    suspend fun getFullConversation(conversationId: Uuid): Conversation? {
-        return conversationRepo.getConversationById(conversationId)
-    }
+    suspend fun finalizeDeletedConversation(deletion: ReversibleConversationDeletion): Boolean =
+        chatService.finalizeDeletedConversation(deletion)
+
 }
