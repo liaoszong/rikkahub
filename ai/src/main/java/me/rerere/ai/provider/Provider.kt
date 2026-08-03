@@ -2,6 +2,7 @@ package me.rerere.ai.provider
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.JsonElement
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
@@ -53,6 +54,19 @@ interface Provider<T : ProviderSetting> {
     }
 }
 
+/**
+ * Provider-neutral handoff hook invoked after a request has been fully built and immediately
+ * before it is submitted to the HTTP transport. Durable request ledgers use this boundary to
+ * conservatively record a potentially billable dispatch before network ownership changes.
+ */
+fun interface ProviderDispatchObserver {
+    suspend fun onDispatch()
+
+    companion object {
+        val NONE = ProviderDispatchObserver { }
+    }
+}
+
 @Serializable
 data class TextGenerationParams(
     val model: Model,
@@ -63,6 +77,8 @@ data class TextGenerationParams(
     val reasoningLevel: ReasoningLevel = ReasoningLevel.OFF,
     val customHeaders: List<CustomHeader> = emptyList(),
     val customBody: List<CustomBody> = emptyList(),
+    @Transient
+    val dispatchObserver: ProviderDispatchObserver = ProviderDispatchObserver.NONE,
 )
 
 @Serializable
@@ -76,6 +92,8 @@ data class ImageGenerationParams(
     val requestId: String? = null,
     val customHeaders: List<CustomHeader> = emptyList(),
     val customBody: List<CustomBody> = emptyList(),
+    @Transient
+    val dispatchObserver: ProviderDispatchObserver = ProviderDispatchObserver.NONE,
 )
 
 @Serializable
@@ -90,6 +108,8 @@ data class ImageEditParams(
     val requestId: String? = null,
     val customHeaders: List<CustomHeader> = emptyList(),
     val customBody: List<CustomBody> = emptyList(),
+    @Transient
+    val dispatchObserver: ProviderDispatchObserver = ProviderDispatchObserver.NONE,
 )
 
 @Serializable

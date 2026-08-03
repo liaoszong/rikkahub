@@ -312,6 +312,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 .build()
         )
 
+        params.dispatchObserver.onDispatch()
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
             throw Exception("Failed to get response: ${response.code} ${response.body?.string()}")
@@ -462,6 +463,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             }
         }
 
+        params.dispatchObserver.onDispatch()
         val eventSource = EventSources.createFactory(client)
                 .newEventSource(request, listener)
 

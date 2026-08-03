@@ -276,6 +276,7 @@ class OpenAIProvider(
             .build()
 
         val items = withContext(Dispatchers.IO) {
+            params.dispatchObserver.onDispatch()
             val response = imageMutationClient.newCall(request).await()
             if (!response.isSuccessful) {
                 error("Failed to generate image: ${response.code} ${response.body?.string()}")
@@ -354,6 +355,7 @@ class OpenAIProvider(
             .build()
 
         val items = withContext(Dispatchers.IO) {
+            params.dispatchObserver.onDispatch()
             val response = imageMutationClient.newCall(request).await()
             if (!response.isSuccessful) {
                 error("Failed to edit image: ${response.code} ${response.body?.string()}")

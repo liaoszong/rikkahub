@@ -179,6 +179,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
 
         Log.i(TAG, "generateText: model=${params.model.modelId} messages=${messages.size}")
 
+        params.dispatchObserver.onDispatch()
         val response = client.newCall(request).await()
         if (!response.isSuccessful) {
             throw Exception("Failed to get response: ${response.code} ${response.body?.string()}")
@@ -310,6 +311,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             }
         }
 
+        params.dispatchObserver.onDispatch()
         val eventSource = EventSources.createFactory(client)
             .newEventSource(request, listener)
 
