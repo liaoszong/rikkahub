@@ -258,6 +258,7 @@ val dataSourceModule = module {
             json = get(),
             memoryRepo = get(),
             chatProviderStepCoordinator = get(),
+            toolExecutionLedgerCoordinator = get(),
         )
     }
 

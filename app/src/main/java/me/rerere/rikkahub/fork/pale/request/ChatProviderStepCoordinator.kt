@@ -46,6 +46,7 @@ data class ChatGenerationLedgerContext(
     val responseMessageId: String,
     val workspaceId: String? = null,
     val persistCurrentConversation: suspend () -> Unit,
+    val persistMessages: suspend (List<UIMessage>) -> Unit,
     val loadResponseMessage: suspend () -> UIMessage?,
 )
 

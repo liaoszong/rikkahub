@@ -15,6 +15,8 @@ import me.rerere.rikkahub.data.db.media.ConversationMediaReferenceBackfillProces
 import me.rerere.rikkahub.fork.pale.request.RequestLedgerRepository
 import me.rerere.rikkahub.fork.pale.request.ChatProviderStepCoordinator
 import me.rerere.rikkahub.fork.pale.request.ChatRequestReconciler
+import me.rerere.rikkahub.fork.pale.request.ToolExecutionLedgerCoordinator
+import me.rerere.rikkahub.fork.pale.request.ToolRequestReconciler
 import me.rerere.workspace.ProotShellRunner
 import me.rerere.workspace.RootfsInstaller
 import me.rerere.workspace.WorkspaceBindMount
@@ -63,9 +65,29 @@ val repositoryModule = module {
     }
 
     single {
+        ToolExecutionLedgerCoordinator(repository = get(), json = get())
+    }
+
+    single {
         val conversationRepository: ConversationRepository = get()
         ChatRequestReconciler(
             requestRepository = get(),
+            coordinator = get(),
+            loadDurableMessage = { conversationId, messageId ->
+                runCatching {
+                    conversationRepository.getConversationById(Uuid.parse(conversationId))
+                }.getOrNull()?.messageNodes
+                    ?.asSequence()
+                    ?.flatMap { it.messages.asSequence() }
+                    ?.singleOrNull { it.id.toString() == messageId }
+            },
+        )
+    }
+
+    single {
+        val conversationRepository: ConversationRepository = get()
+        ToolRequestReconciler(
+            repository = get(),
             coordinator = get(),
             loadDurableMessage = { conversationId, messageId ->
                 runCatching {

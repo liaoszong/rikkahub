@@ -50,6 +50,30 @@ class RequestDispatchSession private constructor(
         prepareDispatchLocked()
     }
 
+    /** Starts a host-local tool operation without claiming that a network/billing boundary was crossed. */
+    suspend fun markLocalExecutionStarted() = callbackMutex.withLock {
+        prepareDispatchLocked()
+        val attempt = requireAttempt()
+        if (attempt.attemptState() == RequestAttemptState.DISPATCHING) {
+            repository.advanceAttempt(
+                AdvanceAttemptCommand(
+                    lease = lease,
+                    attemptId = attemptId,
+                    nextState = RequestAttemptState.RUNNING,
+                    nextBoundary = BillableBoundary.NOT_SENT,
+                    actor = actor,
+                ),
+            )
+        } else {
+            check(attempt.attemptState() == RequestAttemptState.RUNNING) {
+                "Local execution cannot start from ${attempt.attemptState()}"
+            }
+            check(attempt.billableBoundary() == BillableBoundary.NOT_SENT) {
+                "Local execution unexpectedly crossed ${attempt.billableBoundary()}"
+            }
+        }
+    }
+
     suspend fun markResponseStarted() = callbackMutex.withLock {
         val attempt = requireAttempt()
         if (attempt.billableBoundary().isAtLeast(BillableBoundary.RESPONSE_STARTED)) return@withLock

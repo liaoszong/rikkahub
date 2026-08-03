@@ -554,7 +554,18 @@ class ChatService(
             try {
                 runCatching { previousJob?.join() }
                 val newApprovalState = when {
-                    answer != null -> ToolApprovalState.Answered(answer)
+                    answer != null -> {
+                        val target = getConversationFlow(conversationId).value.messageNodes
+                            .asSequence()
+                            .flatMap { it.currentMessage.parts.asSequence() }
+                            .filterIsInstance<UIMessagePart.Tool>()
+                            .singleOrNull { it.requestId == requestId && it.toolCallId == toolCallId }
+                            ?: error("Tool approval target not found")
+                        require(target.toolName == "ask_user") {
+                            "Only ask_user accepts an answered approval"
+                        }
+                        ToolApprovalState.Answered(answer)
+                    }
                     approved -> ToolApprovalState.Approved
                     else -> ToolApprovalState.Denied(reason)
                 }
@@ -691,6 +702,8 @@ class ChatService(
                                 execute = {
                                     mcpManager.callTool(serverId, tool.name, it.jsonObject)
                                 },
+                                ledgerAuthorityId = serverId.toString(),
+                                ledgerSideEffectClass = "unknown",
                             )
                         )
                     }
@@ -702,6 +715,11 @@ class ChatService(
                     workspaceId = assistant.workspaceId?.toString(),
                     persistCurrentConversation = {
                         persistCurrentConversation(conversationId)
+                    },
+                    persistMessages = { durableMessages ->
+                        mutateAndSaveConversation(conversationId) { current ->
+                            current.updateCurrentMessages(durableMessages)
+                        }
                     },
                     loadResponseMessage = {
                         getConversationFlow(conversationId).value

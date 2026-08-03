@@ -54,6 +54,8 @@ import me.rerere.rikkahub.fork.pale.request.ChatGenerationLedgerContext
 import me.rerere.rikkahub.fork.pale.request.ChatProviderStepCoordinator
 import me.rerere.rikkahub.fork.pale.request.ChatProviderStepOpenResult
 import me.rerere.rikkahub.fork.pale.request.ChatProviderStepSession
+import me.rerere.rikkahub.fork.pale.request.ToolExecutionLedgerCoordinator
+import me.rerere.rikkahub.fork.pale.request.ToolExecutionLedgerSession
 import me.rerere.rikkahub.utils.applyPlaceholders
 import java.util.Locale
 import kotlin.time.Clock
@@ -76,6 +78,7 @@ class GenerationHandler(
     private val json: Json,
     private val memoryRepo: MemoryRepository,
     private val chatProviderStepCoordinator: ChatProviderStepCoordinator,
+    private val toolExecutionLedgerCoordinator: ToolExecutionLedgerCoordinator,
 ) {
     fun generateText(
         settings: Settings,
@@ -239,10 +242,29 @@ class GenerationHandler(
                 }
                 messages = messages.dropLast(1) + lastMessage.copy(parts = updatedParts)
 
-                // This emission is a durable barrier: ChatService's collector first updates the
-                // exact response message, then the coordinator persists it before SUCCEEDED.
+                if (providerStep != null && ledgerContext != null) {
+                    // Freeze the exact parent result before creating child tool requests. If child
+                    // preparation fails, startup recovery can finish this local commit without
+                    // ever replaying the already completed provider request.
+                    withContext(NonCancellable) {
+                        ledgerContext.persistMessages(messages)
+                        providerStep.markResultReceived(messages.last())
+                        updatedTools.forEach { tool ->
+                            val toolDef = toolsInternal.find { it.name == tool.toolName }
+                                ?: error("Tool ${tool.toolName} not found while freezing its ledger identity")
+                            toolExecutionLedgerCoordinator.prepare(
+                                parentRequestId = providerStep.requestId,
+                                context = ledgerContext,
+                                tool = tool,
+                                definition = toolDef,
+                            )
+                        }
+                        providerStep.commitDurableOutput(messages.last())
+                    }
+                } else {
+                    providerStep?.commitDurableOutput(messages.last())
+                }
                 emit(GenerationChunk.Messages(messages))
-                providerStep?.commitDurableOutput(messages.last())
 
                 // If there are pending approvals, break and wait for user
                 if (hasPendingApproval) {
@@ -264,8 +286,22 @@ class GenerationHandler(
             // Handle tools (execute approved tools, handle denied tools)
             val executedTools = arrayListOf<UIMessagePart.Tool>()
             toolsToProcess.forEach { tool ->
+                val toolDef = toolsInternal.find { toolDef -> toolDef.name == tool.toolName }
+                    ?: error("Tool ${tool.toolName} not found")
+                var toolLedgerSession: ToolExecutionLedgerSession? = ledgerContext?.takeIf {
+                    tool.approvalState is ToolApprovalState.Denied ||
+                        tool.approvalState is ToolApprovalState.Answered
+                }?.let {
+                    toolExecutionLedgerCoordinator.openExecution(
+                        context = it,
+                        tool = tool,
+                        definition = toolDef,
+                    )
+                }
+                var toolCrossedExternalBoundary = false
                 when (tool.approvalState) {
                     is ToolApprovalState.Denied -> {
+                        toolLedgerSession?.startLocal()
                         // Tool was denied by user
                         val reason = (tool.approvalState as ToolApprovalState.Denied).reason
                         executedTools += tool.copy(
@@ -287,6 +323,7 @@ class GenerationHandler(
                     }
 
                     is ToolApprovalState.Answered -> {
+                        toolLedgerSession?.startLocal()
                         // Tool was answered by user (e.g., ask_user tool)
                         val answer = (tool.approvalState as ToolApprovalState.Answered).answer
                         executedTools += tool.copy(
@@ -318,72 +355,137 @@ class GenerationHandler(
                             },
                         )
                         messages = messages.dropLast(1) + runningMessage
-                        emit(GenerationChunk.Messages(messages))
                         // Persist RUNNING before invoking a side-effecting tool. A process death
                         // then fails closed instead of treating the approved invocation as fresh.
-                        ledgerContext?.persistCurrentConversation()
+                        ledgerContext?.persistMessages(messages)
+                        emit(GenerationChunk.Messages(messages))
+                        if (toolLedgerSession == null && ledgerContext != null) {
+                            toolLedgerSession = toolExecutionLedgerCoordinator.openExecution(
+                                context = ledgerContext,
+                                tool = runningTool,
+                                definition = toolDef,
+                            )
+                        }
 
-                        runCatching {
-                            val toolDef = toolsInternal.find { toolDef -> toolDef.name == runningTool.toolName }
-                                ?: error("Tool ${runningTool.toolName} not found")
-                            val args = runCatching {
-                                json.parseToJsonElement(runningTool.input.ifBlank { "{}" })
-                            }.getOrElse {
-                                error("Invalid tool arguments JSON for ${runningTool.toolName}: ${it.message}")
+                        val argsResult = runCatching {
+                            json.parseToJsonElement(runningTool.input.ifBlank { "{}" })
+                        }
+                        if (argsResult.isFailure) {
+                            toolLedgerSession?.startLocal()
+                            val failure = argsResult.exceptionOrNull()!!
+                            executedTools += runningTool.asFailedToolResult(
+                                IllegalArgumentException(
+                                    "Invalid tool arguments JSON for ${runningTool.toolName}: ${failure.message}",
+                                    failure,
+                                ),
+                            )
+                        } else {
+                            val args = argsResult.getOrThrow()
+                            if (toolLedgerSession != null) {
+                                try {
+                                    toolLedgerSession.startExternal()
+                                    toolCrossedExternalBoundary = true
+                                } catch (cancellation: CancellationException) {
+                                    toolLedgerSession.finishCancellation(
+                                        externalBoundaryCrossed = toolCrossedExternalBoundary,
+                                    )
+                                    throw cancellation
+                                }
                             }
+                            try {
                             Log.i(TAG, "generateText: executing tool ${toolDef.name} requestId=${runningTool.requestId}")
-                            val result = toolDef.executeWithContext?.invoke(
-                                args,
-                                ToolExecutionContext(
-                                    toolCallId = runningTool.toolCallId,
-                                    messages = messages,
-                                    emitProgress = { progress ->
-                                        val progressMessage = messages.last().copy(
-                                            parts = messages.last().parts.map { part ->
-                                                if (part is UIMessagePart.Tool && part.toolCallId == runningTool.toolCallId) {
-                                                    part.copy(progress = progress)
-                                                } else {
-                                                    part
+                            val executeTool: suspend () -> List<UIMessagePart> = {
+                                toolDef.executeWithContext?.invoke(
+                                    args,
+                                    ToolExecutionContext(
+                                        toolCallId = runningTool.toolCallId,
+                                        messages = messages,
+                                        emitProgress = { progress ->
+                                            val progressMessage = messages.last().copy(
+                                                parts = messages.last().parts.map { part ->
+                                                    if (part is UIMessagePart.Tool && part.toolCallId == runningTool.toolCallId) {
+                                                        part.copy(progress = progress)
+                                                    } else {
+                                                        part
+                                                    }
                                                 }
-                                            }
-                                        )
-                                        messages = messages.dropLast(1) + progressMessage
-                                        emit(GenerationChunk.Messages(messages))
-                                    },
-                                    contextId = toolExecutionContextId,
-                                    executionRequestId = runningTool.requestId,
-                                )
-                            ) ?: toolDef.execute(args)
+                                            )
+                                            messages = messages.dropLast(1) + progressMessage
+                                            emit(GenerationChunk.Messages(messages))
+                                        },
+                                        contextId = toolExecutionContextId,
+                                        executionRequestId = runningTool.requestId,
+                                    ),
+                                ) ?: toolDef.execute(args)
+                            }
+                            val result = toolLedgerSession?.withLeaseHeartbeat(executeTool) ?: executeTool()
                             val hasShellAccess = toolsInternal.any { it.name == "workspace_shell" }
                             executedTools += runningTool.copy(
                                 output = maybeTruncateToolOutput(runningTool.toolCallId, result, hasShellAccess),
                                 progress = emptyList(),
                                 executionState = ToolExecutionState.SUCCEEDED,
                             )
-                        }.onFailure {
+                            } catch (failure: Throwable) {
                             // 取消必须向上传播，否则停止生成会被误报为工具执行错误
-                            if (it is CancellationException) throw it
-                            Log.e(TAG, "generateText: tool ${runningTool.toolName} failed (${it.javaClass.simpleName})")
-                            executedTools += runningTool.copy(
-                                output = listOf(
-                                    UIMessagePart.Text(
-                                        json.encodeToString(
-                                            buildJsonObject {
-                                                put(
-                                                    "error",
-                                                    JsonPrimitive(buildString {
-                                                        append("[${it.javaClass.name}] ${it.message}")
-                                                        append("\n${it.stackTraceToString()}")
-                                                    })
-                                                )
-                                            }
-                                        )
-                                    )
-                                ),
-                                progress = emptyList(),
-                                executionState = ToolExecutionState.FAILED,
+                            if (failure is CancellationException) {
+                                toolLedgerSession?.finishCancellation(
+                                    externalBoundaryCrossed = toolCrossedExternalBoundary,
+                                )
+                                throw failure
+                            }
+                            Log.e(
+                                TAG,
+                                "generateText: tool ${runningTool.toolName} failed (${failure.javaClass.simpleName})",
                             )
+                            executedTools += runningTool.asFailedToolResult(failure)
+                            }
                         }
+                    }
+                }
+
+                // Each tool result crosses its own durable barrier. This prevents a later parallel
+                // tool cancellation from losing an earlier completed side effect and its evidence.
+                executedTools.lastOrNull { it.toolCallId == tool.toolCallId }?.let { result ->
+                    val resultMessage = messages.last().copy(
+                        parts = messages.last().parts.map { part ->
+                            if (part is UIMessagePart.Tool && part.toolCallId == result.toolCallId) {
+                                result
+                            } else {
+                                part
+                            }
+                        },
+                    )
+                    try {
+                        messages = messages.dropLast(1) + resultMessage
+                        if (ledgerContext != null && toolLedgerSession != null) {
+                            // Once a tool returned a definitive result, cancellation may not erase
+                            // that fact or downgrade it to UNKNOWN. Finish the single-tool durable
+                            // barrier independently of the collector's lifecycle.
+                            withContext(NonCancellable) {
+                                ledgerContext.persistMessages(messages)
+                                toolLedgerSession.commitDurableResult(
+                                    result = result,
+                                    persistConversation = {},
+                                )
+                            }
+                        } else {
+                            ledgerContext?.persistMessages(messages)
+                        }
+                        emit(GenerationChunk.Messages(messages))
+                    } catch (failure: Throwable) {
+                        val cleanupFailure = if (failure is CancellationException) {
+                            runCatching {
+                                toolLedgerSession?.finishCancellation(
+                                    externalBoundaryCrossed = toolCrossedExternalBoundary,
+                                )
+                            }.exceptionOrNull()
+                        } else {
+                            runCatching {
+                                toolLedgerSession?.releaseForLocalRepair(failure)
+                            }.exceptionOrNull()
+                        }
+                        cleanupFailure?.let(failure::addSuppressed)
+                        throw failure
                     }
                 }
             }
@@ -635,6 +737,26 @@ class GenerationHandler(
             )
         ) + nonTextParts
     }
+
+    private fun UIMessagePart.Tool.asFailedToolResult(failure: Throwable): UIMessagePart.Tool = copy(
+        output = listOf(
+            UIMessagePart.Text(
+                json.encodeToString(
+                    buildJsonObject {
+                        put(
+                            "error",
+                            JsonPrimitive(buildString {
+                                append("[${failure.javaClass.name}] ${failure.message}")
+                                append("\n${failure.stackTraceToString()}")
+                            }),
+                        )
+                    },
+                ),
+            ),
+        ),
+        progress = emptyList(),
+        executionState = ToolExecutionState.FAILED,
+    )
 
     fun translateText(
         settings: Settings,

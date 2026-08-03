@@ -63,6 +63,16 @@ interface RequestLedgerDAO {
     )
     suspend fun getRequestsByState(states: List<String>, limit: Int): List<RequestLedgerEntity>
 
+    @Query(
+        "SELECT * FROM request_ledger WHERE request_kind IN (:kinds) " +
+            "AND request_state IN (:states) ORDER BY updated_at, request_id LIMIT :limit",
+    )
+    suspend fun getRequestsByKindAndState(
+        kinds: List<String>,
+        states: List<String>,
+        limit: Int,
+    ): List<RequestLedgerEntity>
+
     @Query("SELECT * FROM request_attempt WHERE attempt_id = :attemptId")
     suspend fun getAttempt(attemptId: String): RequestAttemptEntity?
 

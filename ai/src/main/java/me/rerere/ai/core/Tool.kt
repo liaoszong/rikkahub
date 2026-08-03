@@ -2,6 +2,7 @@ package me.rerere.ai.core
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import me.rerere.ai.provider.Model
@@ -17,6 +18,10 @@ data class Tool(
     val needsApproval: (JsonElement) -> Boolean = { false },
     val execute: suspend (JsonElement) -> List<UIMessagePart>,
     val executeWithContext: (suspend (JsonElement, ToolExecutionContext) -> List<UIMessagePart>)? = null,
+    /** Stable host authority used only by RequestLedger; never exposed to a model/provider. */
+    @Transient val ledgerAuthorityId: String? = null,
+    /** Provider-neutral side-effect hint: none/read_only/reversible_write/irreversible/unknown. */
+    @Transient val ledgerSideEffectClass: String? = null,
 )
 
 /** Runtime-only context for tools that need conversation attachments or progressive UI updates. */

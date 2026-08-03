@@ -308,6 +308,7 @@ class ChatProviderStepCoordinatorTest {
         assistantId = ASSISTANT_ID,
         responseMessageId = RESPONSE_MESSAGE_ID,
         persistCurrentConversation = persist,
+        persistMessages = { persist() },
         loadResponseMessage = { durableResponse },
     )
 

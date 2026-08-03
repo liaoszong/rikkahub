@@ -46,6 +46,15 @@ class RequestLedgerRepository(
 
     suspend fun getAttempt(attemptId: RequestAttemptId): RequestAttemptEntity? = dao.getAttempt(attemptId.value)
 
+    suspend fun getInvocation(invocationId: ToolInvocationId): ToolInvocationEntity? =
+        dao.getInvocation(invocationId.value)
+
+    suspend fun getPermission(permissionId: ToolPermissionId): ToolPermissionEntity? =
+        dao.getPermissionById(permissionId.value)
+
+    suspend fun getInvocations(requestId: RequestId): List<ToolInvocationEntity> =
+        dao.getInvocations(requestId.value)
+
     suspend fun getOutputs(requestId: RequestId): List<RequestOutputEntity> = dao.getOutputs(requestId.value)
 
     suspend fun getChatRequestsForMessage(
@@ -59,6 +68,16 @@ class RequestLedgerRepository(
     ): List<RequestLedgerEntity> = dao.getRequestsByState(
         states.map { it.name.lowercase(Locale.ROOT) },
         limit,
+    )
+
+    suspend fun getRequestsByKindAndState(
+        kinds: List<RequestKind>,
+        states: List<RequestState>,
+        limit: Int = 500,
+    ): List<RequestLedgerEntity> = dao.getRequestsByKindAndState(
+        kinds = kinds.map { it.name.lowercase(Locale.ROOT) },
+        states = states.map { it.name.lowercase(Locale.ROOT) },
+        limit = limit,
     )
 
     suspend fun createRequest(spec: NewRequestSpec): RequestLedgerEntity = database.withTransaction {
@@ -598,7 +617,11 @@ class RequestLedgerRepository(
             check(ToolInvocationLifecycle.canTransition(currentExecution, command.nextExecutionState)) {
                 "Illegal tool invocation transition: $currentExecution -> ${command.nextExecutionState}"
             }
-            validateApprovalForExecution(command.nextApprovalState, command.nextExecutionState)
+            validateApprovalForExecution(
+                approval = command.nextApprovalState,
+                execution = command.nextExecutionState,
+                action = current.action,
+            )
             val permissionId = current.permissionId
                 ?: throw RequestLedgerConflict("Tool invocation lost its policy evidence")
             check(command.permissionId == null || command.permissionId.value == permissionId) {
@@ -622,6 +645,7 @@ class RequestLedgerRepository(
                 approval = command.nextApprovalState,
                 now = now,
                 executionRequiresAllow = command.nextExecutionState.requiresAuthorization(),
+                action = current.action,
             )
             if (command.nextExecutionState == ToolExecutionState.SUCCEEDED) {
                 check(!command.resultDigest.isNullOrBlank()) {
@@ -1010,14 +1034,22 @@ private object ToolPermissionLifecycle {
         transitions[from]?.contains(to) == true
 }
 
-private fun validateApprovalForExecution(approval: ToolApprovalState, execution: ToolExecutionState) {
+private fun validateApprovalForExecution(
+    approval: ToolApprovalState,
+    execution: ToolExecutionState,
+    action: String,
+) {
     when (execution) {
         ToolExecutionState.WAITING_APPROVAL -> check(approval == ToolApprovalState.PENDING)
         ToolExecutionState.READY,
         ToolExecutionState.RUNNING,
         ToolExecutionState.COMMITTING,
         ToolExecutionState.SUCCEEDED,
-        -> check(approval == ToolApprovalState.APPROVED || approval == ToolApprovalState.NOT_REQUIRED)
+        -> check(
+            approval == ToolApprovalState.APPROVED ||
+                approval == ToolApprovalState.NOT_REQUIRED ||
+                (approval == ToolApprovalState.ANSWERED && action == "answer"),
+        )
 
         else -> Unit
     }
@@ -1062,6 +1094,7 @@ private fun validateApprovalAgainstPermission(
     approval: ToolApprovalState,
     now: Long,
     executionRequiresAllow: Boolean,
+    action: String = "execute",
 ) {
     val expired = permission.expiresAt?.let { it <= now } == true
     val storedDecision = permission.decision.asPermissionDecision()
@@ -1073,13 +1106,19 @@ private fun validateApprovalAgainstPermission(
     }
     if (executionRequiresAllow) {
         check(decision == ToolPermissionDecision.ALLOW) { "Tool execution is not allowed" }
-        check(approval == ToolApprovalState.APPROVED || approval == ToolApprovalState.NOT_REQUIRED) {
+        check(
+            approval == ToolApprovalState.APPROVED ||
+                approval == ToolApprovalState.NOT_REQUIRED ||
+                (approval == ToolApprovalState.ANSWERED && action == "answer"),
+        ) {
             "Tool execution lacks approval evidence"
         }
     } else {
         when (decision) {
             ToolPermissionDecision.ALLOW -> check(
-                approval == ToolApprovalState.APPROVED || approval == ToolApprovalState.NOT_REQUIRED,
+                approval == ToolApprovalState.APPROVED ||
+                    approval == ToolApprovalState.NOT_REQUIRED ||
+                    (approval == ToolApprovalState.ANSWERED && action == "answer"),
             )
             ToolPermissionDecision.ASK -> check(approval == ToolApprovalState.PENDING)
             ToolPermissionDecision.DENY -> check(approval == ToolApprovalState.DENIED)

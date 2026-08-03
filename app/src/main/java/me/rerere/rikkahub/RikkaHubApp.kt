@@ -37,6 +37,7 @@ import me.rerere.rikkahub.data.db.conversation.ConversationV2BackfillCoordinator
 import me.rerere.rikkahub.data.db.fts.MessageFtsOutboxProcessor
 import me.rerere.rikkahub.data.db.media.ConversationMediaReferenceBackfillProcessor
 import me.rerere.rikkahub.fork.pale.request.ChatRequestReconciler
+import me.rerere.rikkahub.fork.pale.request.ToolRequestReconciler
 import me.rerere.rikkahub.service.WebServerService
 import me.rerere.rikkahub.utils.CrashHandler
 import me.rerere.rikkahub.utils.DatabaseUtil
@@ -215,8 +216,9 @@ class RikkaHubApp : Application() {
             runCatching {
                 val result = get<ConversationV2BackfillCoordinator>().runPending()
                 val requestRecovery = get<ChatRequestReconciler>().reconcilePending()
-                result to requestRecovery
-            }.onSuccess { (result, requestRecovery) ->
+                val toolRecovery = get<ToolRequestReconciler>().reconcilePending()
+                Triple(result, requestRecovery, toolRecovery)
+            }.onSuccess { (result, requestRecovery, toolRecovery) ->
                 get<MessageFtsOutboxProcessor>().requestDrain()
                 get<ConversationMediaReferenceBackfillProcessor>().requestBackfill()
                 if (requestRecovery.inspected > 0 || requestRecovery.failures.isNotEmpty()) {
@@ -226,6 +228,15 @@ class RikkaHubApp : Application() {
                             "committed=${requestRecovery.committed} unknown=${requestRecovery.unknown} " +
                             "interrupted=${requestRecovery.interrupted} failed=${requestRecovery.failed} " +
                             "errors=${requestRecovery.failures.size}",
+                    )
+                }
+                if (toolRecovery.inspected > 0 || toolRecovery.failures.isNotEmpty()) {
+                    Log.i(
+                        TAG,
+                        "reconcileToolRequests: inspected=${toolRecovery.inspected} " +
+                            "committed=${toolRecovery.committed} unknown=${toolRecovery.unknown} " +
+                            "cancelled=${toolRecovery.cancelled} failed=${toolRecovery.failed} " +
+                            "errors=${toolRecovery.failures.size}",
                     )
                 }
                 if (result.inspected > 0) {
