@@ -130,6 +130,9 @@ object RequestRetryPolicy {
         ) {
             return false
         }
+        if (state == RequestState.UNKNOWN_OUTCOME) {
+            return acceptsPossibleCharge
+        }
         return boundary == BillableBoundary.NOT_SENT ||
             providerGuaranteesIdempotency ||
             acceptsPossibleCharge

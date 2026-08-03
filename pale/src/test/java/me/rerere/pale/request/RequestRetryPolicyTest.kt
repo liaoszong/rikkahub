@@ -30,11 +30,31 @@ class RequestRetryPolicyTest {
     }
 
     @Test
-    fun `provider idempotency or explicit charge acceptance allows retry`() {
+    fun `unknown outcome always requires explicit charge acceptance`() {
+        assertFalse(
+            RequestRetryPolicy.canCreateAttempt(
+                state = RequestState.UNKNOWN_OUTCOME,
+                boundary = BillableBoundary.UNKNOWN,
+                providerGuaranteesIdempotency = true,
+                acceptsPossibleCharge = false,
+            ),
+        )
         assertTrue(
             RequestRetryPolicy.canCreateAttempt(
                 state = RequestState.UNKNOWN_OUTCOME,
                 boundary = BillableBoundary.UNKNOWN,
+                providerGuaranteesIdempotency = true,
+                acceptsPossibleCharge = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `provider idempotency or explicit charge acceptance allows known retry`() {
+        assertTrue(
+            RequestRetryPolicy.canCreateAttempt(
+                state = RequestState.FAILED,
+                boundary = BillableBoundary.SENT,
                 providerGuaranteesIdempotency = true,
                 acceptsPossibleCharge = false,
             ),

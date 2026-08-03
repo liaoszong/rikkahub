@@ -54,6 +54,12 @@ class RequestLifecycleTest {
     }
 
     @Test
+    fun `queued request can fail or interrupt before provider dispatch`() {
+        assertTrue(RequestLifecycle.canTransition(RequestState.QUEUED, RequestState.FAILED))
+        assertTrue(RequestLifecycle.canTransition(RequestState.QUEUED, RequestState.INTERRUPTED))
+    }
+
+    @Test
     fun `terminal success cannot be replayed`() {
         assertFalse(RequestLifecycle.canTransition(RequestState.SUCCEEDED, RequestState.QUEUED))
         assertFalse(

@@ -271,9 +271,11 @@ class Migration_28_29_Test {
             """
             INSERT INTO tool_invocation (
                 invocation_id, request_id, attempt_id, provider_tool_call_id, tool_name,
-                schema_digest, input_digest, side_effect_class, approval_state,
+                principal_kind, principal_id, action, schema_digest, input_digest,
+                side_effect_class, approval_state,
                 execution_state, permission_id, created_at, updated_at
-            ) VALUES (?, ?, ?, 'provider-call-1', 'tool-1', 'schema-digest',
+            ) VALUES (?, ?, ?, 'provider-call-1', 'tool-1', 'assistant', 'assistant-1',
+                'execute', 'schema-digest',
                 'input-digest', 'unknown', 'approved', 'running', ?, 10, 10)
             """.trimIndent(),
             arrayOf(invocationId, requestId, attemptId, permissionId),

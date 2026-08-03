@@ -111,7 +111,7 @@ NOT_SENT < SENT < RESPONSE_STARTED < RESULT_RECEIVED < RESULT_COMMITTED
 必须包含：
 
 - identity：`request_id`、唯一 `intent_key`、`parent_request_id`、`request_kind`；
-- source anchors：conversation/message/part、legacy node/message/request、workspace、MCP server、未来 credential ref；
+- source anchors：conversation/assistant/message/part、legacy node/message/request、workspace、MCP server、未来 credential ref；
 - execution snapshot：provider kind/id、model、API surface、input digest、CapabilitySnapshot JSON、resolver version、tool catalog digest；
 - state：approval、request、billable、attempt count、active attempt；
 - ownership：lease owner/until、fencing epoch、state revision；
@@ -129,7 +129,7 @@ NOT_SENT < SENT < RESPONSE_STARTED < RESULT_RECEIVED < RESULT_COMMITTED
 
 ### 5.4 `tool_invocation`
 
-必须包含 host invocation ID、request/attempt、Provider toolCallId、server/tool、schema/input digest、side-effect class、approval/execution state、permission ID、result digest、分类错误和时间。
+必须包含 host invocation ID、request/attempt、Provider toolCallId、server/tool、principal/action、schema/input digest、side-effect class、approval/execution state、permission ID、result digest、分类错误和时间。
 
 审批与执行前都必须重新核对 server/tool/schema/scope fingerprint。schema 改变会使旧 permission 失效并产生 audit，不能静默沿用。
 

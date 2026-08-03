@@ -12,6 +12,7 @@ import me.rerere.rikkahub.data.repository.GenMediaRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.rikkahub.data.db.media.ConversationMediaReferenceBackfillProcessor
+import me.rerere.rikkahub.fork.pale.request.RequestLedgerRepository
 import me.rerere.workspace.ProotShellRunner
 import me.rerere.workspace.RootfsInstaller
 import me.rerere.workspace.WorkspaceBindMount
@@ -46,6 +47,12 @@ val repositoryModule = module {
 
     single {
         FavoriteRepository(get())
+    }
+
+    // Room 29 request evidence has one transactional write authority. Consumers receive the
+    // repository rather than a DAO so state, billing boundary, lease, and audit never drift.
+    single {
+        RequestLedgerRepository(database = get())
     }
 
     single {

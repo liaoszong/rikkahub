@@ -71,7 +71,9 @@ object RequestLifecycle {
         RequestState.QUEUED to setOf(
             RequestState.WAITING_RUNTIME,
             RequestState.DISPATCHING,
+            RequestState.FAILED,
             RequestState.CANCELLED,
+            RequestState.INTERRUPTED,
         ),
         RequestState.WAITING_RUNTIME to setOf(
             RequestState.DISPATCHING,

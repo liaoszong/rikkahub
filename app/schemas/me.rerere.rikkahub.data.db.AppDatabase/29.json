@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 29,
-    "identityHash": "a6bd0cbf81517052afec3380e01313ef",
+    "identityHash": "3c7e9695b7342523de83595e912e0317",
     "entities": [
       {
         "tableName": "ConversationEntity",
@@ -2315,7 +2315,7 @@
       },
       {
         "tableName": "request_ledger",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`request_id` TEXT NOT NULL, `intent_key` TEXT NOT NULL, `parent_request_id` TEXT, `request_kind` TEXT NOT NULL, `conversation_id` TEXT, `message_id` TEXT, `part_id` TEXT, `legacy_node_id` TEXT, `legacy_message_id` TEXT, `legacy_request_id` TEXT, `workspace_id` TEXT, `mcp_server_id` TEXT, `credential_ref_id` TEXT, `provider_kind` TEXT, `provider_id` TEXT, `model_id` TEXT, `api_surface` TEXT, `input_digest` TEXT NOT NULL, `capability_snapshot_json` TEXT NOT NULL, `resolver_version` INTEGER NOT NULL, `tool_catalog_digest` TEXT, `approval_state` TEXT NOT NULL, `request_state` TEXT NOT NULL, `billable_boundary` TEXT NOT NULL, `attempt_count` INTEGER NOT NULL DEFAULT 0, `active_attempt_id` TEXT, `lease_owner` TEXT, `lease_until` INTEGER, `fencing_epoch` INTEGER NOT NULL DEFAULT 0, `state_revision` INTEGER NOT NULL DEFAULT 0, `billable_at` INTEGER, `dispatch_at` INTEGER, `terminal_at` INTEGER, `remote_request_id` TEXT, `remote_response_id` TEXT, `usage_json` TEXT, `error_kind` TEXT, `error_code` TEXT, `error_message` TEXT, `unknown_outcome_reason` TEXT, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`request_id`), FOREIGN KEY(`parent_request_id`) REFERENCES `request_ledger`(`request_id`) ON UPDATE NO ACTION ON DELETE SET NULL , FOREIGN KEY(`request_id`, `active_attempt_id`) REFERENCES `request_attempt`(`request_id`, `attempt_id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`request_id` TEXT NOT NULL, `intent_key` TEXT NOT NULL, `parent_request_id` TEXT, `request_kind` TEXT NOT NULL, `conversation_id` TEXT, `assistant_id` TEXT, `message_id` TEXT, `part_id` TEXT, `legacy_node_id` TEXT, `legacy_message_id` TEXT, `legacy_request_id` TEXT, `workspace_id` TEXT, `mcp_server_id` TEXT, `credential_ref_id` TEXT, `provider_kind` TEXT, `provider_id` TEXT, `model_id` TEXT, `api_surface` TEXT, `input_digest` TEXT NOT NULL, `capability_snapshot_json` TEXT NOT NULL, `resolver_version` INTEGER NOT NULL, `tool_catalog_digest` TEXT, `approval_state` TEXT NOT NULL, `request_state` TEXT NOT NULL, `billable_boundary` TEXT NOT NULL, `attempt_count` INTEGER NOT NULL DEFAULT 0, `active_attempt_id` TEXT, `lease_owner` TEXT, `lease_until` INTEGER, `fencing_epoch` INTEGER NOT NULL DEFAULT 0, `state_revision` INTEGER NOT NULL DEFAULT 0, `billable_at` INTEGER, `dispatch_at` INTEGER, `terminal_at` INTEGER, `remote_request_id` TEXT, `remote_response_id` TEXT, `usage_json` TEXT, `error_kind` TEXT, `error_code` TEXT, `error_message` TEXT, `unknown_outcome_reason` TEXT, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`request_id`), FOREIGN KEY(`parent_request_id`) REFERENCES `request_ledger`(`request_id`) ON UPDATE NO ACTION ON DELETE SET NULL , FOREIGN KEY(`request_id`, `active_attempt_id`) REFERENCES `request_attempt`(`request_id`, `attempt_id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
         "fields": [
           {
             "fieldPath": "requestId",
@@ -2343,6 +2343,11 @@
           {
             "fieldPath": "conversationId",
             "columnName": "conversation_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "assistantId",
+            "columnName": "assistant_id",
             "affinity": "TEXT"
           },
           {
@@ -3075,7 +3080,7 @@
       },
       {
         "tableName": "tool_invocation",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`invocation_id` TEXT NOT NULL, `request_id` TEXT NOT NULL, `attempt_id` TEXT, `provider_tool_call_id` TEXT NOT NULL, `server_id` TEXT, `tool_name` TEXT NOT NULL, `schema_digest` TEXT NOT NULL, `input_digest` TEXT NOT NULL, `side_effect_class` TEXT NOT NULL, `approval_state` TEXT NOT NULL, `execution_state` TEXT NOT NULL, `permission_id` TEXT, `result_digest` TEXT, `error_kind` TEXT, `error_code` TEXT, `created_at` INTEGER NOT NULL, `approved_at` INTEGER, `started_at` INTEGER, `finished_at` INTEGER, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`invocation_id`), FOREIGN KEY(`request_id`) REFERENCES `request_ledger`(`request_id`) ON UPDATE NO ACTION ON DELETE NO ACTION , FOREIGN KEY(`request_id`, `attempt_id`) REFERENCES `request_attempt`(`request_id`, `attempt_id`) ON UPDATE NO ACTION ON DELETE NO ACTION , FOREIGN KEY(`permission_id`) REFERENCES `tool_permission`(`permission_id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`invocation_id` TEXT NOT NULL, `request_id` TEXT NOT NULL, `attempt_id` TEXT, `provider_tool_call_id` TEXT NOT NULL, `server_id` TEXT, `tool_name` TEXT NOT NULL, `principal_kind` TEXT NOT NULL, `principal_id` TEXT NOT NULL, `action` TEXT NOT NULL, `schema_digest` TEXT NOT NULL, `input_digest` TEXT NOT NULL, `side_effect_class` TEXT NOT NULL, `approval_state` TEXT NOT NULL, `execution_state` TEXT NOT NULL, `permission_id` TEXT, `result_digest` TEXT, `error_kind` TEXT, `error_code` TEXT, `created_at` INTEGER NOT NULL, `approved_at` INTEGER, `started_at` INTEGER, `finished_at` INTEGER, `state_revision` INTEGER NOT NULL DEFAULT 0, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`invocation_id`), FOREIGN KEY(`request_id`) REFERENCES `request_ledger`(`request_id`) ON UPDATE NO ACTION ON DELETE NO ACTION , FOREIGN KEY(`request_id`, `attempt_id`) REFERENCES `request_attempt`(`request_id`, `attempt_id`) ON UPDATE NO ACTION ON DELETE NO ACTION , FOREIGN KEY(`permission_id`) REFERENCES `tool_permission`(`permission_id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
         "fields": [
           {
             "fieldPath": "invocationId",
@@ -3108,6 +3113,24 @@
           {
             "fieldPath": "toolName",
             "columnName": "tool_name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "principalKind",
+            "columnName": "principal_kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "principalId",
+            "columnName": "principal_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "action",
+            "columnName": "action",
             "affinity": "TEXT",
             "notNull": true
           },
@@ -3183,6 +3206,13 @@
             "affinity": "INTEGER"
           },
           {
+            "fieldPath": "stateRevision",
+            "columnName": "state_revision",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
             "fieldPath": "updatedAt",
             "columnName": "updated_at",
             "affinity": "INTEGER",
@@ -3197,14 +3227,15 @@
         },
         "indices": [
           {
-            "name": "index_tool_invocation_request_id_provider_tool_call_id",
+            "name": "index_tool_invocation_request_id_attempt_id_provider_tool_call_id",
             "unique": true,
             "columnNames": [
               "request_id",
+              "attempt_id",
               "provider_tool_call_id"
             ],
             "orders": [],
-            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_tool_invocation_request_id_provider_tool_call_id` ON `${TABLE_NAME}` (`request_id`, `provider_tool_call_id`)"
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_tool_invocation_request_id_attempt_id_provider_tool_call_id` ON `${TABLE_NAME}` (`request_id`, `attempt_id`, `provider_tool_call_id`)"
           },
           {
             "name": "index_tool_invocation_request_id_invocation_id",
@@ -4054,7 +4085,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'a6bd0cbf81517052afec3380e01313ef')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '3c7e9695b7342523de83595e912e0317')"
     ]
   }
 }

@@ -46,6 +46,8 @@ data class RequestLedgerEntity(
     val requestKind: String,
     @ColumnInfo("conversation_id")
     val conversationId: String? = null,
+    @ColumnInfo("assistant_id")
+    val assistantId: String? = null,
     @ColumnInfo("message_id")
     val messageId: String? = null,
     @ColumnInfo("part_id")
@@ -276,7 +278,7 @@ data class RequestOutputEntity(
         ),
     ],
     indices = [
-        Index(value = ["request_id", "provider_tool_call_id"], unique = true),
+        Index(value = ["request_id", "attempt_id", "provider_tool_call_id"], unique = true),
         Index(value = ["request_id", "invocation_id"], unique = true),
         Index(value = ["request_id", "attempt_id"]),
         Index(value = ["attempt_id"]),
@@ -299,6 +301,12 @@ data class ToolInvocationEntity(
     val serverId: String? = null,
     @ColumnInfo("tool_name")
     val toolName: String,
+    @ColumnInfo("principal_kind")
+    val principalKind: String,
+    @ColumnInfo("principal_id")
+    val principalId: String,
+    @ColumnInfo("action")
+    val action: String,
     @ColumnInfo("schema_digest")
     val schemaDigest: String,
     @ColumnInfo("input_digest")
@@ -325,6 +333,8 @@ data class ToolInvocationEntity(
     val startedAt: Long? = null,
     @ColumnInfo("finished_at")
     val finishedAt: Long? = null,
+    @ColumnInfo("state_revision", defaultValue = "0")
+    val stateRevision: Long = 0,
     @ColumnInfo("updated_at")
     val updatedAt: Long,
 )

@@ -69,6 +69,12 @@ interface RequestLedgerDAO {
     suspend fun getOutputs(requestId: String): List<RequestOutputEntity>
 
     @Query(
+        "SELECT * FROM request_output WHERE request_id = :requestId " +
+            "AND output_kind = :outputKind AND ordinal = :ordinal",
+    )
+    suspend fun getOutputBySlot(requestId: String, outputKind: String, ordinal: Int): RequestOutputEntity?
+
+    @Query(
         "SELECT * FROM tool_invocation WHERE request_id = :requestId " +
             "ORDER BY created_at, invocation_id",
     )
@@ -77,14 +83,37 @@ interface RequestLedgerDAO {
     @Query("SELECT * FROM tool_invocation WHERE invocation_id = :invocationId")
     suspend fun getInvocation(invocationId: String): ToolInvocationEntity?
 
+    @Query(
+        "SELECT * FROM tool_invocation WHERE request_id = :requestId " +
+            "AND attempt_id = :attemptId " +
+            "AND provider_tool_call_id = :providerToolCallId",
+    )
+    suspend fun getInvocationByProviderCall(
+        requestId: String,
+        attemptId: String,
+        providerToolCallId: String,
+    ): ToolInvocationEntity?
+
     @Query("SELECT * FROM tool_permission WHERE permission_key = :permissionKey")
     suspend fun getPermission(permissionKey: String): ToolPermissionEntity?
+
+    @Query("SELECT * FROM tool_permission WHERE permission_id = :permissionId")
+    suspend fun getPermissionById(permissionId: String): ToolPermissionEntity?
 
     @Query(
         "SELECT * FROM request_audit_event WHERE request_id = :requestId " +
             "ORDER BY event_seq",
     )
     suspend fun getRequestAudit(requestId: String): List<RequestAuditEventEntity>
+
+    @Query("SELECT COALESCE(MAX(event_seq), 0) + 1 FROM request_audit_event WHERE request_id = :requestId")
+    suspend fun nextRequestAuditSequence(requestId: String): Long
+
+    @Query(
+        "SELECT * FROM tool_audit_event WHERE request_id = :requestId " +
+            "ORDER BY created_at, event_id",
+    )
+    suspend fun getToolAudit(requestId: String): List<ToolAuditEventEntity>
 
     @Query(
         "UPDATE request_ledger SET lease_owner = :owner, lease_until = :leaseUntil, " +
@@ -129,7 +158,8 @@ interface RequestLedgerDAO {
             ":nextState = :expectedState OR " +
             "(:expectedState = 'created' AND :nextState IN ('awaiting_approval', 'queued', 'cancelled')) OR " +
             "(:expectedState = 'awaiting_approval' AND :nextState IN ('queued', 'failed', 'cancelled')) OR " +
-            "(:expectedState = 'queued' AND :nextState IN ('waiting_runtime', 'dispatching', 'cancelled')) OR " +
+            "(:expectedState = 'queued' AND :nextState IN " +
+            "('waiting_runtime', 'dispatching', 'failed', 'cancelled', 'interrupted')) OR " +
             "(:expectedState = 'waiting_runtime' AND :nextState IN ('dispatching', 'failed', 'cancelled', 'interrupted')) OR " +
             "(:expectedState = 'dispatching' AND :nextState IN ('running', 'failed', 'cancelled', 'interrupted', 'unknown_outcome')) OR " +
             "(:expectedState = 'running' AND :nextState IN ('waiting_user', 'committing', 'failed', 'cancelled', 'interrupted', 'unknown_outcome')) OR " +
@@ -257,6 +287,56 @@ interface RequestLedgerDAO {
         resultReceivedAt: Long?,
         commitStartedAt: Long?,
         finishedAt: Long?,
+        now: Long,
+    ): Int
+
+    @Query(
+        "UPDATE tool_invocation SET approval_state = :nextApprovalState, " +
+            "execution_state = :nextExecutionState, " +
+            "permission_id = COALESCE(:permissionId, permission_id), " +
+            "result_digest = COALESCE(:resultDigest, result_digest), " +
+            "error_kind = :errorKind, error_code = :errorCode, " +
+            "approved_at = CASE WHEN approved_at IS NULL AND :nextApprovalState = 'approved' " +
+            "THEN :now ELSE approved_at END, " +
+            "started_at = CASE WHEN started_at IS NULL AND :nextExecutionState = 'running' " +
+            "THEN :now ELSE started_at END, " +
+            "finished_at = CASE WHEN :nextExecutionState IN " +
+            "('succeeded', 'failed', 'cancelled', 'unknown_outcome') THEN :now ELSE finished_at END, " +
+            "state_revision = state_revision + 1, updated_at = :now " +
+            "WHERE invocation_id = :invocationId AND request_id = :requestId " +
+            "AND approval_state = :expectedApprovalState " +
+            "AND execution_state = :expectedExecutionState " +
+            "AND state_revision = :expectedStateRevision " +
+            "AND EXISTS (SELECT 1 FROM request_ledger AS request " +
+            "WHERE request.request_id = tool_invocation.request_id " +
+            "AND request.active_attempt_id = tool_invocation.attempt_id " +
+            "AND request.lease_owner = :owner AND request.fencing_epoch = :fencingEpoch " +
+            "AND request.lease_until > :now) " +
+            "AND (" +
+            ":nextExecutionState = :expectedExecutionState OR " +
+            "(:expectedExecutionState = 'created' AND :nextExecutionState IN " +
+            "('waiting_approval', 'ready', 'cancelled')) OR " +
+            "(:expectedExecutionState = 'waiting_approval' AND :nextExecutionState IN " +
+            "('ready', 'failed', 'cancelled')) OR " +
+            "(:expectedExecutionState = 'ready' AND :nextExecutionState IN ('running', 'cancelled')) OR " +
+            "(:expectedExecutionState = 'running' AND :nextExecutionState IN " +
+            "('committing', 'succeeded', 'failed', 'cancelled', 'unknown_outcome')) OR " +
+            "(:expectedExecutionState = 'committing' AND :nextExecutionState IN ('succeeded', 'failed')))"
+    )
+    suspend fun transitionInvocation(
+        invocationId: String,
+        requestId: String,
+        expectedApprovalState: String,
+        nextApprovalState: String,
+        expectedExecutionState: String,
+        nextExecutionState: String,
+        expectedStateRevision: Long,
+        owner: String,
+        fencingEpoch: Long,
+        permissionId: String?,
+        resultDigest: String?,
+        errorKind: String?,
+        errorCode: String?,
         now: Long,
     ): Int
 
