@@ -17,6 +17,7 @@ import kotlinx.serialization.json.putJsonArray
 import me.rerere.ai.model.ApiSurface
 import me.rerere.ai.model.ModelFeature
 import me.rerere.ai.model.effectiveCapabilitySnapshot
+import me.rerere.ai.model.resolveTextApiSurface
 import me.rerere.ai.model.supports
 import me.rerere.ai.provider.EmbeddingGenerationParams
 import me.rerere.ai.provider.EmbeddingGenerationResult
@@ -372,21 +373,7 @@ class OpenAIProvider(
     private fun shouldUseResponsesApi(
         providerSetting: ProviderSetting.OpenAI,
         model: Model,
-    ): Boolean {
-        val capabilities = model.effectiveCapabilitySnapshot(providerSetting)
-        val supportsResponses = capabilities.supports(ApiSurface.RESPONSES)
-        val supportsChatCompletions = capabilities.supports(ApiSurface.CHAT_COMPLETIONS)
-        return when {
-            providerSetting.useResponseApi && supportsResponses -> true
-            !providerSetting.useResponseApi && supportsChatCompletions -> false
-            supportsResponses && !supportsChatCompletions -> true
-            supportsChatCompletions && !supportsResponses -> false
-            else -> error(
-                "Model ${model.modelId} does not declare a usable OpenAI text API surface: " +
-                    capabilities.apiSurfaces
-            )
-        }
-    }
+    ): Boolean = model.resolveTextApiSurface(providerSetting) == ApiSurface.RESPONSES
 
     private suspend fun parseImageResponse(
         bodyStr: String,

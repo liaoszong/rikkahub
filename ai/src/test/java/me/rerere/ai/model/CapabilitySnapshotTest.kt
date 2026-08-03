@@ -162,4 +162,41 @@ class CapabilitySnapshotTest {
 
         assertTrue(error.message.orEmpty().contains("Unsupported capability snapshot schema version"))
     }
+
+    @Test
+    fun `text surface resolver mirrors provider transport fallback`() {
+        val dualSurfaceModel = Model(
+            modelId = "dual",
+            declaredCapabilities = CapabilitySnapshot(
+                apiSurfaces = setOf(ApiSurface.CHAT_COMPLETIONS, ApiSurface.RESPONSES),
+            ),
+        )
+
+        assertEquals(
+            ApiSurface.CHAT_COMPLETIONS,
+            dualSurfaceModel.resolveTextApiSurface(ProviderSetting.OpenAI(useResponseApi = false)),
+        )
+        assertEquals(
+            ApiSurface.RESPONSES,
+            dualSurfaceModel.resolveTextApiSurface(ProviderSetting.OpenAI(useResponseApi = true)),
+        )
+
+        val responsesOnly = dualSurfaceModel.copy(
+            capabilityOverride = CapabilityOverride(
+                apiSurfaces = CapabilitySetOverride(replace = setOf(ApiSurface.RESPONSES)),
+            ),
+        )
+        assertEquals(
+            ApiSurface.RESPONSES,
+            responsesOnly.resolveTextApiSurface(ProviderSetting.OpenAI(useResponseApi = false)),
+        )
+        assertEquals(
+            ApiSurface.GENERATE_CONTENT,
+            Model(modelId = "gemini").resolveTextApiSurface(ProviderSetting.Google()),
+        )
+        assertEquals(
+            ApiSurface.MESSAGES,
+            Model(modelId = "claude").resolveTextApiSurface(ProviderSetting.Claude()),
+        )
+    }
 }

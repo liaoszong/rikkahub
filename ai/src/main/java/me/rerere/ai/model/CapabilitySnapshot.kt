@@ -275,6 +275,43 @@ object CapabilitySnapshotResolver {
 fun Model.effectiveCapabilitySnapshot(providerSetting: ProviderSetting? = null): CapabilitySnapshot =
     CapabilitySnapshotResolver.effectiveCapabilitySnapshot(this, providerSetting)
 
+/**
+ * Resolves the concrete text endpoint family used by the provider adapter.
+ *
+ * Request ledgers and transports must share this decision. Otherwise an OpenAI-compatible model
+ * can be persisted as Chat Completions while the adapter actually dispatches Responses, making
+ * recovery and diagnostics reason about a request that never existed.
+ */
+fun Model.resolveTextApiSurface(providerSetting: ProviderSetting): ApiSurface = when (providerSetting) {
+    is ProviderSetting.OpenAI -> {
+        val capabilities = effectiveCapabilitySnapshot(providerSetting)
+        val supportsResponses = capabilities.supports(ApiSurface.RESPONSES)
+        val supportsChatCompletions = capabilities.supports(ApiSurface.CHAT_COMPLETIONS)
+        when {
+            providerSetting.useResponseApi && supportsResponses -> ApiSurface.RESPONSES
+            !providerSetting.useResponseApi && supportsChatCompletions -> ApiSurface.CHAT_COMPLETIONS
+            supportsResponses && !supportsChatCompletions -> ApiSurface.RESPONSES
+            supportsChatCompletions && !supportsResponses -> ApiSurface.CHAT_COMPLETIONS
+            else -> error(
+                "Model $modelId does not declare a usable OpenAI text API surface: " +
+                    capabilities.apiSurfaces
+            )
+        }
+    }
+
+    is ProviderSetting.Google -> ApiSurface.GENERATE_CONTENT.also {
+        require(effectiveCapabilitySnapshot(providerSetting).supports(it)) {
+            "Model $modelId does not declare the Google text API surface"
+        }
+    }
+
+    is ProviderSetting.Claude -> ApiSurface.MESSAGES.also {
+        require(effectiveCapabilitySnapshot(providerSetting).supports(it)) {
+            "Model $modelId does not declare the Claude text API surface"
+        }
+    }
+}
+
 fun CapabilitySnapshot.supports(feature: ModelFeature): Boolean = feature in features
 
 fun CapabilitySnapshot.supports(surface: ApiSurface): Boolean = surface in apiSurfaces
