@@ -20,6 +20,10 @@ data class Tool(
     val executeWithContext: (suspend (JsonElement, ToolExecutionContext) -> List<UIMessagePart>)? = null,
     /** Stable host authority used only by RequestLedger; never exposed to a model/provider. */
     @Transient val ledgerAuthorityId: String? = null,
+    /** Immutable device-vault credential version used by this exact external tool session. */
+    @Transient val ledgerCredentialRefId: String? = null,
+    /** Resolves/refreshes credential evidence immediately before RequestLedger admission. */
+    @Transient val ledgerCredentialRefResolver: (suspend () -> String?)? = null,
     /** Provider-neutral side-effect hint: none/read_only/reversible_write/irreversible/unknown. */
     @Transient val ledgerSideEffectClass: String? = null,
     /**
@@ -39,6 +43,8 @@ data class ToolExecutionContext(
     val contextId: String? = null,
     /** Stable host-owned execution identity; never derive billing idempotency from provider IDs. */
     val executionRequestId: String = toolCallId,
+    /** Credential reference frozen by RequestLedger for this exact tool request. */
+    val credentialRefId: String? = null,
 )
 
 @Serializable

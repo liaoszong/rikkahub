@@ -33,7 +33,7 @@ fun rememberCustomAsrState(): CustomAsrState {
     val settings by settingsStore.settingsFlow.collectAsStateWithLifecycle()
 
     val asrState = remember {
-        CustomAsrStateImpl(context.applicationContext, httpClient)
+        CustomAsrStateImpl(context.applicationContext, httpClient, settingsStore)
     }
 
     DisposableEffect(settings.selectedASRProviderId, settings.asrProviders) {
@@ -59,7 +59,8 @@ interface CustomAsrState {
 
 private class CustomAsrStateImpl(
     private val context: Context,
-    private val httpClient: OkHttpClient
+    private val httpClient: OkHttpClient,
+    private val settingsStore: SettingsStore,
 ) : CustomAsrState {
     private var controller: ASRController? = null
     private val idleState = MutableStateFlow(ASRState())
@@ -87,6 +88,7 @@ private class CustomAsrStateImpl(
     }
 
     override fun start(onTranscriptChange: (String) -> Unit) {
+        if (runCatching { settingsStore.requireCredentialReady() }.isFailure) return
         val result = audioManager.requestAudioFocus(audioFocusRequest)
         if (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
             controller?.start(onTranscriptChange)

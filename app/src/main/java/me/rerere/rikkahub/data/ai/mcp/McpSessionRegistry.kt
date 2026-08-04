@@ -37,6 +37,7 @@ import kotlinx.serialization.json.JsonObject
 import me.rerere.ai.core.InputSchema
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.data.credential.effectiveMcpCredentialReference
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.seconds
 import kotlin.uuid.Uuid
@@ -106,6 +107,21 @@ internal class McpSessionRegistry(
 
     fun getStatus(configId: Uuid): Flow<McpStatus> = statusStore.get(configId)
 
+    /** Refreshes OAuth and makes the matching connection current before ledger admission. */
+    suspend fun prepareCredentialEvidence(serverId: Uuid): McpServerConfig {
+        val latest = settingsStore.settingsFlow.value.mcpServers.find { it.id == serverId }
+            ?: throw McpClientUnavailableException("No MCP configuration for server $serverId")
+        val hasExplicitAuthorization = latest.commonOptions.headers.any {
+            it.name.equals("Authorization", ignoreCase = true) && it.value.isNotBlank()
+        }
+        val fresh = if (hasExplicitAuthorization) latest else oauthCoordinator.ensureFreshToken(latest)
+        val session = sessions[serverId]
+        if (session == null || !hasSameConnectionParameters(session.connectedConfig, fresh)) {
+            addClient(fresh)
+        }
+        return settingsStore.settingsFlow.value.mcpServers.find { it.id == serverId } ?: fresh
+    }
+
     fun reconcile(configs: List<McpServerConfig>) {
         val activeConfigs = configs
             .filter { it.commonOptions.enable && it.commonOptions.name.isNotBlank() }
@@ -136,7 +152,12 @@ internal class McpSessionRegistry(
         }
     }
 
-    suspend fun callTool(serverId: Uuid, toolName: String, args: JsonObject): CallToolResult {
+    suspend fun callTool(
+        serverId: Uuid,
+        toolName: String,
+        args: JsonObject,
+        expectedCredentialRefId: String?,
+    ): CallToolResult {
         val session = sessions[serverId]
             ?: throw McpClientUnavailableException("No MCP session for server $serverId")
         val freshConfig = oauthCoordinator.ensureFreshToken(session.config)
@@ -147,6 +168,9 @@ internal class McpSessionRegistry(
 
         val sdkClient = session.client
             ?: throw McpClientUnavailableException("MCP client $serverId is not connected")
+        val dispatchCredentialRefId = settingsStore.settingsFlow.value
+            .effectiveMcpCredentialReference(serverId.toString())
+        requireFrozenMcpCredential(expectedCredentialRefId, dispatchCredentialRefId)
         val config = session.connectedConfig ?: session.config
         Log.i(TAG, "Calling tool $toolName on $serverId (${config.commonOptions.name})")
         return try {
@@ -493,7 +517,7 @@ private fun hasSameConnectionParameters(
 ): Boolean = left != null && right != null && left.connectionKey() == right.connectionKey()
 
 private fun McpServerConfig.resolvedHeaders(): List<Pair<String, String>> {
-    val base = commonOptions.headers
+    val base = commonOptions.headers.map { it.name to it.value }
     val token = commonOptions.oauth?.takeIf { it.enabled }?.accessToken
     val hasAuthorization = base.any { it.first.equals("Authorization", ignoreCase = true) }
     return if (!token.isNullOrBlank() && !hasAuthorization) {
@@ -515,6 +539,12 @@ internal fun mergeMcpTools(storedTools: List<McpTool>, discoveredTools: List<Mcp
             enable = storedTool.enable && !schemaChanged,
             needsApproval = storedTool.needsApproval || schemaChanged,
         )
+    }
+}
+
+internal fun requireFrozenMcpCredential(expected: String?, actual: String?) {
+    check(actual == expected) {
+        "MCP credential changed after request ledger admission; retry the tool call"
     }
 }
 

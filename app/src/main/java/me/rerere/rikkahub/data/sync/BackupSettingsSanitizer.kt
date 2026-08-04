@@ -146,7 +146,7 @@ internal object BackupSettingsSanitizer {
                 SemanticKind.BODY -> !key.isSafeBodyValueName()
                 null -> false
             }
-            if (key.isSensitiveKey() || semanticContainerSecret) {
+            if (element.isSecretField(key) || semanticContainerSecret) {
                 JsonPrimitive("")
             } else if (key.normalizedSecretKey() in endpointScopeKeys) {
                 sanitizeEndpointElement(value)
@@ -192,9 +192,11 @@ internal object BackupSettingsSanitizer {
 
         restored.forEach { (key, restoredValue) ->
             val localValue = local[key] ?: return@forEach
-            merged[key] = if (key.isSensitiveKey() && restoredValue.isRedactedSecret()) {
+            merged[key] = if (restored.isSecretField(key) && restoredValue.isRedactedSecret()) {
                 localValue.takeIf {
-                    it.hasSecretValue() && secretFieldScopeMatches(key, restored, local)
+                    local.isSecretField(key) &&
+                        it.hasSecretValue() &&
+                        secretFieldScopeMatches(key, restored, local)
                 } ?: restoredValue
             } else {
                 mergeLocalSecrets(restoredValue, localValue, context)
@@ -204,7 +206,8 @@ internal object BackupSettingsSanitizer {
         local.forEach { (key, localValue) ->
             if (
                 key !in restored &&
-                key.isSensitiveKey() &&
+                restored.isSecretField(key) &&
+                local.isSecretField(key) &&
                 localValue.hasSecretValue() &&
                 secretFieldScopeMatches(key, restored, local)
             ) {
@@ -301,6 +304,9 @@ internal object BackupSettingsSanitizer {
         val scopeParts = entries.mapNotNull { (rawKey, element) ->
             val key = rawKey.normalizedSecretKey()
             if (key !in endpointScopeKeys && key !in literalScopeKeys) return@mapNotNull null
+            // SearXNG Basic Auth treats username and password as one credential. Username is
+            // therefore redacted and cannot also participate in the portable scope fingerprint.
+            if (key == "username" && isSearXngOwner()) return@mapNotNull null
             val primitive = element as? JsonPrimitive ?: return@mapNotNull null
             if (primitive == JsonNull) return@mapNotNull null
             val value = if (key in endpointScopeKeys) {
@@ -456,6 +462,13 @@ internal object BackupSettingsSanitizer {
         val normalized = normalizedSecretKey()
         return normalized in sensitiveKeys || sensitiveSuffixes.any(normalized::endsWith)
     }
+
+    private fun JsonObject.isSecretField(key: String): Boolean =
+        key.isSensitiveKey() ||
+            (key.normalizedSecretKey() == "username" && isSearXngOwner())
+
+    private fun JsonObject.isSearXngOwner(): Boolean =
+        primitiveContent("type")?.normalizedSecretKey() == "searxng"
 
     private data class SemanticField(
         val labelKey: String,

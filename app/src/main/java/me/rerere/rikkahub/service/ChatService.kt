@@ -700,9 +700,26 @@ class ChatService(
                                 parameters = { tool.inputSchema },
                                 needsApproval = { tool.needsApproval },
                                 execute = {
-                                    mcpManager.callTool(serverId, tool.name, it.jsonObject)
+                                    val credentialRefId = mcpManager.prepareToolCredentialEvidence(serverId)
+                                    mcpManager.callTool(
+                                        serverId = serverId,
+                                        toolName = tool.name,
+                                        args = it.jsonObject,
+                                        expectedCredentialRefId = credentialRefId,
+                                    )
+                                },
+                                executeWithContext = { args, executionContext ->
+                                    mcpManager.callTool(
+                                        serverId = serverId,
+                                        toolName = tool.name,
+                                        args = args.jsonObject,
+                                        expectedCredentialRefId = executionContext.credentialRefId,
+                                    )
                                 },
                                 ledgerAuthorityId = serverId.toString(),
+                                ledgerCredentialRefResolver = {
+                                    mcpManager.prepareToolCredentialEvidence(serverId)
+                                },
                                 ledgerSideEffectClass = "unknown",
                             )
                         )
@@ -981,6 +998,7 @@ class ChatService(
         val graphAnchor = conversation.currentMessages.lastOrNull()?.id
 
         runCatching {
+            settingsStore.awaitCredentialReady()
             val settings = settingsStore.settingsFlow.first()
             val model = settings.resolveBackgroundTextModel(
                 preferredId = settings.titleModelId,
@@ -1030,6 +1048,7 @@ class ChatService(
     suspend fun generateSuggestion(conversationId: Uuid, conversation: Conversation) {
         val graphAnchor = conversation.currentMessages.lastOrNull()?.id
         runCatching {
+            settingsStore.awaitCredentialReady()
             val settings = settingsStore.settingsFlow.first()
             if (!settings.enableSuggestion) return
             val model = settings.resolveBackgroundTextModel(
@@ -1090,6 +1109,7 @@ class ChatService(
         targetTokens: Int,
         keepRecentMessages: Int = 32
     ): Result<Unit> = runCatching {
+        settingsStore.awaitCredentialReady()
         val settings = settingsStore.settingsFlow.first()
         val model = settings.findModelById(settings.compressModelId)
             ?: settings.getCurrentChatModel()

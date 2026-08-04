@@ -61,6 +61,13 @@ class WebServerManager(
         }
 
         appScope.launch {
+            val credentialReady = runCatching { settingsStore.awaitCredentialReady() }
+                .onFailure {
+                    Log.e(TAG, "Web server start rejected by credential boundary", it)
+                    _state.value = _state.value.copy(error = "Credentials are unavailable")
+                }
+                .isSuccess
+            if (!credentialReady) return@launch
             val settings = settingsStore.settingsFlow.value
             val effectiveLocalhostOnly = shouldBindWebServerToLoopback(
                 requestedLocalhostOnly = localhostOnly,

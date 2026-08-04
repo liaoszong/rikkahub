@@ -35,7 +35,6 @@ import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.model.effectiveCapabilitySnapshot
-import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.pale.id.RequestId
 import me.rerere.pale.request.RequestState
@@ -52,6 +51,8 @@ import me.rerere.rikkahub.data.imggen.ImageGenerationExecutionEvent
 import me.rerere.rikkahub.data.imggen.ImageGenerationException
 import me.rerere.rikkahub.data.imggen.ImageGenerationFailureKind
 import me.rerere.rikkahub.data.imggen.ImageGenerationRequest
+import me.rerere.rikkahub.data.imggen.freezeImageGenerationCredential
+import me.rerere.rikkahub.data.imggen.imageTransportConfigurationDigest
 import me.rerere.rikkahub.data.imggen.ImageGenerationTaskExecutor
 import me.rerere.rikkahub.data.imggen.ChatImageGenerationTaskController
 import me.rerere.rikkahub.data.imggen.ChatImageGenerationTaskRecord
@@ -182,6 +183,7 @@ private suspend fun executeImageGeneration(
             ImageGenSize.entries.any { it.value == candidate }
         } ?: ImageGenSize.AUTO.value
         val count = arguments["count"]?.jsonPrimitive?.intOrNull?.coerceIn(1, 8) ?: 1
+        settingsStore.awaitCredentialReady()
         val settings = settingsStore.settingsFlow.value
         val model = settings.resolveImageGenerationModel()
             ?: error("No image generation model is selected in the app settings")
@@ -219,6 +221,8 @@ private suspend fun executeImageGeneration(
         val provider = model.findProvider(settings.providers)
             ?: error("The selected image provider is not configured")
         val providerId = provider.id.toString()
+        val credentialEvidence = settings.freezeImageGenerationCredential(provider, model)
+        val transportConfigurationDigest = imageTransportConfigurationDigest(model, provider)
         val reservedAssetIds = List(count) { index ->
             MediaAssetIds.forChatToolOutput(requestId, index)
         }
@@ -246,6 +250,7 @@ private suspend fun executeImageGeneration(
                 modelName = model.displayName,
                 providerId = providerId,
                 providerKind = provider.providerKind(),
+                credentialRefId = credentialEvidence?.reference,
                 size = size,
                 referenceImageDigests = referencePaths.map(::sha256File),
                 referenceAssetIds = resolvedReferences.mapNotNull(ResolvedImageGenerationReference::assetId),
@@ -254,7 +259,7 @@ private suspend fun executeImageGeneration(
                 ),
                 parentAssetId = parentAssetId,
                 capabilitySnapshotJson = capabilitySnapshotJson,
-                transportConfigurationDigest = imageTransportConfigurationDigest(model, provider),
+                transportConfigurationDigest = transportConfigurationDigest,
                 requestedImageCount = count,
                 reservedOutputAssetIds = reservedAssetIds,
                 apiSurface = if (referencePaths.isEmpty()) "image_generations" else "image_edits",
@@ -422,6 +427,8 @@ private suspend fun executeImageGeneration(
                                             modelId = model.id.toString(),
                                             modelName = model.displayName,
                                             providerId = providerId,
+                                            credentialEvidence = credentialEvidence,
+                                            transportConfigurationDigest = transportConfigurationDigest,
                                             size = size,
                                             numberOfImages = 1,
                                             referenceImages = referencePaths,
@@ -909,28 +916,6 @@ private fun ProviderSetting.providerKind(): String = when (this) {
     is ProviderSetting.Claude -> "claude"
 }
 
-/**
- * Freezes every setting that can redirect or mutate the paid image request while persisting only
- * a one-way digest. This intentionally includes provider credentials without storing them in the
- * RequestLedger; Credential Vault will later replace the parent request's credential reference.
- */
-private fun imageTransportConfigurationDigest(model: Model, provider: ProviderSetting): String = sha256String(
-    buildString {
-        appendCanonical(provider::class.qualifiedName.orEmpty())
-        appendCanonical(provider.toString())
-        model.customHeaders
-            .sortedWith(compareBy({ it.name.lowercase() }, { it.value }))
-            .forEach { header ->
-                appendCanonical(header.name.lowercase())
-                appendCanonical(sha256String(header.value))
-            }
-        model.customBodies.sortedBy { it.key }.forEach { body ->
-            appendCanonical(body.key)
-            appendCanonical(body.value.toString())
-        }
-    },
-)
-
 private fun sha256File(path: String): String {
     val file = File(path)
     require(file.isFile) { "Reference image is no longer available" }
@@ -944,12 +929,4 @@ private fun sha256File(path: String): String {
         }
     }
     return digest.digest().joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
-}
-
-private fun sha256String(value: String): String = MessageDigest.getInstance("SHA-256")
-    .digest(value.toByteArray(Charsets.UTF_8))
-    .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
-
-private fun StringBuilder.appendCanonical(value: String) {
-    append(value.toByteArray(Charsets.UTF_8).size).append(':').append(value).append(';')
 }

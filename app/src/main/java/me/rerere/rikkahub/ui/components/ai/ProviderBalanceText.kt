@@ -19,6 +19,7 @@ import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.MoneyBag02
+import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.utils.SimpleCache
 import me.rerere.rikkahub.utils.toDp
 import org.koin.compose.koinInject
@@ -41,6 +42,7 @@ fun ProviderBalanceText(
     }
 
     val providerManager = koinInject<ProviderManager>()
+    val settingsStore = koinInject<SettingsStore>()
 
     val value = produceState(initialValue = "~", key1 = providerSetting.id, key2 = providerSetting.balanceOption) {
         // Check cache first
@@ -50,6 +52,7 @@ fun ProviderBalanceText(
         } else {
             // Fetch balance from API
             runCatching {
+                settingsStore.awaitCredentialReady()
                 val balance = providerManager.getProviderByType(providerSetting).getBalance(providerSetting)
                 // Cache the result
                 cache.put("${providerSetting.id},${providerSetting.balanceOption.hashCode()}", balance)

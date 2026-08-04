@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -48,6 +49,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import me.rerere.highlight.LocalCodeHighlighter
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.ui.components.credential.rememberCredentialAwareSettingsSave
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.richtext.HighlightCodeVisualTransformation
 import me.rerere.rikkahub.ui.components.ui.FormItem
@@ -61,6 +64,7 @@ import me.rerere.search.SearchResult
 import me.rerere.search.SearchService
 import me.rerere.search.SearchServiceOptions
 import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.koinInject
 import kotlin.uuid.Uuid
 
 @Composable
@@ -75,12 +79,16 @@ fun SettingSearchDetailPage(
     val service = settings.searchServices.find { it.id == serviceId } ?: return
     val serviceIndex = settings.searchServices.indexOf(service)
     var options by remember(service) { mutableStateOf(service) }
+    var saveError by remember { mutableStateOf<String?>(null) }
+    val saveSearchSettings = rememberCredentialAwareSettingsSave(
+        onSaved = { saveError = null },
+        onFailure = { saveError = it.message ?: "搜索服务设置保存失败" },
+    )
 
-    fun save(updated: SearchServiceOptions) {
-        options = updated
+    fun save() {
         val newServices = settings.searchServices.toMutableList()
-        newServices[serviceIndex] = updated
-        vm.updateSettings(settings.copy(searchServices = newServices))
+        newServices[serviceIndex] = options
+        saveSearchSettings(settings, settings.copy(searchServices = newServices))
     }
 
     Scaffold(
@@ -143,8 +151,19 @@ fun SettingSearchDetailPage(
 
                         SearchServiceOptionsEditor(
                             options = options,
-                            onUpdateOptions = { save(it) }
+                            onUpdateOptions = { options = it }
                         )
+
+                        Button(
+                            onClick = { save() },
+                            modifier = Modifier.align(Alignment.End),
+                            enabled = options != service,
+                        ) {
+                            Text(stringResource(R.string.setting_provider_page_save))
+                        }
+                        saveError?.let { error ->
+                            Text(error, color = MaterialTheme.colorScheme.error)
+                        }
 
                         ProvideTextStyle(MaterialTheme.typography.labelMedium) {
                             SearchService.getService(options).Description()
@@ -156,7 +175,8 @@ fun SettingSearchDetailPage(
             item("test") {
                 SearchTestSection(
                     options = options,
-                    commonOptions = settings.searchCommonOptions
+                    commonOptions = settings.searchCommonOptions,
+                    configurationSaved = options == service,
                 )
             }
         }
@@ -228,8 +248,10 @@ private fun SearchServiceOptionsEditor(
 @Composable
 private fun SearchTestSection(
     options: SearchServiceOptions,
-    commonOptions: SearchCommonOptions
+    commonOptions: SearchCommonOptions,
+    configurationSaved: Boolean,
 ) {
+    val settingsStore = koinInject<SettingsStore>()
     var query by remember { mutableStateOf("") }
     var testing by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<Result<SearchResult>?>(null) }
@@ -270,16 +292,22 @@ private fun SearchTestSection(
                             testing = true
                             result = null
                             scope.launch {
-                                val service = SearchService.getService(options)
-                                val params = JsonObject(
-                                    mapOf("query" to JsonPrimitive(query))
-                                )
-                                result = service.search(params, commonOptions, options)
+                                result = runCatching {
+                                    // Search credentials are resolved behind the same startup
+                                    // boundary as chat/provider requests. Never dispatch a test
+                                    // request while the vault is locked, corrupt, or migrating.
+                                    settingsStore.awaitCredentialReady()
+                                    val service = SearchService.getService(options)
+                                    val params = JsonObject(
+                                        mapOf("query" to JsonPrimitive(query))
+                                    )
+                                    service.search(params, commonOptions, options).getOrThrow()
+                                }
                                 testing = false
                             }
                         }
                     },
-                    enabled = query.isNotBlank() && !testing
+                    enabled = query.isNotBlank() && !testing && configurationSaved
                 ) {
                     if (testing) {
                         CircularProgressIndicator(

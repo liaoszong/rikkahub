@@ -2,9 +2,19 @@ package me.rerere.rikkahub.data.ai.mcp
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class McpConnectionKeyTest {
+    @Test
+    fun `dispatch credential gate rejects post-admission oauth rotation`() {
+        requireFrozenMcpCredential("vault:v1:ledger", "vault:v1:ledger")
+        requireFrozenMcpCredential(null, null)
+        assertThrows(IllegalStateException::class.java) {
+            requireFrozenMcpCredential("vault:v1:ledger", "vault:v1:refreshed")
+        }
+    }
+
     private val base = McpServerConfig.StreamableHTTPServer(
         commonOptions = McpCommonOptions(name = "demo"),
         url = "https://example.com/mcp",
@@ -35,7 +45,9 @@ class McpConnectionKeyTest {
         assertNotEquals(
             base.connectionKey(),
             base.copy(
-                commonOptions = base.commonOptions.copy(headers = listOf("X-API-Key" to "secret"))
+                commonOptions = base.commonOptions.copy(
+                    headers = listOf(McpHeader(name = "X-API-Key", value = "secret")),
+                )
             ).connectionKey()
         )
     }
@@ -48,7 +60,7 @@ class McpConnectionKeyTest {
 
         val manualAuth = base.copy(
             commonOptions = base.commonOptions.copy(
-                headers = listOf("Authorization" to "Bearer manual"),
+                headers = listOf(McpHeader(name = "Authorization", value = "Bearer manual")),
                 oauth = oauth,
             )
         )

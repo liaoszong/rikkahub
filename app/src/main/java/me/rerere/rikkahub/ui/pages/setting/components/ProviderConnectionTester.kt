@@ -43,6 +43,7 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Connect
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.ui.components.ai.ModelSelector
 import me.rerere.rikkahub.ui.theme.extendColors
 import me.rerere.rikkahub.utils.UiState
@@ -51,12 +52,17 @@ import org.koin.compose.koinInject
 @Composable
 fun ProviderConnectionTester(
     internalProvider: ProviderSetting,
+    persistedProvider: ProviderSetting,
+    enabled: Boolean = true,
 ) {
     var showTestDialog by remember { mutableStateOf(false) }
     val providerManager = koinInject<ProviderManager>()
+    val settingsStore = koinInject<SettingsStore>()
     val scope = rememberCoroutineScope()
 
-    IconButton(onClick = { showTestDialog = true }) {
+    val exactPersistedDraft = providerDraftMatchesPersisted(internalProvider, persistedProvider)
+
+    IconButton(onClick = { showTestDialog = true }, enabled = enabled && exactPersistedDraft) {
         Icon(HugeIcons.Connect, null)
     }
 
@@ -123,6 +129,22 @@ fun ProviderConnectionTester(
                         val provider = providerManager.getProviderByType(internalProvider)
                         resetStates()
                         scope.launch {
+                            val currentlyPersisted = settingsStore.settingsFlow.value.providers
+                                .firstOrNull { it.id == internalProvider.id }
+                            if (!providerDraftMatchesPersisted(internalProvider, currentlyPersisted)) {
+                                val failure = UnsavedProviderDraftException()
+                                nonStreamingState = UiState.Error(failure)
+                                streamingState = UiState.Error(failure)
+                                toolsState = UiState.Error(failure)
+                                return@launch
+                            }
+                            val readinessFailure = runCatching { settingsStore.awaitCredentialReady() }.exceptionOrNull()
+                            if (readinessFailure != null) {
+                                nonStreamingState = UiState.Error(readinessFailure)
+                                streamingState = UiState.Error(readinessFailure)
+                                toolsState = UiState.Error(readinessFailure)
+                                return@launch
+                            }
                             launch {
                                 runCatching {
                                     nonStreamingState = UiState.Loading
@@ -195,7 +217,8 @@ fun ProviderConnectionTester(
                                 }.onFailure { toolsState = UiState.Error(it) }
                             }
                         }
-                    }
+                    },
+                    enabled = exactPersistedDraft,
                 ) {
                     Text(stringResource(R.string.setting_provider_page_test))
                 }
@@ -203,6 +226,20 @@ fun ProviderConnectionTester(
         )
     }
 }
+
+/**
+ * Network tests are allowed only for the exact durable provider snapshot. Audience comparison is
+ * intentionally insufficient: a same-endpoint API key, model custom header or custom body edit is
+ * still an unsaved credential and must never leave the device through this shortcut.
+ */
+internal fun providerDraftMatchesPersisted(
+    draft: ProviderSetting,
+    persisted: ProviderSetting?,
+): Boolean = persisted != null && draft == persisted
+
+private class UnsavedProviderDraftException : IllegalStateException(
+    "请先保存当前 Provider 和模型凭据设置，再测试连接",
+)
 
 @Composable
 private fun TestResultItem(

@@ -59,6 +59,7 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.sync.S3BackupItem
 import me.rerere.rikkahub.data.sync.s3.S3Config
 import me.rerere.rikkahub.ui.components.ui.CardGroup
+import me.rerere.rikkahub.ui.components.credential.rememberCredentialAwareSettingsSave
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.pages.backup.BackupVM
 import me.rerere.rikkahub.utils.UiState
@@ -75,7 +76,8 @@ fun S3Tab(
     onShowRestartDialog: () -> Unit
 ) {
     val settings by vm.settings.collectAsStateWithLifecycle()
-    val s3Config = settings.s3Config
+    val persistedS3Config = settings.s3Config
+    var s3Config by remember(persistedS3Config) { mutableStateOf(persistedS3Config) }
     val backupItemsState by vm.s3BackupItems.collectAsStateWithLifecycle()
     val toaster = LocalToaster.current
     val context = LocalContext.current
@@ -84,8 +86,17 @@ fun S3Tab(
     var restoringItemId by remember { mutableStateOf<String?>(null) }
     var isBackingUp by remember { mutableStateOf(false) }
 
+    val saveS3Settings = rememberCredentialAwareSettingsSave(
+        onSaved = {
+            toaster.show("S3 设置已保存", type = ToastType.Success)
+        },
+        onFailure = { failure ->
+            toaster.show(failure.message ?: "S3 设置保存失败", type = ToastType.Error)
+        },
+    )
+
     fun updateS3Config(newConfig: S3Config) {
-        vm.updateSettings(settings.copy(s3Config = newConfig))
+        s3Config = newConfig
     }
 
     val lastBackupText = if (settings.backupReminderConfig.lastBackupTime == 0L) {
@@ -248,6 +259,14 @@ fun S3Tab(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
         ) {
+            Button(
+                onClick = {
+                    saveS3Settings(settings, settings.copy(s3Config = s3Config))
+                },
+                enabled = s3Config != persistedS3Config,
+            ) {
+                Text("保存连接设置")
+            }
             OutlinedButton(
                 onClick = {
                     scope.launch {
@@ -268,7 +287,8 @@ fun S3Tab(
                             )
                         }
                     }
-                }
+                },
+                enabled = s3Config == persistedS3Config,
             ) {
                 Text(stringResource(R.string.backup_page_test_connection))
             }
@@ -276,7 +296,8 @@ fun S3Tab(
                 onClick = {
                     vm.loadS3BackupFileItems()
                     showBackupFiles = true
-                }
+                },
+                enabled = s3Config == persistedS3Config,
             ) {
                 Text(stringResource(R.string.backup_page_restore))
             }
@@ -302,7 +323,7 @@ fun S3Tab(
                         isBackingUp = false
                     }
                 },
-                enabled = !isBackingUp
+                enabled = !isBackingUp && s3Config == persistedS3Config
             ) {
                 if (isBackingUp) {
                     CircularWavyProgressIndicator(

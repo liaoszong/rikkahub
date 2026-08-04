@@ -9,6 +9,7 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.asr.ASRProviderSetting
 import me.rerere.rikkahub.data.ai.mcp.McpCommonOptions
+import me.rerere.rikkahub.data.ai.mcp.McpHeader
 import me.rerere.rikkahub.data.ai.mcp.McpOAuthState
 import me.rerere.rikkahub.data.ai.mcp.McpServerConfig
 import me.rerere.rikkahub.data.datastore.DisplaySetting
@@ -17,6 +18,7 @@ import me.rerere.rikkahub.data.datastore.WebDavConfig
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.sync.s3.S3Config
+import me.rerere.search.SearchServiceOptions
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -26,6 +28,35 @@ import kotlin.uuid.Uuid
 
 class BackupSettingsSanitizerTest {
     private val json = Json { encodeDefaults = true }
+
+    @Test
+    fun `searxng basic auth pair is absent from portable backup and local pair can be restored`() {
+        val searchId = Uuid.parse("00000000-0000-0000-0000-000000000091")
+        val local = Settings(
+            searchServices = listOf(
+                SearchServiceOptions.SearXNGOptions(
+                    id = searchId,
+                    url = "https://search.example",
+                    username = "searx-user-canary",
+                    password = "searx-password-canary",
+                ),
+            ),
+        )
+
+        val portable = BackupSettingsSanitizer.encode(local, json)
+        assertFalse(portable.contains("searx-user-canary"))
+        assertFalse(portable.contains("searx-password-canary"))
+        assertTrue(portable.contains("https://search.example"))
+
+        val merged = BackupSettingsSanitizer.mergeLocalSecrets(
+            json.parseToJsonElement(portable),
+            json.encodeToJsonElement(Settings.serializer(), local),
+        )
+        val restored = json.decodeFromJsonElement(Settings.serializer(), merged)
+            .searchServices.single() as SearchServiceOptions.SearXNGOptions
+        assertEquals("searx-user-canary", restored.username)
+        assertEquals("searx-password-canary", restored.password)
+    }
 
     @Test
     fun `portable settings backup excludes provider and cloud credentials`() {
@@ -298,9 +329,9 @@ class BackupSettingsSanitizerTest {
                         id = MCP_ID,
                         commonOptions = McpCommonOptions(
                             headers = listOf(
-                                "Authorization" to "mcp-auth-canary",
-                                "X-Trace-Id" to "mcp-arbitrary-pair-canary",
-                                "User-Agent" to "mcp-user-agent-safe",
+                                McpHeader("Authorization", "mcp-auth-canary"),
+                                McpHeader("X-Trace-Id", "mcp-arbitrary-pair-canary"),
+                                McpHeader("User-Agent", "mcp-user-agent-safe"),
                             ),
                             oauth = McpOAuthState(
                                 enabled = true,
@@ -679,17 +710,23 @@ class BackupSettingsSanitizerTest {
         secretFirst: Boolean = false,
     ): Settings {
         val modelHeaders = listOf(
-            CustomHeader("Content-Type", modelSafeHeader),
-            CustomHeader("Authorization", modelAuthorization),
+            CustomHeader("Content-Type", modelSafeHeader, MODEL_SAFE_HEADER_ID),
+            CustomHeader("Authorization", modelAuthorization, MODEL_AUTH_HEADER_ID),
         ).orderedSecretFirst(secretFirst)
         val assistantHeaders = listOf(
-            CustomHeader("Accept", assistantSafeHeader),
-            CustomHeader("Cookie", assistantCookie),
+            CustomHeader("Accept", assistantSafeHeader, ASSISTANT_SAFE_HEADER_ID),
+            CustomHeader("Cookie", assistantCookie, ASSISTANT_COOKIE_HEADER_ID),
         ).orderedSecretFirst(secretFirst)
         val mcpHeaders = listOf(
             "User-Agent" to mcpSafeHeader,
             "Authorization" to mcpAuthorization,
-        ).orderedSecretFirst(secretFirst)
+        ).orderedSecretFirst(secretFirst).map { (name, value) ->
+            McpHeader(
+                name,
+                value,
+                if (name == "Authorization") MCP_AUTH_HEADER_ID else MCP_SAFE_HEADER_ID,
+            )
+        }
         return Settings(
             chatModelId = MODEL_ID,
             providers = listOf(
@@ -703,7 +740,7 @@ class BackupSettingsSanitizerTest {
                             id = MODEL_ID,
                             customHeaders = modelHeaders,
                             customBodies = listOf(
-                                CustomBody("api_key", JsonPrimitive(modelBodySecret)),
+                                CustomBody("api_key", JsonPrimitive(modelBodySecret), MODEL_BODY_ID),
                             ),
                         )
                     ),
@@ -715,7 +752,7 @@ class BackupSettingsSanitizerTest {
                     chatModelId = MODEL_ID,
                     customHeaders = assistantHeaders,
                     customBodies = listOf(
-                        CustomBody("access_token", JsonPrimitive(assistantBodySecret)),
+                        CustomBody("access_token", JsonPrimitive(assistantBodySecret), ASSISTANT_BODY_ID),
                     ),
                 )
             ),
@@ -776,7 +813,11 @@ class BackupSettingsSanitizerTest {
                     Model(
                         id = GOOGLE_MODEL_ID,
                         customHeaders = listOf(
-                            CustomHeader("Authorization", "$secretPrefix-model-authorization")
+                            CustomHeader(
+                                "Authorization",
+                                "$secretPrefix-model-authorization",
+                                GOOGLE_AUTH_HEADER_ID,
+                            )
                         ),
                     )
                 ),
@@ -797,5 +838,14 @@ class BackupSettingsSanitizerTest {
         val ASSISTANT_ID = Uuid.parse("00000000-0000-0000-0000-000000000301")
         val MCP_ID = Uuid.parse("00000000-0000-0000-0000-000000000401")
         val ASR_PROVIDER_ID = Uuid.parse("00000000-0000-0000-0000-000000000501")
+        val MODEL_SAFE_HEADER_ID = Uuid.parse("00000000-0000-0000-0000-000000000601")
+        val MODEL_AUTH_HEADER_ID = Uuid.parse("00000000-0000-0000-0000-000000000602")
+        val MODEL_BODY_ID = Uuid.parse("00000000-0000-0000-0000-000000000603")
+        val ASSISTANT_SAFE_HEADER_ID = Uuid.parse("00000000-0000-0000-0000-000000000604")
+        val ASSISTANT_COOKIE_HEADER_ID = Uuid.parse("00000000-0000-0000-0000-000000000605")
+        val ASSISTANT_BODY_ID = Uuid.parse("00000000-0000-0000-0000-000000000606")
+        val MCP_SAFE_HEADER_ID = Uuid.parse("00000000-0000-0000-0000-000000000607")
+        val MCP_AUTH_HEADER_ID = Uuid.parse("00000000-0000-0000-0000-000000000608")
+        val GOOGLE_AUTH_HEADER_ID = Uuid.parse("00000000-0000-0000-0000-000000000609")
     }
 }

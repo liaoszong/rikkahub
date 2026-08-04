@@ -36,6 +36,7 @@ class WebDavSync(
     }
 
     suspend fun testConnection(config: WebDavConfig) = withContext(Dispatchers.IO) {
+        settingsStore.awaitCredentialReady()
         val client = getClient(config)
         // Test by listing the root directory
         client.propfind(depth = 0).getOrThrow()
@@ -43,6 +44,7 @@ class WebDavSync(
     }
 
     suspend fun backup(config: WebDavConfig) = withContext(Dispatchers.IO) {
+        settingsStore.awaitCredentialReady()
         val file = prepareBackupFile(config)
         val client = getClient(config)
 
@@ -63,6 +65,7 @@ class WebDavSync(
     }
 
     suspend fun listBackupFiles(config: WebDavConfig): List<WebDavBackupItem> = withContext(Dispatchers.IO) {
+        settingsStore.awaitCredentialReady()
         val client = getClient(config)
 
         // Ensure the backup directory exists
@@ -84,6 +87,7 @@ class WebDavSync(
     }
 
     suspend fun restore(config: WebDavConfig, item: WebDavBackupItem) = withContext(Dispatchers.IO) {
+        settingsStore.awaitCredentialReady()
         val client = getClient(config)
         val backupFile = File(context.cacheDir, item.displayName)
 
@@ -110,6 +114,7 @@ class WebDavSync(
     }
 
     suspend fun deleteBackupFile(config: WebDavConfig, item: WebDavBackupItem) = withContext(Dispatchers.IO) {
+        settingsStore.awaitCredentialReady()
         val client = getClient(config)
         client.delete(item.displayName).getOrThrow()
         Log.i(TAG, "deleteBackupFile: Deleted ${item.displayName}")

@@ -96,6 +96,15 @@ class ImageGenerationTaskExecutor(
         val ledgerSession = execution.ledgerSession
         onEvent(ImageGenerationExecutionEvent.Running(requestId, attempt))
         try {
+            if (
+                ledgerSession != null &&
+                execution.request.credentialEvidence?.reference != ledgerSession.credentialRefId
+            ) {
+                throw ImageGenerationException(
+                    ImageGenerationFailureKind.CONFIGURATION,
+                    "Image credential evidence does not match RequestLedger",
+                )
+            }
             ledgerSession?.prepareDispatch()
             val providerRequest = execution.request.copy(
                 providerRequestId = ledgerSession?.providerRequestId

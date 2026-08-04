@@ -54,7 +54,14 @@ class ToolExecutionLedgerCoordinator(
         tool: UIMessagePart.Tool,
         definition: Tool,
     ) {
-        val descriptor = descriptor(context, tool, definition)
+        require(tool.requestId.isNotBlank()) { "Tool request identity must be frozen before execution" }
+        val previouslyAdmitted = repository.getRequest(RequestId(tool.requestId))
+        val credentialRefId = if (previouslyAdmitted != null) {
+            previouslyAdmitted.credentialRefId
+        } else {
+            definition.ledgerCredentialRefResolver?.invoke() ?: definition.ledgerCredentialRefId
+        }
+        val descriptor = descriptor(context, tool, definition, credentialRefId)
         repository.createRequest(descriptor.toRequestSpec(parentRequestId))
         val existing = repository.getRequest(descriptor.requestId)
         if (existing?.requestState == "succeeded") return
@@ -74,9 +81,11 @@ class ToolExecutionLedgerCoordinator(
         tool: UIMessagePart.Tool,
         definition: Tool,
     ): ToolExecutionLedgerSession {
-        val descriptor = descriptor(context, tool, definition)
-        val existing = repository.getRequest(descriptor.requestId)
-            ?: throw RequestLedgerMissing(descriptor.requestId.value)
+        require(tool.requestId.isNotBlank()) { "Tool request identity must be frozen before execution" }
+        val requestId = RequestId(tool.requestId)
+        val existing = repository.getRequest(requestId)
+            ?: throw RequestLedgerMissing(requestId.value)
+        val descriptor = descriptor(context, tool, definition, existing.credentialRefId)
         check(existing.requestState !in TERMINAL_REQUEST_STATES) {
             "Tool request ${descriptor.requestId.value} is already ${existing.requestState}"
         }
@@ -238,6 +247,7 @@ class ToolExecutionLedgerCoordinator(
         context: ChatGenerationLedgerContext,
         tool: UIMessagePart.Tool,
         definition: Tool,
+        credentialRefId: String?,
     ): ToolRequestDescriptor {
         require(tool.requestId.isNotBlank()) { "Tool request identity must be frozen before execution" }
         val requestId = RequestId(tool.requestId)
@@ -296,6 +306,7 @@ class ToolExecutionLedgerCoordinator(
             toolName = definition.name,
             action = action,
             serverId = serverId,
+            credentialRefId = credentialRefId,
             assistantId = context.assistantId,
             conversationId = context.conversationId,
             messageId = context.responseMessageId,
@@ -341,6 +352,9 @@ class ToolExecutionLedgerSession internal constructor(
     private val descriptor: ToolRequestDescriptor,
     private val json: Json,
 ) {
+    val credentialRefId: String?
+        get() = descriptor.credentialRefId
+
     suspend fun <T> withLeaseHeartbeat(block: suspend () -> T): T =
         dispatch.withLeaseHeartbeat(block = block)
 
@@ -485,6 +499,7 @@ internal data class ToolRequestDescriptor(
     val toolName: String,
     val action: String,
     val serverId: String?,
+    val credentialRefId: String?,
     val assistantId: String,
     val conversationId: String,
     val messageId: String,
@@ -508,6 +523,7 @@ internal data class ToolRequestDescriptor(
         messageId = messageId,
         partId = providerToolCallId,
         workspaceId = workspaceId,
+        credentialRefId = credentialRefId,
         mcpServerId = serverId,
         apiSurface = "tool",
         approvalState = initialApproval,

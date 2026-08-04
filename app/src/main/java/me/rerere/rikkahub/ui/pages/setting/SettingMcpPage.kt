@@ -91,11 +91,13 @@ import me.rerere.hugeicons.stroke.MessageBlocked
 import me.rerere.hugeicons.stroke.Settings03
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.ai.mcp.McpCommonOptions
+import me.rerere.rikkahub.data.ai.mcp.McpHeader
 import me.rerere.rikkahub.data.ai.mcp.McpManager
 import me.rerere.rikkahub.data.ai.mcp.McpServerConfig
 import me.rerere.rikkahub.data.ai.mcp.McpStatus
 import me.rerere.rikkahub.data.ai.mcp.McpTool
 import me.rerere.rikkahub.ui.components.nav.BackButton
+import me.rerere.rikkahub.ui.components.credential.rememberCredentialAwareSettingsSave
 import me.rerere.rikkahub.ui.components.ui.FormItem
 import me.rerere.rikkahub.ui.components.ui.Switch
 import me.rerere.rikkahub.ui.components.ui.SwitchSize
@@ -114,6 +116,7 @@ import org.koin.compose.koinInject
 fun SettingMcpPage(vm: SettingVM = koinViewModel()) {
     val settings by vm.settings.collectAsStateWithLifecycle()
     val mcpConfigs = settings.mcpServers
+    val saveMcpSettings = rememberCredentialAwareSettingsSave()
     val creationState = useEditState<McpServerConfig> {
         vm.updateSettings(
             settings.copy(
@@ -122,16 +125,12 @@ fun SettingMcpPage(vm: SettingVM = koinViewModel()) {
         )
     }
     val editState = useEditState<McpServerConfig> { newConfig ->
-        vm.updateSettings(
-            settings.copy(
-                mcpServers = mcpConfigs.map {
-                    if (it.id == newConfig.id) {
-                        newConfig
-                    } else {
-                        it
-                    }
-                }
-            ))
+        val updatedSettings = settings.copy(
+            mcpServers = mcpConfigs.map {
+                if (it.id == newConfig.id) newConfig else it
+            },
+        )
+        saveMcpSettings(settings, updatedSettings)
     }
     var showImportDialog by remember { mutableStateOf(false) }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
@@ -736,8 +735,7 @@ private fun McpCommonOptionsConfigure(
                                     headerName = it
                                     val updatedHeaders =
                                         config.commonOptions.headers.toMutableList()
-                                    updatedHeaders[index] =
-                                        it.trim() to updatedHeaders[index].second
+                                    updatedHeaders[index] = updatedHeaders[index].copy(name = it.trim())
                                     update(
                                         when (config) {
                                             is McpServerConfig.SseTransportServer -> config.copy(
@@ -761,7 +759,7 @@ private fun McpCommonOptionsConfigure(
                                     headerValue = it
                                     val updatedHeaders =
                                         config.commonOptions.headers.toMutableList()
-                                    updatedHeaders[index] = updatedHeaders[index].first to it.trim()
+                                    updatedHeaders[index] = updatedHeaders[index].copy(value = it.trim())
                                     update(
                                         when (config) {
                                             is McpServerConfig.SseTransportServer -> config.copy(
@@ -805,7 +803,7 @@ private fun McpCommonOptionsConfigure(
                 Button(
                     onClick = {
                         val updatedHeaders = config.commonOptions.headers.toMutableList()
-                        updatedHeaders.add("" to "")
+                        updatedHeaders.add(McpHeader(name = "", value = ""))
                         update(
                             when (config) {
                                 is McpServerConfig.SseTransportServer -> config.copy(
@@ -1007,7 +1005,7 @@ private fun parseMcpServersFromJson(json: String): List<McpServerConfig> {
         val type = obj["type"]?.jsonPrimitive?.contentOrNull ?: "streamable_http"
         val url = obj["url"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
         val headers = obj["headers"]?.jsonObject?.entries?.map { (k, v) ->
-            k to (v.jsonPrimitive.contentOrNull ?: "")
+            McpHeader(name = k, value = v.jsonPrimitive.contentOrNull ?: "")
         } ?: emptyList()
         val commonOptions = McpCommonOptions(name = name, headers = headers)
         when (type) {

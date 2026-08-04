@@ -23,6 +23,10 @@ import me.rerere.rikkahub.data.ai.transformers.TemplateTransformer
 import me.rerere.rikkahub.data.api.RikkaHubAPI
 import me.rerere.rikkahub.data.api.SponsorAPI
 import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.data.credential.AndroidCredentialVault
+import me.rerere.rikkahub.data.credential.CredentialMigrationJournal
+import me.rerere.rikkahub.data.credential.CredentialVault
+import me.rerere.rikkahub.data.credential.CredentialVaultProjectionStore
 import me.rerere.rikkahub.data.db.AppDatabase
 import me.rerere.rikkahub.data.db.conversation.ConversationV2BackfillCoordinator
 import me.rerere.rikkahub.data.db.conversation.ConversationV2Codec
@@ -58,8 +62,12 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 val dataSourceModule = module {
+    single<CredentialVault> { AndroidCredentialVault.create(get()) }
+    single<CredentialMigrationJournal> { AndroidCredentialVault.migrationJournal(get()) }
+    single { CredentialVaultProjectionStore(vault = get(), journal = get()) }
+
     single {
-        SettingsStore(context = get(), scope = get())
+        SettingsStore(context = get(), scope = get(), credentialStore = get())
     }
 
     single {
@@ -259,6 +267,7 @@ val dataSourceModule = module {
             memoryRepo = get(),
             chatProviderStepCoordinator = get(),
             toolExecutionLedgerCoordinator = get(),
+            settingsStore = get(),
         )
     }
 

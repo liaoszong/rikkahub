@@ -143,6 +143,7 @@ private class CustomTtsStateImpl(
     }
 
     override fun speak(text: String, flushCalled: Boolean) {
+        if (runCatching { settingsStore.requireCredentialReady() }.isFailure) return
         val processed = text.stripMarkdown()
         controller.speak(processed, flushCalled)
     }

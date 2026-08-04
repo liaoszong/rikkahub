@@ -10,6 +10,7 @@ import me.rerere.ai.ui.ImageGenSize
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.UIMessage
+import kotlin.uuid.Uuid
 
 // 提供商实现
 // 采用无状态设计，使用时除了需要传入需要的参数外，还需要传入provider setting作为参数
@@ -130,11 +131,15 @@ data class EmbeddingGenerationResult(
 @Serializable
 data class CustomHeader(
     val name: String,
-    val value: String
+    val value: String,
+    /** Stable credential slot identity; legacy values are persisted on the first Vault migration. */
+    val id: Uuid = Uuid.random(),
 )
 
 @Serializable
 data class CustomBody(
     val key: String,
-    val value: JsonElement
+    val value: JsonElement,
+    /** Stable credential slot identity; legacy values are persisted on the first Vault migration. */
+    val id: Uuid = Uuid.random(),
 )

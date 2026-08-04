@@ -85,6 +85,48 @@ class ToolExecutionLedgerCoordinatorTest {
     }
 
     @Test
+    fun externalToolFreezesItsVaultCredentialReference() = runTest {
+        createParent()
+        val reference = "vault:v1:77777777-7777-7777-7777-777777777777"
+        coordinator.prepare(
+            PARENT_REQUEST_ID,
+            ledgerContext(),
+            tool(ToolApprovalState.Auto, name = "mcp__test__read"),
+            definition(
+                needsApproval = false,
+                name = "mcp__test__read",
+                credentialRefId = reference,
+            ),
+        )
+
+        assertEquals(reference, repository.getRequest(RequestId(TOOL_REQUEST_ID))!!.credentialRefId)
+    }
+
+    @Test
+    fun credentialResolverRunsOnlyBeforeFirstLedgerAdmissionAndExecutionUsesFrozenEvidence() = runTest {
+        createParent()
+        val reference = "vault:v1:88888888-8888-8888-8888-888888888888"
+        var resolutions = 0
+        val definition = definition(
+            needsApproval = false,
+            name = "mcp__test__read",
+            credentialRefResolver = {
+                resolutions++
+                reference
+            },
+        )
+        val tool = tool(ToolApprovalState.Auto, name = "mcp__test__read")
+
+        coordinator.prepare(PARENT_REQUEST_ID, ledgerContext(), tool, definition)
+        coordinator.prepare(PARENT_REQUEST_ID, ledgerContext(), tool, definition)
+        val session = coordinator.openExecution(ledgerContext(), tool, definition)
+
+        assertEquals(1, resolutions)
+        assertEquals(reference, repository.getRequest(RequestId(TOOL_REQUEST_ID))!!.credentialRefId)
+        assertEquals(reference, session.credentialRefId)
+    }
+
+    @Test
     fun approvedToolCommitsResultBeforeRequestSuccess() = runTest {
         createParent()
         val definition = definition(needsApproval = true)
@@ -482,11 +524,18 @@ class ToolExecutionLedgerCoordinatorTest {
         requestId = TOOL_REQUEST_ID,
     )
 
-    private fun definition(needsApproval: Boolean, name: String = "test_tool") = Tool(
+    private fun definition(
+        needsApproval: Boolean,
+        name: String = "test_tool",
+        credentialRefId: String? = null,
+        credentialRefResolver: (suspend () -> String?)? = null,
+    ) = Tool(
         name = name,
         description = "test",
         needsApproval = { needsApproval },
         execute = { listOf(UIMessagePart.Text("ok")) },
+        ledgerCredentialRefId = credentialRefId,
+        ledgerCredentialRefResolver = credentialRefResolver,
         ledgerSideEffectClass = "unknown",
     )
 

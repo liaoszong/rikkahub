@@ -104,6 +104,7 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderManager
+import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.provider.asUserOwnedCopy
@@ -115,6 +116,7 @@ import me.rerere.rikkahub.ui.components.ai.ModelModalityTag
 import me.rerere.rikkahub.ui.components.ai.ModelSelector
 import me.rerere.rikkahub.ui.components.ai.ModelTypeTag
 import me.rerere.rikkahub.ui.components.ai.ProviderBalanceText
+import me.rerere.rikkahub.ui.components.credential.rememberCredentialAwareSettingsSave
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.AutoAIIcon
 import me.rerere.rikkahub.ui.components.ui.ShareSheet
@@ -152,6 +154,18 @@ fun SettingProviderDetailPage(id: Uuid, vm: SettingVM = koinViewModel()) {
     val toaster = LocalToaster.current
     val context = LocalContext.current
 
+    val saveProviderSettings = rememberCredentialAwareSettingsSave(
+        onSaved = {
+            toaster.show(
+                context.getString(R.string.setting_provider_page_save_success),
+                type = ToastType.Success,
+            )
+        },
+        onFailure = { failure ->
+            toaster.show(failure.message ?: "凭据保存失败", type = ToastType.Error)
+        },
+    )
+
     val onEdit = { newProvider: ProviderSetting ->
         val newSettings = settings.copy(
             providers = settings.providers.map {
@@ -162,7 +176,10 @@ fun SettingProviderDetailPage(id: Uuid, vm: SettingVM = koinViewModel()) {
                 }
             }
         )
-        vm.updateSettings(newSettings)
+        // Model-level custom headers and providerOverwrite credentials live in the same Settings
+        // projection as provider credentials. Saving through the credential-aware boundary keeps
+        // an endpoint change from silently forwarding their resolved old values.
+        saveProviderSettings(settings, newSettings)
     }
     val onDelete = {
         val newSettings = settings.copy(
@@ -239,16 +256,17 @@ fun SettingProviderDetailPage(id: Uuid, vm: SettingVM = koinViewModel()) {
                 0 -> {
                     SettingProviderConfigPage(
                         provider = provider,
-                        onEdit = {
-                            onEdit(it)
-                            toaster.show(
-                                context.getString(R.string.setting_provider_page_save_success),
-                                type = ToastType.Success
+                        onEdit = { editedProvider ->
+                            val updatedSettings = settings.copy(
+                                providers = settings.providers.map { current ->
+                                    if (current.id == editedProvider.id) editedProvider else current
+                                },
                             )
+                            saveProviderSettings(settings, updatedSettings)
                         },
                         onDelete = {
                             onDelete()
-                        }
+                        },
                     )
                 }
 
@@ -267,10 +285,11 @@ fun SettingProviderDetailPage(id: Uuid, vm: SettingVM = koinViewModel()) {
 private fun SettingProviderConfigPage(
     provider: ProviderSetting,
     onEdit: (ProviderSetting) -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
 ) {
     var internalProvider by remember(provider) { mutableStateOf(provider) }
     var showDeleteDialog by remember { mutableStateOf(false) }
+    val connectionTestAllowed = internalProvider == provider
 
     Column(
         modifier = Modifier
@@ -303,6 +322,8 @@ private fun SettingProviderConfigPage(
         ) {
             ProviderConnectionTester(
                 internalProvider = internalProvider,
+                persistedProvider = provider,
+                enabled = connectionTestAllowed,
             )
 
             Spacer(Modifier.weight(1f))
@@ -394,8 +415,10 @@ private fun ModelList(
     onUpdateProvider: (ProviderSetting) -> Unit
 ) {
     val providerManager = koinInject<ProviderManager>()
+    val settingsStore = koinInject<SettingsStore>()
     val modelList by produceState(emptyList(), providerSetting) {
         runCatching {
+            settingsStore.awaitCredentialReady()
             println("loading models...")
             value = providerManager.getProviderByType(providerSetting)
                 .listModels(providerSetting)

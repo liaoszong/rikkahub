@@ -33,6 +33,7 @@ class S3Sync(
     }
 
     suspend fun testS3(config: S3Config) = withContext(Dispatchers.IO) {
+        settingsStore.awaitCredentialReady()
         val client = getS3Client(config)
         // Test by listing objects with max 1 result
         client.listObjects(maxKeys = 1).getOrThrow()
@@ -40,6 +41,7 @@ class S3Sync(
     }
 
     suspend fun backupToS3(config: S3Config) = withContext(Dispatchers.IO) {
+        settingsStore.awaitCredentialReady()
         val file = prepareBackupFile(config)
         val client = getS3Client(config)
         val key = "rikkahub_backups/${file.name}"
@@ -57,6 +59,7 @@ class S3Sync(
     }
 
     suspend fun listBackupFiles(config: S3Config): List<S3BackupItem> = withContext(Dispatchers.IO) {
+        settingsStore.awaitCredentialReady()
         val client = getS3Client(config)
         val result = client.listObjects(
             prefix = "rikkahub_backups/",
@@ -77,6 +80,7 @@ class S3Sync(
     }
 
     suspend fun restoreFromS3(config: S3Config, item: S3BackupItem) = withContext(Dispatchers.IO) {
+        settingsStore.awaitCredentialReady()
         val client = getS3Client(config)
         val backupFile = File(context.cacheDir, item.displayName)
 
@@ -103,6 +107,7 @@ class S3Sync(
     }
 
     suspend fun deleteS3BackupFile(config: S3Config, item: S3BackupItem) = withContext(Dispatchers.IO) {
+        settingsStore.awaitCredentialReady()
         val client = getS3Client(config)
         client.deleteObject(item.key).getOrThrow()
         Log.i(TAG, "deleteS3BackupFile: Deleted ${item.key}")

@@ -133,7 +133,9 @@ class ImageGenerationLedgerCoordinator(
                     messageId = parent.messageId,
                     partId = assetId,
                     workspaceId = parent.workspaceId,
-                    credentialRefId = descriptor.credentialRefId ?: parent.credentialRefId,
+                    // Image generation may use a different provider (or a local no-auth one) than
+                    // the parent chat request. Never inherit the parent's credential evidence.
+                    credentialRefId = descriptor.credentialRefId,
                     providerKind = descriptor.providerKind,
                     providerId = descriptor.providerId,
                     modelId = descriptor.modelId,
@@ -324,6 +326,7 @@ class ImageGenerationLedgerSession internal constructor(
     val attemptId: RequestAttemptId get() = plan.attemptId
     val outputId: RequestOutputId get() = plan.outputId
     val providerRequestId: String get() = plan.providerRequestId
+    val credentialRefId: String? get() = plan.requestSpec.credentialRefId
     val slotOrdinal: Int get() = plan.slotOrdinal
     val dispatchObserver: ProviderDispatchObserver get() = dispatch.dispatchObserver
 

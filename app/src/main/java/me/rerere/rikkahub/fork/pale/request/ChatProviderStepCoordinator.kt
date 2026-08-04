@@ -82,6 +82,7 @@ class ChatProviderStepCoordinator(
         params: TextGenerationParams,
         provider: ProviderSetting,
         tools: List<Tool>,
+        credentialRefId: String? = null,
     ): ChatProviderStepOpenResult {
         val apiSurface = params.model.resolveTextApiSurface(provider)
         val capabilitySnapshot = params.model.effectiveCapabilitySnapshot(provider)
@@ -145,6 +146,7 @@ class ChatProviderStepCoordinator(
             provider = provider,
             model = params.model,
             apiSurface = apiSurface.name.lowercase(Locale.ROOT),
+            credentialRefId = credentialRefId,
             actor = actor,
         )
         return ChatProviderStepOpenResult.Dispatch(
@@ -275,6 +277,7 @@ class ChatProviderStepCoordinator(
         provider: ProviderSetting,
         model: Model,
         apiSurface: String,
+        credentialRefId: String?,
         actor: AuditActor,
     ) = NewRequestSpec(
         requestId = requestId,
@@ -290,6 +293,7 @@ class ChatProviderStepCoordinator(
         assistantId = context.assistantId,
         messageId = context.responseMessageId,
         workspaceId = context.workspaceId,
+        credentialRefId = credentialRefId,
         providerKind = provider.providerKind(),
         providerId = provider.id.toString(),
         modelId = model.id.toString(),

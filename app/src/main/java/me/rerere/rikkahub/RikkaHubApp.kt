@@ -21,7 +21,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
 import me.rerere.common.android.appTempFolder
@@ -34,6 +33,7 @@ import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.imggen.MediaAssetRecovery
 import me.rerere.rikkahub.data.imggen.ImageMediaReconciliationResult
 import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.data.credential.CredentialReadiness
 import me.rerere.rikkahub.data.db.conversation.ConversationV2BackfillCoordinator
 import me.rerere.rikkahub.data.db.conversation.ConversationV2BackfillSummary
 import me.rerere.rikkahub.data.db.fts.MessageFtsOutboxProcessor
@@ -89,6 +89,9 @@ private operator fun ToolRequestReconcileReport.plus(other: ToolRequestReconcile
 class RikkaHubApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        // Install this before restore, dependency injection, or Keystore access. Credential
+        // bootstrap is fail-closed, but unrelated startup failures must still be observable.
+        CrashHandler.install(this)
         runCatching {
             PendingRestoreManager.applyFilesBeforeDatabase(this)
         }.onFailure {
@@ -100,7 +103,10 @@ class RikkaHubApp : Application() {
             workManagerFactory()
             modules(appModule, viewModelModule, dataSourceModule, repositoryModule)
         }
-        runBlocking {
+        // Credential projection can touch DataStore, fsync-backed journal files and Android
+        // Keystore. Never block Application.onCreate with that work. Network entry points share
+        // SettingsStore's readiness gate and cannot dispatch until this coroutine reaches Ready.
+        get<AppScope>().launch(Dispatchers.IO) {
             runCatching {
                 PendingRestoreManager.completeSettingsAfterKoin(
                     context = this@RikkaHubApp,
@@ -110,14 +116,18 @@ class RikkaHubApp : Application() {
             }.onFailure {
                 Log.e(TAG, "Pending restore settings commit failed; previous data was restored", it)
             }
+            when (val readiness = get<SettingsStore>().migrateCredentialVault()) {
+                CredentialReadiness.Ready -> {
+                    startWebServerIfEnabled()
+                    incrementLaunchCount()
+                }
+                else -> Log.e(TAG, "Credential boundary unavailable; external requests remain disabled: $readiness")
+            }
         }
         this.createNotificationChannel()
 
         // set cursor window size to 32MB
         DatabaseUtil.setCursorWindowSize(32 * 1024 * 1024)
-
-        // install crash handler
-        CrashHandler.install(this)
 
         // Resume durable search projection work before creating any new outbox events.
         get<MessageFtsOutboxProcessor>().start()
@@ -145,12 +155,6 @@ class RikkaHubApp : Application() {
 
         // sync upload files to DB
         syncManagedFiles()
-
-        // Start WebServer if enabled in settings
-        startWebServerIfEnabled()
-
-        // Increment launch count
-        incrementLaunchCount()
 
         // Composer.setDiagnosticStackTraceMode(ComposeStackTraceMode.Auto)
     }

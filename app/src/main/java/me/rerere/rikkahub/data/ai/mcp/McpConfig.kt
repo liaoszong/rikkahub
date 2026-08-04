@@ -9,7 +9,7 @@ import kotlin.uuid.Uuid
 data class McpCommonOptions(
     val enable: Boolean = true,
     val name: String = "",
-    val headers: List<Pair<String, String>> = emptyList(),
+    val headers: List<McpHeader> = emptyList(),
     val tools: List<McpTool> = emptyList(),
     val oauth: McpOAuthState? = null,
 )
@@ -57,6 +57,20 @@ data class McpTool(
     val inputSchema: InputSchema? = null,
     val needsApproval: Boolean = true
 )
+
+/**
+ * Stable MCP header slot. [SerialName] keeps the legacy Pair JSON shape readable while the new
+ * id is persisted by the Credential Vault migration.
+ */
+@Serializable
+data class McpHeader(
+    @SerialName("first") val name: String,
+    @SerialName("second") val value: String,
+    val id: Uuid = Uuid.random(),
+) {
+    val first: String get() = name
+    val second: String get() = value
+}
 
 @Serializable
 sealed class McpServerConfig {

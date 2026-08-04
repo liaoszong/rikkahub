@@ -301,6 +301,22 @@ class ChatProviderStepCoordinatorTest {
         third.finishTransportFailure(IllegalStateException("stop before handoff"))
     }
 
+    @Test
+    fun requestFreezesTheExactResolvedCredentialReferenceBeforeDispatch() = runTest {
+        val reference = "vault:v1:20000000-0000-0000-0000-000000000001"
+        val step = coordinator.openTextStep(
+            context = ledgerContext(),
+            messages = listOf(userMessage("credential identity")),
+            params = params(),
+            provider = provider(),
+            tools = emptyList(),
+            credentialRefId = reference,
+        ).requireDispatch()
+
+        assertEquals(reference, repository.getRequest(step.requestId)!!.credentialRefId)
+        step.finishTransportFailure(IllegalStateException("stop before network handoff"))
+    }
+
     private fun ledgerContext(
         persist: suspend () -> Unit = { persisted++ },
     ) = ChatGenerationLedgerContext(

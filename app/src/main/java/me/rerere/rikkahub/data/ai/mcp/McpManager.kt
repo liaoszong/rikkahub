@@ -14,6 +14,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
@@ -21,6 +22,8 @@ import kotlinx.serialization.json.JsonObject
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.data.credential.CredentialReadiness
+import me.rerere.rikkahub.data.credential.effectiveMcpCredentialReference
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.event.AppEventBus
 import me.rerere.rikkahub.data.files.FilesManager
@@ -82,6 +85,7 @@ class McpManager(
 
     init {
         appScope.launch {
+            settingsStore.credentialReadiness.first { it == CredentialReadiness.Ready }
             settingsStore.settingsFlow
                 .map { settings -> settings.mcpServers }
                 .distinctUntilChanged()
@@ -108,9 +112,31 @@ class McpManager(
             }
     }
 
-    suspend fun callTool(serverId: Uuid, toolName: String, args: JsonObject): List<UIMessagePart> {
+    /**
+     * Completes OAuth refresh before a tool request is admitted to RequestLedger and returns the
+     * exact Vault reference that will authenticate that request. A later credential change makes
+     * [callTool] fail closed before network I/O instead of silently using a different credential.
+     */
+    suspend fun prepareToolCredentialEvidence(serverId: Uuid): String? {
+        settingsStore.awaitCredentialReady()
+        sessionRegistry.prepareCredentialEvidence(serverId)
+        return settingsStore.settingsFlow.value.effectiveMcpCredentialReference(serverId.toString())
+    }
+
+    suspend fun callTool(
+        serverId: Uuid,
+        toolName: String,
+        args: JsonObject,
+        expectedCredentialRefId: String? = null,
+    ): List<UIMessagePart> {
+        settingsStore.awaitCredentialReady()
+        val currentCredentialRefId = settingsStore.settingsFlow.value
+            .effectiveMcpCredentialReference(serverId.toString())
+        check(currentCredentialRefId == expectedCredentialRefId) {
+            "MCP credential changed after request ledger admission; retry the tool call"
+        }
         val result = try {
-            sessionRegistry.callTool(serverId, toolName, args)
+            sessionRegistry.callTool(serverId, toolName, args, expectedCredentialRefId)
         } catch (e: CancellationException) {
             throw e
         } catch (e: McpClientUnavailableException) {
@@ -125,13 +151,20 @@ class McpManager(
         }
     }
 
-    suspend fun addClient(config: McpServerConfig) = sessionRegistry.addClient(config)
+    suspend fun addClient(config: McpServerConfig) {
+        settingsStore.awaitCredentialReady()
+        sessionRegistry.addClient(config)
+    }
 
     suspend fun removeClient(config: McpServerConfig) = sessionRegistry.removeClient(config)
 
-    suspend fun syncAll() = sessionRegistry.syncAll()
+    suspend fun syncAll() {
+        settingsStore.awaitCredentialReady()
+        sessionRegistry.syncAll()
+    }
 
     fun startAuthorization(config: McpServerConfig, context: Context) {
+        if (runCatching { settingsStore.requireCredentialReady() }.isFailure) return
         oauthCoordinator.startAuthorization(config, context)
     }
 
@@ -140,6 +173,7 @@ class McpManager(
     }
 
     suspend fun clearAuthorization(config: McpServerConfig) {
+        settingsStore.awaitCredentialReady()
         val freshConfig = oauthCoordinator.clearAuthorization(config)
         sessionRegistry.addClient(freshConfig)
     }

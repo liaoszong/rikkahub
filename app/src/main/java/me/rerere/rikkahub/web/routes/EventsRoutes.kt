@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.merge
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.FolderRepository
+import me.rerere.rikkahub.data.sync.BackupSettingsSanitizer
 import me.rerere.rikkahub.service.ChatService
 import me.rerere.rikkahub.utils.JsonInstant
 import me.rerere.rikkahub.web.dto.ConversationListInvalidateEvent
@@ -43,7 +44,7 @@ fun Route.eventsRoutes(
 
         // Full settings snapshot; StateFlow emits the current value immediately on connect.
         val settingsEvents = settingsStore.settingsFlow.map { settings ->
-            EventPayload(event = "settings", json = JsonInstant.encodeToString(settings))
+            EventPayload(event = "settings", json = BackupSettingsSanitizer.encode(settings, JsonInstant))
         }
 
         // Conversation list invalidation, scoped to the currently selected assistant.

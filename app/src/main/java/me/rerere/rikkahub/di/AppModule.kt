@@ -51,7 +51,11 @@ val appModule = module {
     }
 
     single<ImageGenerationGateway> {
-        ProviderImageGenerationGateway(settingsStore = get(), providerManager = get())
+        ProviderImageGenerationGateway(
+            settingsStore = get(),
+            providerManager = get(),
+            credentialStore = get(),
+        )
     }
 
     single<ChatImageGenerationTaskStore> {

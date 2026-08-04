@@ -28,6 +28,8 @@ import me.rerere.rikkahub.data.imggen.ImageGenerationExecutionEvent
 import me.rerere.rikkahub.data.imggen.ImageGenerationExecutionResult
 import me.rerere.rikkahub.data.imggen.ImageGenerationGateway
 import me.rerere.rikkahub.data.imggen.ImageGenerationRequest
+import me.rerere.rikkahub.data.imggen.ImageGenerationCredentialEvidence
+import me.rerere.rikkahub.data.imggen.ImageGenerationCredentialTarget
 import me.rerere.rikkahub.data.imggen.ImageGenerationTaskExecutor
 
 @RunWith(AndroidJUnit4::class)
@@ -362,6 +364,97 @@ class ImageGenerationLedgerCoordinatorTest {
         assertTrue(repository.getOutputs(plan.requestId).isEmpty())
     }
 
+    @Test
+    fun imageChildDoesNotInheritUnrelatedParentCredential() = runTest {
+        val plan = coordinator.prepareSlots(
+            descriptor(createParentRequest(), "task-no-image-auth", 1),
+        ).single()
+
+        assertEquals(null, repository.getRequest(plan.requestId)!!.credentialRefId)
+    }
+
+    @Test
+    fun executorRejectsCredentialDifferentFromLedgerBeforeNetworkDispatch() = runTest {
+        val parent = createParentRequest()
+        val plan = coordinator.prepareSlots(
+            descriptor(parent, "task-credential-mismatch", 1, credentialRefId = "vault-ref-A"),
+        ).single()
+        val session = coordinator.openSlot(plan).requireDispatch()
+        var gatewayCalls = 0
+        val executor = ImageGenerationTaskExecutor(
+            gateway = object : ImageGenerationGateway {
+                override suspend fun generate(request: ImageGenerationRequest) = flow {
+                    gatewayCalls++
+                    emit(ImageGenerationItem(data = "unused", mimeType = "image/png"))
+                }
+            },
+        )
+
+        val result = executor.execute(
+            execution = ImageGenerationExecution(
+                requestId = plan.requestId.value,
+                attempt = 1,
+                request = ImageGenerationRequest(
+                    prompt = "draw",
+                    modelId = "image-model",
+                    modelName = "Image Model",
+                    credentialEvidence = ImageGenerationCredentialEvidence(
+                        reference = "vault-ref-B",
+                        namespace = "settings.providers",
+                        ownerStableId = "openai:provider-1",
+                        fieldSlot = "apikey",
+                        kind = "secret",
+                        target = ImageGenerationCredentialTarget.PROVIDER_API_KEY,
+                    ),
+                    transportConfigurationDigest = "a".repeat(64),
+                    size = "1024x1024",
+                    numberOfImages = 1,
+                ),
+                ledgerSession = session,
+            ),
+            onEvent = {},
+        )
+
+        assertTrue(result is ImageGenerationExecutionResult.Failure)
+        assertEquals(0, gatewayCalls)
+        assertEquals(
+            BillableBoundary.NOT_SENT.name.lowercase(),
+            repository.getRequest(plan.requestId)!!.billableBoundary,
+        )
+    }
+
+    @Test
+    fun coldRecoveryKeepsOriginalCredentialEvidenceAndRejectsCurrentReplacement() = runTest {
+        val parent = createParentRequest()
+        val frozen = descriptor(
+            parentRequestId = parent,
+            taskId = "task-cold-credential-recovery",
+            count = 1,
+            credentialRefId = "vault-ref-A",
+        )
+        val originalPlan = coordinator.prepareSlots(frozen).single()
+
+        val recoveredCoordinator = ImageGenerationLedgerCoordinator(
+            repository = repository,
+            leaseDurationMillis = 1_000L,
+            processOwnerId = "image-recovery-test",
+        )
+        assertSuspendFails<RequestLedgerIdentityConflict> {
+            recoveredCoordinator.prepareSlots(
+                frozen.copy(
+                    credentialRefId = "vault-ref-B",
+                    transportConfigurationDigest = "b".repeat(64),
+                ),
+            )
+        }
+
+        val recoveredPlan = recoveredCoordinator.prepareSlots(frozen).single()
+        val recoveredSession = recoveredCoordinator.openSlot(recoveredPlan).requireDispatch()
+        assertEquals(originalPlan.requestId, recoveredPlan.requestId)
+        assertEquals("vault-ref-A", recoveredSession.credentialRefId)
+        assertEquals("vault-ref-A", repository.getRequest(recoveredPlan.requestId)!!.credentialRefId)
+    }
+
     private suspend fun createParentRequest(): RequestId {
         val requestId = RequestId.random()
         repository.createRequest(
@@ -387,6 +480,7 @@ class ImageGenerationLedgerCoordinatorTest {
         parentRequestId: RequestId,
         taskId: String,
         count: Int,
+        credentialRefId: String? = null,
     ) = ImageGenerationRequestDescriptor(
         parentRequestId = parentRequestId,
         taskId = taskId,
@@ -400,10 +494,23 @@ class ImageGenerationLedgerCoordinatorTest {
         referenceImageDigests = listOf("reference-sha256"),
         capabilitySnapshotJson = "{\"image\":true}",
         transportConfigurationDigest = "a".repeat(64),
+        credentialRefId = credentialRefId,
         requestedImageCount = count,
         reservedOutputAssetIds = List(count) { "asset-$it" },
     )
 
     private fun ImageGenerationSlotOpenResult.requireDispatch() =
         (this as ImageGenerationSlotOpenResult.Dispatch).session
+
+    private suspend inline fun <reified T : Throwable> assertSuspendFails(
+        crossinline block: suspend () -> Unit,
+    ): T {
+        try {
+            block()
+        } catch (failure: Throwable) {
+            if (failure is T) return failure
+            throw AssertionError("Expected ${T::class.java.name}, got ${failure::class.java.name}", failure)
+        }
+        throw AssertionError("Expected ${T::class.java.name}")
+    }
 }

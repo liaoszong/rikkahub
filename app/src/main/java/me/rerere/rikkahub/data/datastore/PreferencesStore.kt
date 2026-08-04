@@ -14,11 +14,22 @@ import androidx.datastore.preferences.preferencesDataStore
 import io.pebbletemplates.pebble.PebbleEngine
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.retryWhen
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.JsonElement
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.provider.Model
@@ -36,6 +47,21 @@ import me.rerere.asr.ASRProviderSetting
 import me.rerere.rikkahub.data.datastore.migration.PreferenceStoreV1Migration
 import me.rerere.rikkahub.data.datastore.migration.PreferenceStoreV2Migration
 import me.rerere.rikkahub.data.datastore.migration.PreferenceStoreV3Migration
+import me.rerere.rikkahub.data.credential.CredentialSettingsProjection
+import me.rerere.rikkahub.data.credential.CredentialSettingsProjectionIssue
+import me.rerere.rikkahub.data.credential.CredentialSettingsProjectionResult
+import me.rerere.rikkahub.data.credential.CredentialSettingsProjectionStore
+import me.rerere.rikkahub.data.credential.CredentialSettingsResolveResult
+import me.rerere.rikkahub.data.credential.CredentialSettingsAddress
+import me.rerere.rikkahub.data.credential.CredentialSettingsSealResult
+import me.rerere.rikkahub.data.credential.CredentialAudienceRebindIntent
+import me.rerere.rikkahub.data.credential.CredentialAudienceRebindCandidate
+import me.rerere.rikkahub.data.credential.CredentialProjectionCommitter
+import me.rerere.rikkahub.data.credential.CredentialRefId
+import me.rerere.rikkahub.data.credential.CredentialVaultProjectionStore
+import me.rerere.rikkahub.data.credential.CredentialReadiness
+import me.rerere.rikkahub.data.credential.CredentialUnavailableReason
+import me.rerere.rikkahub.data.credential.CredentialReadinessController
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.model.InjectionPosition
@@ -58,6 +84,10 @@ import kotlin.uuid.Uuid
 
 private const val TAG = "PreferencesStore"
 
+internal class CredentialSettingsUnavailableException(
+    val issue: CredentialSettingsProjectionIssue,
+) : IllegalStateException("Credential settings unavailable at ${issue.jsonPath}: ${issue::class.simpleName}")
+
 private val Context.settingsStore by preferencesDataStore(
     name = "settings",
     produceMigrations = { context ->
@@ -69,10 +99,14 @@ private val Context.settingsStore by preferencesDataStore(
     }
 )
 
-class SettingsStore(
+class SettingsStore internal constructor(
     context: Context,
     scope: AppScope,
+    private val credentialStore: CredentialVaultProjectionStore,
 ) : KoinComponent {
+    private val credentialReadinessController = CredentialReadinessController()
+    val credentialReadiness: StateFlow<CredentialReadiness> = credentialReadinessController.state
+
     companion object {
         // 版本号
         val VERSION = intPreferencesKey("data_version")
@@ -156,6 +190,9 @@ class SettingsStore(
     }
 
     private val dataStore = context.settingsStore
+    private val credentialProjection = CredentialSettingsProjection(credentialStore)
+    private val credentialCommitter = CredentialProjectionCommitter(credentialStore)
+    private val credentialTransactionMutex = Mutex()
 
     val settingsFlowRaw = dataStore.data
         .catch { exception ->
@@ -248,6 +285,7 @@ class SettingsStore(
                 sponsorAlertDismissedAt = preferences[SPONSOR_ALERT_DISMISSED_AT] ?: 0,
             )
         }
+        .map(::toRuntimeSettings)
         .map {
             val providers = mergeDefaultProviders(it.providers)
             val assistants = it.assistants.ifEmpty { DEFAULT_ASSISTANTS }.toMutableList()
@@ -333,18 +371,83 @@ class SettingsStore(
         .onEach {
             get<PebbleEngine>().templateCache.invalidateAll()
         }
+        .flowOn(Dispatchers.IO)
+
+    private fun toRuntimeSettings(persisted: Settings): Settings =
+        when (val result = credentialProjection.toRuntime(JsonInstant.encodeToJsonElement(persisted))) {
+            is CredentialSettingsProjectionResult.Success -> JsonInstant.decodeFromJsonElement<Settings>(result.settings)
+                .copy(
+                    credentialReferences = result.bindings.associate { it.jsonPath to it.reference },
+                    credentialRevisions = result.bindings.mapNotNull { binding ->
+                        binding.revision?.let { binding.jsonPath to it }
+                    }.toMap(),
+                    credentialReferencesBySlot = result.bindings.associate {
+                        it.address.slotId().value to it.reference
+                    },
+                )
+            is CredentialSettingsProjectionResult.Failure -> throw CredentialSettingsUnavailableException(result.issue)
+        }
+
+    private fun toPersistedSettings(runtime: Settings): PersistedSettingsProjection =
+        when (val result = credentialProjection.toPersisted(JsonInstant.encodeToJsonElement(runtime))) {
+            is CredentialSettingsProjectionResult.Success -> PersistedSettingsProjection(
+                settings = JsonInstant.decodeFromJsonElement(result.settings),
+                bindings = result.bindings,
+            )
+            is CredentialSettingsProjectionResult.Failure -> throw CredentialSettingsUnavailableException(result.issue)
+        }
+
+    private data class PersistedSettingsProjection(
+        val settings: Settings,
+        val bindings: List<me.rerere.rikkahub.data.credential.CredentialSettingsBinding>,
+    )
 
     val settingsFlow = settingsFlowRaw
+        .retryWhen { cause, _ ->
+            if (cause !is CredentialSettingsUnavailableException) return@retryWhen false
+            recordCredentialFailure(cause.issue)
+            credentialReadiness.first { it == CredentialReadiness.Ready }
+            true
+        }
         .distinctUntilChanged()
         .toMutableStateFlow(scope, Settings.dummy())
 
-    suspend fun update(settings: Settings) {
+    /** Waits for the startup credential boundary and fails closed instead of dispatching a request. */
+    suspend fun awaitCredentialReady() {
+        credentialReadinessController.awaitReady()
+    }
+
+    fun requireCredentialReady() {
+        credentialReadinessController.requireReady()
+    }
+
+    suspend fun update(settings: Settings) = credentialTransactionMutex.withLock {
+        updateLocked(settings)
+    }
+
+    private suspend fun updateLocked(
+        settings: Settings,
+        projectedOverride: PersistedSettingsProjection? = null,
+        previousReferencesBySlot: Map<String, String> = settings.credentialReferencesBySlot,
+        recoverBeforeProjection: Boolean = true,
+    ) {
         if(settings.init) {
             Log.w(TAG, "Cannot update dummy settings")
             return
         }
-        settingsFlow.value = settings
-        dataStore.edit { preferences ->
+        // Recover a vault-first transaction that did not reach DataStore before accepting another
+        // write. The transient map is the proof of the snapshot currently held by the caller.
+        if (recoverBeforeProjection) {
+            credentialStore.rollbackUncommittedBindings(previousReferencesBySlot)
+        }
+        val projected = projectedOverride ?: toPersistedSettings(settings)
+        credentialCommitter.commit(
+            previousReferencesBySlot = previousReferencesBySlot,
+            projectedBindings = projected.bindings,
+        ) {
+            dataStore.edit { preferences ->
+            val settings = projected.settings
+            preferences[VERSION] = 4
             preferences[DYNAMIC_COLOR] = settings.dynamicColor
             preferences[THEME_ID] = settings.themeId
             preferences[CUSTOM_THEMES] = JsonInstant.encodeToString(settings.customThemes)
@@ -405,7 +508,199 @@ class SettingsStore(
             preferences[BACKUP_REMINDER_CONFIG] = JsonInstant.encodeToString(settings.backupReminderConfig)
             preferences[LAUNCH_COUNT] = settings.launchCount
             preferences[SPONSOR_ALERT_DISMISSED_AT] = settings.sponsorAlertDismissedAt
+            }
         }
+        // Never publish the caller's stale transient maps. Re-resolving the exact committed
+        // projection makes RequestLedger and every runtime consumer observe the new binding proof.
+        settingsFlow.value = toRuntimeSettings(projected.settings)
+    }
+
+    /**
+     * Persists an endpoint edit only after an explicit user-authorized credential rebind.
+     *
+     * The normal [update] path intentionally fails closed when an existing stable slot changes
+     * audience. UI code must ask for the secret again, preserve the old binding proof, and call
+     * this method with the replacement value. A resolved old secret must never be used to build
+     * [intent].
+     */
+    internal suspend fun updateWithCredentialAudienceRebind(
+        settings: Settings,
+        intent: CredentialAudienceRebindIntent,
+    ) = updateWithCredentialAudienceRebinds(settings, listOf(intent))
+
+    /**
+     * Atomically rebinds every credential affected by one audience edit. A provider can own an API
+     * key, auth headers and custom-body secrets at the same time, so accepting a partial set would
+     * leave the settings snapshot impossible to persist. Only each intent's freshly entered
+     * [CredentialAudienceRebindIntent.replacementSecret] is sealed; values embedded in [settings]
+     * are deliberately ignored for the matching slots.
+     */
+    internal suspend fun updateWithCredentialAudienceRebinds(
+        settings: Settings,
+        intents: List<CredentialAudienceRebindIntent>,
+    ) = credentialTransactionMutex.withLock {
+        require(!settings.init) { "Cannot rebind credential for dummy settings" }
+        val baseline = settingsFlow.value
+        require(!baseline.init) { "Credential settings are not ready" }
+        credentialStore.rollbackUncommittedBindings(baseline.credentialReferencesBySlot)
+        val candidates = credentialAudienceRebindCandidates(baseline, settings)
+        val candidatesByAddress = candidates.associateBy { it.address }
+        val intentsByAddress = intents.associateBy { it.address }
+        require(intentsByAddress.size == intents.size) { "Duplicate credential audience rebind intent" }
+        require(candidatesByAddress.keys == intentsByAddress.keys) {
+            "Every credential affected by the audience edit must be explicitly rebound"
+        }
+        candidates.forEach { candidate ->
+            val intent = intentsByAddress.getValue(candidate.address)
+            require(intent.expectedReference == candidate.expectedReference) { "Stale credential reference proof" }
+            require(intent.expectedRevision == candidate.expectedRevision) { "Stale credential revision proof" }
+        }
+
+        val consumed = mutableSetOf<CredentialSettingsAddress>()
+        val transactionProjection = CredentialSettingsProjection(object : CredentialSettingsProjectionStore {
+            override fun seal(
+                address: CredentialSettingsAddress,
+                secret: JsonElement,
+            ): CredentialSettingsSealResult {
+                val intent = intentsByAddress[address] ?: return credentialStore.seal(address, secret)
+                check(consumed.add(address)) { "Credential slot appeared more than once in settings projection" }
+                return credentialStore.rebindAudience(
+                    address = address,
+                    expectedReference = intent.expectedReference,
+                    expectedRevision = intent.expectedRevision,
+                    replacementSecret = intent.replacementSecret,
+                )
+            }
+
+            override fun resolve(
+                reference: String,
+                address: me.rerere.rikkahub.data.credential.CredentialSettingsAddress,
+            ): CredentialSettingsResolveResult = credentialStore.resolve(reference, address)
+        })
+
+        val projected = try {
+            val value = when (val result = transactionProjection.toPersisted(JsonInstant.encodeToJsonElement(settings))) {
+                is CredentialSettingsProjectionResult.Success -> PersistedSettingsProjection(
+                    settings = JsonInstant.decodeFromJsonElement(result.settings),
+                    bindings = result.bindings,
+                )
+                is CredentialSettingsProjectionResult.Failure -> throw CredentialSettingsUnavailableException(result.issue)
+            }
+            check(consumed == intentsByAddress.keys) { "Credential rebind target was not present in settings" }
+            value
+        } catch (failure: Throwable) {
+            runCatching { credentialStore.rollbackUncommittedBindings(baseline.credentialReferencesBySlot) }
+                .exceptionOrNull()
+                ?.let(failure::addSuppressed)
+            throw failure
+        }
+        updateLocked(
+            settings = settings,
+            projectedOverride = projected,
+            previousReferencesBySlot = baseline.credentialReferencesBySlot,
+            recoverBeforeProjection = false,
+        )
+    }
+
+    /**
+     * Computes changed-audience slots through the canonical projection itself. UI receives only
+     * reference/revision proofs and paths; no resolved secret is placed in a candidate.
+     */
+    internal fun credentialAudienceRebindCandidates(
+        oldSettings: Settings,
+        newSettings: Settings,
+    ): List<CredentialAudienceRebindCandidate> {
+        val oldReferences = oldSettings.credentialReferencesBySlot
+        val probe = CredentialSettingsProjection(object : CredentialSettingsProjectionStore {
+            override fun seal(
+                address: CredentialSettingsAddress,
+                secret: JsonElement,
+            ): CredentialSettingsSealResult {
+                val oldReference = oldReferences[address.slotId().value]
+                    ?: return CredentialSettingsSealResult.Stored(CredentialRefId.new().referenceString(), 1)
+                val proof = credentialStore.inspectBinding(oldReference)
+                    ?: return CredentialSettingsSealResult.Failed("Previous credential proof is unavailable")
+                return CredentialSettingsSealResult.Stored(oldReference, proof.revision)
+            }
+
+            override fun resolve(
+                reference: String,
+                address: me.rerere.rikkahub.data.credential.CredentialSettingsAddress,
+            ): CredentialSettingsResolveResult = credentialStore.resolve(reference, address)
+        })
+        val result = when (val projected = probe.toPersisted(JsonInstant.encodeToJsonElement(newSettings))) {
+            is CredentialSettingsProjectionResult.Success -> projected
+            is CredentialSettingsProjectionResult.Failure -> throw CredentialSettingsUnavailableException(projected.issue)
+        }
+        return result.bindings.mapNotNull { binding ->
+            val oldReference = oldReferences[binding.address.slotId().value] ?: return@mapNotNull null
+            val proof = credentialStore.inspectBinding(oldReference)
+                ?: throw IllegalStateException("Previous credential proof is unavailable")
+            if (proof.audience == binding.address.audience) return@mapNotNull null
+            CredentialAudienceRebindCandidate(
+                address = binding.address,
+                expectedReference = oldReference,
+                expectedRevision = proof.revision,
+                jsonPath = binding.jsonPath,
+            )
+        }
+    }
+
+    /**
+     * Startup barrier for Preferences v4. It is intentionally re-entrant: after a process death,
+     * already-written envelopes are reused and the journal advances only after DataStore commits.
+     */
+    suspend fun migrateCredentialVault(): CredentialReadiness = withContext(Dispatchers.IO) {
+        credentialTransactionMutex.withLock {
+        credentialReadinessController.begin()
+        try {
+            val runtime = settingsFlowRaw.first()
+            // Always reconcile the vault-first crash window before projecting. Even VERSION >= 4
+            // can contain plaintext after an interrupted migration or newly classified secret, so
+            // the entire secret-free projection is atomically rewritten and journal-cleaned.
+            credentialStore.rollbackUncommittedBindings(runtime.credentialReferencesBySlot)
+            updateLocked(runtime)
+            CredentialReadiness.Ready.also { credentialReadinessController.ready() }
+        } catch (failure: CredentialSettingsUnavailableException) {
+            recordCredentialFailure(failure.issue)
+            credentialReadiness.value
+        } catch (failure: Throwable) {
+            Log.e(TAG, "Credential vault migration failed closed", failure)
+            CredentialReadiness.Unavailable(
+                reason = CredentialUnavailableReason.MIGRATION_FAILED,
+                retryable = true,
+            ).also { credentialReadinessController.unavailable(it.reason, it.retryable) }
+        }
+        }
+    }
+
+    private fun recordCredentialFailure(issue: CredentialSettingsProjectionIssue) {
+        val unavailable = when (issue) {
+            is CredentialSettingsProjectionIssue.Locked -> {
+                val reason = when (issue.reason) {
+                    "DEVICE_LOCKED" -> CredentialUnavailableReason.DEVICE_LOCKED
+                    "KEY_INVALIDATED" -> CredentialUnavailableReason.KEY_INVALIDATED
+                    else -> CredentialUnavailableReason.KEY_UNAVAILABLE
+                }
+                CredentialReadiness.Unavailable(reason, retryable = reason != CredentialUnavailableReason.KEY_INVALIDATED)
+            }
+            is CredentialSettingsProjectionIssue.Missing -> CredentialReadiness.Unavailable(
+                CredentialUnavailableReason.MISSING_ENTRY,
+                retryable = false,
+            )
+            is CredentialSettingsProjectionIssue.Corrupt,
+            is CredentialSettingsProjectionIssue.InvalidReference -> CredentialReadiness.Unavailable(
+                CredentialUnavailableReason.CORRUPT_ENTRY,
+                retryable = false,
+            )
+            is CredentialSettingsProjectionIssue.StoreFailed,
+            is CredentialSettingsProjectionIssue.UnstableOwner -> CredentialReadiness.Unavailable(
+                CredentialUnavailableReason.MIGRATION_FAILED,
+                retryable = true,
+            )
+        }
+        credentialReadinessController.unavailable(unavailable.reason, unavailable.retryable)
+        Log.e(TAG, "Credential settings unavailable: ${unavailable.reason}")
     }
 
     suspend fun update(fn: (Settings) -> Settings) {
@@ -502,6 +797,12 @@ class SettingsStore(
 data class Settings(
     @Transient
     val init: Boolean = false,
+    @Transient
+    val credentialReferences: Map<String, String> = emptyMap(),
+    @Transient
+    val credentialRevisions: Map<String, Long> = emptyMap(),
+    @Transient
+    val credentialReferencesBySlot: Map<String, String> = emptyMap(),
     val dynamicColor: Boolean = true,
     val themeId: String = PresetThemes[0].id,
     val customThemes: List<CustomTheme> = emptyList(),

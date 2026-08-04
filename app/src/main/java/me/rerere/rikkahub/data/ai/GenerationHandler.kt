@@ -45,6 +45,8 @@ import me.rerere.rikkahub.data.ai.transformers.transforms
 import me.rerere.rikkahub.data.ai.transformers.visualTransforms
 import me.rerere.rikkahub.data.ai.tools.buildMemoryTools
 import me.rerere.rikkahub.data.datastore.Settings
+import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.data.credential.effectiveProviderCredentialReference
 import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.model.Assistant
@@ -79,6 +81,7 @@ class GenerationHandler(
     private val memoryRepo: MemoryRepository,
     private val chatProviderStepCoordinator: ChatProviderStepCoordinator,
     private val toolExecutionLedgerCoordinator: ToolExecutionLedgerCoordinator,
+    private val settingsStore: SettingsStore,
 ) {
     fun generateText(
         settings: Settings,
@@ -98,6 +101,7 @@ class GenerationHandler(
         toolExecutionContextId: String? = null,
         ledgerContext: ChatGenerationLedgerContext? = null,
     ): Flow<GenerationChunk> = flow {
+        settingsStore.awaitCredentialReady()
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
 
@@ -419,6 +423,7 @@ class GenerationHandler(
                                         },
                                         contextId = toolExecutionContextId,
                                         executionRequestId = runningTool.requestId,
+                                        credentialRefId = toolLedgerSession?.credentialRefId,
                                     ),
                                 ) ?: toolDef.execute(args)
                             }
@@ -611,6 +616,10 @@ class GenerationHandler(
                 params = baseParams,
                 provider = provider,
                 tools = tools,
+                credentialRefId = settings.effectiveProviderCredentialReference(
+                    provider = provider,
+                    customHeaders = baseParams.customHeaders,
+                ),
             )
         }
         val providerStep = when (openResult) {

@@ -68,6 +68,7 @@ import me.rerere.asr.ASRProviderSetting
 import me.rerere.rikkahub.data.datastore.DEFAULT_SYSTEM_TTS_ID
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.ui.components.nav.BackButton
+import me.rerere.rikkahub.ui.components.credential.rememberCredentialAwareSettingsSave
 import me.rerere.rikkahub.ui.components.ui.AutoAIIcon
 import me.rerere.rikkahub.ui.components.ui.Tag
 import me.rerere.rikkahub.ui.components.ui.TagType
@@ -89,6 +90,7 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
     var editingASRProvider by remember { mutableStateOf<ASRProviderSetting?>(null) }
     var selectedPage by remember { mutableIntStateOf(0) }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val saveSpeechSettings = rememberCredentialAwareSettingsSave()
 
     Scaffold(
         topBar = {
@@ -222,7 +224,7 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
                             val newProviders = settings.ttsProviders.map {
                                 if (it.id == provider.id) currentProvider else it
                             }
-                            vm.updateSettings(settings.copy(ttsProviders = newProviders))
+                            saveSpeechSettings(settings, settings.copy(ttsProviders = newProviders))
                             editingTTSProvider = null
                         },
                         modifier = Modifier.weight(1f)
@@ -285,7 +287,7 @@ fun SettingSpeechPage(vm: SettingVM = koinViewModel()) {
                             val newProviders = settings.asrProviders.map {
                                 if (it.id == provider.id) currentProvider else it
                             }
-                            vm.updateSettings(settings.copy(asrProviders = newProviders))
+                            saveSpeechSettings(settings, settings.copy(asrProviders = newProviders))
                             editingASRProvider = null
                         },
                         modifier = Modifier.weight(1f)

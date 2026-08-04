@@ -58,6 +58,7 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.WebDavConfig
 import me.rerere.rikkahub.data.sync.webdav.WebDavBackupItem
 import me.rerere.rikkahub.ui.components.ui.CardGroup
+import me.rerere.rikkahub.ui.components.credential.rememberCredentialAwareSettingsSave
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.pages.backup.BackupVM
 import me.rerere.rikkahub.utils.UiState
@@ -74,7 +75,8 @@ fun WebDavTab(
     onShowRestartDialog: () -> Unit
 ) {
     val settings by vm.settings.collectAsStateWithLifecycle()
-    val webDavConfig = settings.webDavConfig
+    val persistedWebDavConfig = settings.webDavConfig
+    var webDavConfig by remember(persistedWebDavConfig) { mutableStateOf(persistedWebDavConfig) }
     val backupItemsState by vm.webDavBackupItems.collectAsStateWithLifecycle()
     val toaster = LocalToaster.current
     val context = LocalContext.current
@@ -83,8 +85,17 @@ fun WebDavTab(
     var restoringItemId by remember { mutableStateOf<String?>(null) }
     var isBackingUp by remember { mutableStateOf(false) }
 
+    val saveWebDavSettings = rememberCredentialAwareSettingsSave(
+        onSaved = {
+            toaster.show("WebDAV 设置已保存", type = ToastType.Success)
+        },
+        onFailure = { failure ->
+            toaster.show(failure.message ?: "WebDAV 设置保存失败", type = ToastType.Error)
+        },
+    )
+
     fun updateWebDavConfig(newConfig: WebDavConfig) {
-        vm.updateSettings(settings.copy(webDavConfig = newConfig))
+        webDavConfig = newConfig
     }
 
     val lastBackupText = if (settings.backupReminderConfig.lastBackupTime == 0L) {
@@ -230,6 +241,14 @@ fun WebDavTab(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
         ) {
+            Button(
+                onClick = {
+                    saveWebDavSettings(settings, settings.copy(webDavConfig = webDavConfig))
+                },
+                enabled = webDavConfig != persistedWebDavConfig,
+            ) {
+                Text("保存连接设置")
+            }
             OutlinedButton(
                 onClick = {
                     scope.launch {
@@ -250,7 +269,8 @@ fun WebDavTab(
                             )
                         }
                     }
-                }
+                },
+                enabled = webDavConfig == persistedWebDavConfig,
             ) {
                 Text(stringResource(R.string.backup_page_test_connection))
             }
@@ -258,7 +278,8 @@ fun WebDavTab(
                 onClick = {
                     vm.loadBackupFileItems()
                     showBackupFiles = true
-                }
+                },
+                enabled = webDavConfig == persistedWebDavConfig,
             ) {
                 Text(stringResource(R.string.backup_page_restore))
             }
@@ -283,7 +304,7 @@ fun WebDavTab(
                         isBackingUp = false
                     }
                 },
-                enabled = !isBackingUp
+                enabled = !isBackingUp && webDavConfig == persistedWebDavConfig
             ) {
                 if (isBackingUp) {
                     CircularWavyProgressIndicator(
