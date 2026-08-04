@@ -78,6 +78,46 @@ class WebDavClient(
         }
     }
 
+    suspend fun putConditional(
+        path: String,
+        data: ByteArray,
+        contentType: String = "application/octet-stream",
+        ifNoneMatch: Boolean = false,
+        ifMatch: String? = null,
+    ): Result<WebDavConditionalPutResult> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(!(ifNoneMatch && ifMatch != null))
+            val response: HttpResponse = httpClient.request(config.buildUrl(path)) {
+                method = HttpMethod.Put
+                basicAuth(config.username, config.password)
+                headers {
+                    append("Content-Type", contentType)
+                    append("Content-Length", data.size.toString())
+                    if (ifNoneMatch) append("If-None-Match", "*")
+                    ifMatch?.let { append("If-Match", it) }
+                }
+                setBody(data)
+            }
+            if (response.status == HttpStatusCode.PreconditionFailed) {
+                return@runCatching WebDavConditionalPutResult.PreconditionFailed(
+                    response.headers["etag"],
+                )
+            }
+            if (!response.status.isSuccess()) {
+                val body = response.bodyAsText()
+                throw WebDavException(
+                    "Failed conditional put: ${response.status}",
+                    response.status.value,
+                    body,
+                )
+            }
+            WebDavConditionalPutResult.Written(
+                response.headers["etag"]
+                    ?: throw WebDavException("Conditional PUT response has no ETag", response.status.value, ""),
+            )
+        }
+    }
+
     suspend fun put(
         path: String,
         file: File,
@@ -127,6 +167,31 @@ class WebDavClient(
 
             val channel = response.bodyAsChannel()
             channel.toInputStream().readBytes()
+        }
+    }
+
+    suspend fun getVersioned(path: String): Result<WebDavVersionedObject?> = withContext(Dispatchers.IO) {
+        runCatching {
+            val response: HttpResponse = httpClient.request(config.buildUrl(path)) {
+                method = HttpMethod.Get
+                basicAuth(config.username, config.password)
+            }
+            if (response.status == HttpStatusCode.NotFound) {
+                return@runCatching null
+            }
+            if (!response.status.isSuccess()) {
+                val body = response.bodyAsText()
+                throw WebDavException(
+                    "Failed to get versioned object: ${response.status}",
+                    response.status.value,
+                    body,
+                )
+            }
+            WebDavVersionedObject(
+                body = response.bodyAsChannel().toInputStream().readBytes(),
+                etag = response.headers["etag"]
+                    ?: throw WebDavException("Versioned object response has no ETag", response.status.value, ""),
+            )
         }
     }
 
@@ -223,6 +288,7 @@ class WebDavClient(
                 contentType = response.headers["Content-Type"] ?: "application/octet-stream",
                 lastModified = parseLastModified(response.headers["Last-Modified"]),
                 isCollection = false,
+                etag = response.headers["ETag"],
             )
         }
     }
@@ -264,6 +330,7 @@ class WebDavClient(
                 |    <D:getcontentlength/>
                 |    <D:getcontenttype/>
                 |    <D:getlastmodified/>
+                |    <D:getetag/>
                 |    <D:resourcetype/>
                 |  </D:prop>
                 |</D:propfind>
@@ -333,6 +400,7 @@ class WebDavClient(
         var currentContentLength: Long = 0
         var currentContentType: String? = null
         var currentLastModified: Instant? = null
+        var currentEtag: String? = null
         var currentIsCollection = false
         var currentTag: String? = null
         var inResponse = false
@@ -349,6 +417,7 @@ class WebDavClient(
                             currentContentLength = 0
                             currentContentType = null
                             currentLastModified = null
+                            currentEtag = null
                             currentIsCollection = false
                         }
                         "collection" -> {
@@ -366,6 +435,7 @@ class WebDavClient(
                             "getcontentlength" -> currentContentLength = text.toLongOrNull() ?: 0
                             "getcontenttype" -> currentContentType = text
                             "getlastmodified" -> currentLastModified = parseLastModified(text)
+                            "getetag" -> currentEtag = text
                         }
                     }
                 }
@@ -384,6 +454,7 @@ class WebDavClient(
                                 contentType = currentContentType ?: "application/octet-stream",
                                 lastModified = currentLastModified,
                                 isCollection = currentIsCollection,
+                                etag = currentEtag,
                             )
                         )
                         inResponse = false
@@ -420,6 +491,13 @@ class WebDavClient(
     }
 }
 
+sealed interface WebDavConditionalPutResult {
+    data class Written(val etag: String) : WebDavConditionalPutResult
+    data class PreconditionFailed(val currentEtag: String?) : WebDavConditionalPutResult
+}
+
+data class WebDavVersionedObject(val body: ByteArray, val etag: String)
+
 data class WebDavResourceInfo(
     val href: String,
     val displayName: String,
@@ -427,6 +505,7 @@ data class WebDavResourceInfo(
     val contentType: String,
     val lastModified: Instant?,
     val isCollection: Boolean,
+    val etag: String? = null,
 )
 
 class WebDavException(

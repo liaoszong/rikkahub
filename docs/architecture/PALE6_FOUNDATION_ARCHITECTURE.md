@@ -197,13 +197,13 @@ FGS、通知、聊天计时、任务中心和工具 UI 都观察 ledger projecti
 
 ```text
 rikkahub-sync/v2/<spaceId>/
-  ops/<deviceId>/<sequence>.cbor.enc
+  ops/<deviceId>/<sequence>.json.enc
   heads/<deviceId>.json.enc
   blobs/<keyed-content-hash>.enc
-  snapshots/<generation>.cbor.enc
+  snapshots/<generation>.json.enc
 ```
 
-operation ID 为 `(deviceId, monotonic counter)`，携带 entity type/id、dotted version、HLC、tombstone、payload/blob hash。先上传 immutable op/blob，再条件更新本设备 head；`If-None-Match` 防止重复 sequence，`If-Match` 防止同设备并发 owner。S3 官方支持 [conditional writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html)，WebDAV 使用 RFC 4918/HTTP 条件请求。传输不满足 immutable create/可靠读取时 fail closed，保留快照备份而不伪装成同步。
+operation ID 为 `(deviceId, monotonic counter)`，携带 entity type/id、dotted version、HLC、tombstone、payload/blob hash。operation/head/snapshot 使用严格 canonical JSON，经重新编码一致性检查后再加密；本地 outbox 以 `envelope_bytes` 保存，避免列名把未来格式迁移绑定到伪 CBOR。先上传 immutable op/blob，再条件更新本设备 head；`If-None-Match` 防止重复 sequence，`If-Match` 防止同设备并发 owner。S3 官方支持 [conditional writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html)，WebDAV 使用 RFC 4918/HTTP 条件请求。传输不满足 immutable create/可靠读取时 fail closed，保留快照备份而不伪装成同步。
 
 因果关系由 version vector/dotted version 判断，HLC 只负责确定性排序，不能代替因果。scalar 在确认并发后 field-level LWW（HLC + device ID tie-break）；stable-ID list 用 OR-set + order key；conversation/message 合并为分支；同路径文件保留 conflict copy；delete 对 concurrent edit 进入可恢复 trash/conflict。tombstone 仅在所有未撤销设备的 acknowledged vector 都支配 delete 后 GC。全量 restore 必须创建新 sync epoch/space，不能把旧快照静默覆盖云端新状态。
 

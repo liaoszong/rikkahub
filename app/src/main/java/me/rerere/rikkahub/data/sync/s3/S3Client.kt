@@ -11,6 +11,7 @@ import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpMethod
+import io.ktor.http.HttpStatusCode
 import io.ktor.http.isSuccess
 import io.ktor.utils.io.jvm.javaio.toInputStream
 import io.ktor.utils.io.readAvailable
@@ -30,6 +31,49 @@ class S3Client(
     private val config: S3Config,
     private val httpClient: HttpClient,
 ) {
+    suspend fun putObjectConditional(
+        key: String,
+        data: ByteArray,
+        contentType: String = "application/octet-stream",
+        ifNoneMatch: Boolean = false,
+        ifMatch: String? = null,
+    ): Result<S3ConditionalPutResult> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(!(ifNoneMatch && ifMatch != null))
+            val conditions = buildMap {
+                if (ifNoneMatch) put("if-none-match", "*")
+                ifMatch?.let { put("if-match", it) }
+            }
+            val path = "/${key.trimStart('/')}"
+            val signed = AwsSignatureV4.sign(
+                config = config,
+                method = "PUT",
+                path = path,
+                headers = conditions,
+                payload = data,
+                contentType = contentType,
+            )
+            val response = httpClient.request(signed.url) {
+                method = HttpMethod.Put
+                headers { signed.headers.forEach { (name, value) -> append(name, value) } }
+                setBody(data)
+            }
+            if (response.status == HttpStatusCode.PreconditionFailed) {
+                return@runCatching S3ConditionalPutResult.PreconditionFailed(
+                    response.headers["etag"],
+                )
+            }
+            if (!response.status.isSuccess()) {
+                val body = response.bodyAsText()
+                throw S3Exception("Failed conditional put: ${response.status}", body)
+            }
+            S3ConditionalPutResult.Written(
+                etag = response.headers["etag"]
+                    ?: throw S3Exception("Conditional PUT response has no ETag", ""),
+            )
+        }
+    }
+
     suspend fun putObject(
         key: String,
         data: ByteArray,
@@ -239,7 +283,7 @@ class S3Client(
                 key = key,
                 size = response.headers["content-length"]?.toLongOrNull() ?: 0,
                 contentType = response.headers["content-type"] ?: "application/octet-stream",
-                etag = response.headers["etag"]?.trim('"'),
+                etag = response.headers["etag"],
                 lastModified = response.headers["last-modified"],
             )
         }
@@ -312,6 +356,29 @@ class S3Client(
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
+    suspend fun getObjectVersioned(key: String): Result<S3VersionedObject?> = withContext(Dispatchers.IO) {
+        runCatching {
+            val path = "/${key.trimStart('/')}"
+            val signed = AwsSignatureV4.sign(config = config, method = "GET", path = path)
+            val response = httpClient.request(signed.url) {
+                method = HttpMethod.Get
+                headers { signed.headers.forEach { (name, value) -> append(name, value) } }
+            }
+            if (response.status == HttpStatusCode.NotFound) {
+                return@runCatching null
+            }
+            if (!response.status.isSuccess()) {
+                val body = response.bodyAsText()
+                throw S3Exception("Failed to get versioned object: ${response.status}", body)
+            }
+            S3VersionedObject(
+                body = response.bodyAsChannel().toInputStream().readBytes(),
+                etag = response.headers["etag"]
+                    ?: throw S3Exception("Versioned object response has no ETag", ""),
+            )
+        }
+    }
+
     private fun parseListObjectsResponse(xml: String): S3ListResult {
         val parser = Xml.newPullParser()
         parser.setInput(StringReader(xml))
@@ -362,7 +429,7 @@ class S3Client(
                                 when (currentTag) {
                                     "Key" -> currentKey = text
                                     "Size" -> currentSize = text.toLongOrNull() ?: 0
-                                    "ETag" -> currentEtag = text.trim('"')
+                                    "ETag" -> currentEtag = text
                                     "LastModified" -> currentLastModified =
                                         runCatching { Instant.parse(text) }.getOrNull()
 
@@ -422,6 +489,13 @@ class S3Client(
         )
     }
 }
+
+sealed interface S3ConditionalPutResult {
+    data class Written(val etag: String) : S3ConditionalPutResult
+    data class PreconditionFailed(val currentEtag: String?) : S3ConditionalPutResult
+}
+
+data class S3VersionedObject(val body: ByteArray, val etag: String)
 
 data class S3Object(
     val key: String,

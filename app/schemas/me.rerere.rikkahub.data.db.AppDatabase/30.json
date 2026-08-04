@@ -1,0 +1,4744 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 30,
+    "identityHash": "cd60adfe09461215cdc1f9dd24eb2b4b",
+    "entities": [
+      {
+        "tableName": "ConversationEntity",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `assistant_id` TEXT NOT NULL DEFAULT '0950e2dc-9bd5-4801-afa3-aa887aa36b4e', `title` TEXT NOT NULL, `nodes` TEXT NOT NULL, `create_at` INTEGER NOT NULL, `update_at` INTEGER NOT NULL, `suggestions` TEXT NOT NULL DEFAULT '[]', `is_pinned` INTEGER NOT NULL DEFAULT 0, `custom_system_prompt` TEXT NOT NULL DEFAULT '', `mode_injection_ids` TEXT NOT NULL DEFAULT '[]', `lorebook_ids` TEXT NOT NULL DEFAULT '[]', `workspace_cwd` TEXT NOT NULL DEFAULT '', `folder_id` TEXT NOT NULL DEFAULT '', `revision` INTEGER NOT NULL DEFAULT 0, `active_leaf_message_id` TEXT, `storage_version` INTEGER NOT NULL DEFAULT 1, `deleted_at` INTEGER, `last_writer_replica_id` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "assistantId",
+            "columnName": "assistant_id",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'0950e2dc-9bd5-4801-afa3-aa887aa36b4e'"
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "nodes",
+            "columnName": "nodes",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createAt",
+            "columnName": "create_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updateAt",
+            "columnName": "update_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "chatSuggestions",
+            "columnName": "suggestions",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'[]'"
+          },
+          {
+            "fieldPath": "isPinned",
+            "columnName": "is_pinned",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "customSystemPrompt",
+            "columnName": "custom_system_prompt",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "modeInjectionIds",
+            "columnName": "mode_injection_ids",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'[]'"
+          },
+          {
+            "fieldPath": "lorebookIds",
+            "columnName": "lorebook_ids",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'[]'"
+          },
+          {
+            "fieldPath": "workspaceCwd",
+            "columnName": "workspace_cwd",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "folderId",
+            "columnName": "folder_id",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "activeLeafMessageId",
+            "columnName": "active_leaf_message_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "storageVersion",
+            "columnName": "storage_version",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "1"
+          },
+          {
+            "fieldPath": "deletedAt",
+            "columnName": "deleted_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastWriterReplicaId",
+            "columnName": "last_writer_replica_id",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_ConversationEntity_deleted_at_is_pinned_update_at",
+            "unique": false,
+            "columnNames": [
+              "deleted_at",
+              "is_pinned",
+              "update_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_ConversationEntity_deleted_at_is_pinned_update_at` ON `${TABLE_NAME}` (`deleted_at`, `is_pinned`, `update_at`)"
+          },
+          {
+            "name": "index_ConversationEntity_storage_version",
+            "unique": false,
+            "columnNames": [
+              "storage_version"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_ConversationEntity_storage_version` ON `${TABLE_NAME}` (`storage_version`)"
+          }
+        ]
+      },
+      {
+        "tableName": "message_branch_group",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `branch_group_id` TEXT NOT NULL, `legacy_node_index` INTEGER, `legacy_order` INTEGER, `created_at` TEXT NOT NULL, `revision` INTEGER NOT NULL DEFAULT 0, `legacy_inferred` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`conversation_id`, `branch_group_id`), FOREIGN KEY(`conversation_id`) REFERENCES `ConversationEntity`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "branchGroupId",
+            "columnName": "branch_group_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "legacyNodeIndex",
+            "columnName": "legacy_node_index",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "legacyOrder",
+            "columnName": "legacy_order",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "legacyInferred",
+            "columnName": "legacy_inferred",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "conversation_id",
+            "branch_group_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_message_branch_group_conversation_id_legacy_order",
+            "unique": false,
+            "columnNames": [
+              "conversation_id",
+              "legacy_order"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_message_branch_group_conversation_id_legacy_order` ON `${TABLE_NAME}` (`conversation_id`, `legacy_order`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "ConversationEntity",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "conversation_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "conversation_message",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `message_id` TEXT NOT NULL, `parent_message_id` TEXT, `branch_group_id` TEXT NOT NULL, `sibling_ordinal` INTEGER NOT NULL, `origin_conversation_id` TEXT, `origin_message_id` TEXT, `legacy_message_id` TEXT, `request_id` TEXT, `role` TEXT NOT NULL, `state` TEXT NOT NULL, `model_id` TEXT, `provider_id` TEXT, `provider_response_id` TEXT, `created_at` TEXT NOT NULL, `finished_at` TEXT, `usage_json` TEXT, `annotations_json` TEXT NOT NULL DEFAULT '[]', `translation` TEXT, `envelope_extras_json` TEXT, `revision` INTEGER NOT NULL DEFAULT 0, `content_digest` TEXT NOT NULL, `legacy_inferred` INTEGER NOT NULL DEFAULT 0, `deleted_at` INTEGER, PRIMARY KEY(`conversation_id`, `message_id`), FOREIGN KEY(`conversation_id`) REFERENCES `ConversationEntity`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`conversation_id`, `branch_group_id`) REFERENCES `message_branch_group`(`conversation_id`, `branch_group_id`) ON UPDATE NO ACTION ON DELETE NO ACTION , FOREIGN KEY(`conversation_id`, `parent_message_id`) REFERENCES `conversation_message`(`conversation_id`, `message_id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "messageId",
+            "columnName": "message_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "parentMessageId",
+            "columnName": "parent_message_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "branchGroupId",
+            "columnName": "branch_group_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "siblingOrdinal",
+            "columnName": "sibling_ordinal",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "originConversationId",
+            "columnName": "origin_conversation_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "originMessageId",
+            "columnName": "origin_message_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "legacyMessageId",
+            "columnName": "legacy_message_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "requestId",
+            "columnName": "request_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "role",
+            "columnName": "role",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "modelId",
+            "columnName": "model_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "providerId",
+            "columnName": "provider_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "providerResponseId",
+            "columnName": "provider_response_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "finishedAt",
+            "columnName": "finished_at",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "usageJson",
+            "columnName": "usage_json",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "annotationsJson",
+            "columnName": "annotations_json",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'[]'"
+          },
+          {
+            "fieldPath": "translation",
+            "columnName": "translation",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "envelopeExtrasJson",
+            "columnName": "envelope_extras_json",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "contentDigest",
+            "columnName": "content_digest",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "legacyInferred",
+            "columnName": "legacy_inferred",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "deletedAt",
+            "columnName": "deleted_at",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "conversation_id",
+            "message_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_conversation_message_conversation_id_branch_group_id_sibling_ordinal",
+            "unique": true,
+            "columnNames": [
+              "conversation_id",
+              "branch_group_id",
+              "sibling_ordinal"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_conversation_message_conversation_id_branch_group_id_sibling_ordinal` ON `${TABLE_NAME}` (`conversation_id`, `branch_group_id`, `sibling_ordinal`)"
+          },
+          {
+            "name": "index_conversation_message_conversation_id_parent_message_id",
+            "unique": false,
+            "columnNames": [
+              "conversation_id",
+              "parent_message_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_conversation_message_conversation_id_parent_message_id` ON `${TABLE_NAME}` (`conversation_id`, `parent_message_id`)"
+          },
+          {
+            "name": "index_conversation_message_conversation_id_branch_group_id",
+            "unique": false,
+            "columnNames": [
+              "conversation_id",
+              "branch_group_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_conversation_message_conversation_id_branch_group_id` ON `${TABLE_NAME}` (`conversation_id`, `branch_group_id`)"
+          },
+          {
+            "name": "index_conversation_message_request_id",
+            "unique": false,
+            "columnNames": [
+              "request_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_conversation_message_request_id` ON `${TABLE_NAME}` (`request_id`)"
+          },
+          {
+            "name": "index_conversation_message_origin_conversation_id_origin_message_id",
+            "unique": false,
+            "columnNames": [
+              "origin_conversation_id",
+              "origin_message_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_conversation_message_origin_conversation_id_origin_message_id` ON `${TABLE_NAME}` (`origin_conversation_id`, `origin_message_id`)"
+          },
+          {
+            "name": "index_conversation_message_conversation_id_state",
+            "unique": false,
+            "columnNames": [
+              "conversation_id",
+              "state"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_conversation_message_conversation_id_state` ON `${TABLE_NAME}` (`conversation_id`, `state`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "ConversationEntity",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "conversation_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "message_branch_group",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "conversation_id",
+              "branch_group_id"
+            ],
+            "referencedColumns": [
+              "conversation_id",
+              "branch_group_id"
+            ]
+          },
+          {
+            "table": "conversation_message",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "conversation_id",
+              "parent_message_id"
+            ],
+            "referencedColumns": [
+              "conversation_id",
+              "message_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "message_part",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `part_id` TEXT NOT NULL, `message_id` TEXT NOT NULL, `ordinal` INTEGER NOT NULL, `kind` TEXT NOT NULL, `schema_version` INTEGER NOT NULL DEFAULT 1, `payload_json` TEXT NOT NULL, `payload_digest` TEXT NOT NULL, `asset_id` TEXT, `tool_invocation_id` TEXT, `revision` INTEGER NOT NULL DEFAULT 0, `deleted_at` INTEGER, PRIMARY KEY(`conversation_id`, `part_id`), FOREIGN KEY(`conversation_id`, `message_id`) REFERENCES `conversation_message`(`conversation_id`, `message_id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "partId",
+            "columnName": "part_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "messageId",
+            "columnName": "message_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ordinal",
+            "columnName": "ordinal",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "schemaVersion",
+            "columnName": "schema_version",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "1"
+          },
+          {
+            "fieldPath": "payloadJson",
+            "columnName": "payload_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payloadDigest",
+            "columnName": "payload_digest",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "assetId",
+            "columnName": "asset_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "toolInvocationId",
+            "columnName": "tool_invocation_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "deletedAt",
+            "columnName": "deleted_at",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "conversation_id",
+            "part_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_message_part_conversation_id_message_id_ordinal",
+            "unique": true,
+            "columnNames": [
+              "conversation_id",
+              "message_id",
+              "ordinal"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_message_part_conversation_id_message_id_ordinal` ON `${TABLE_NAME}` (`conversation_id`, `message_id`, `ordinal`)"
+          },
+          {
+            "name": "index_message_part_asset_id",
+            "unique": false,
+            "columnNames": [
+              "asset_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_message_part_asset_id` ON `${TABLE_NAME}` (`asset_id`)"
+          },
+          {
+            "name": "index_message_part_tool_invocation_id",
+            "unique": false,
+            "columnNames": [
+              "tool_invocation_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_message_part_tool_invocation_id` ON `${TABLE_NAME}` (`tool_invocation_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "conversation_message",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "conversation_id",
+              "message_id"
+            ],
+            "referencedColumns": [
+              "conversation_id",
+              "message_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "conversation_migration_journal",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conversation_id` TEXT NOT NULL, `phase` TEXT NOT NULL DEFAULT 'PENDING', `source_revision` INTEGER NOT NULL DEFAULT 0, `legacy_source_digest` TEXT, `legacy_projection_digest` TEXT, `v2_projection_digest` TEXT, `next_node_index` INTEGER NOT NULL DEFAULT 0, `previous_selected_message_id` TEXT, `expected_group_count` INTEGER, `expected_message_count` INTEGER, `expected_part_count` INTEGER, `written_group_count` INTEGER NOT NULL DEFAULT 0, `written_message_count` INTEGER NOT NULL DEFAULT 0, `written_part_count` INTEGER NOT NULL DEFAULT 0, `inference_flags_json` TEXT NOT NULL DEFAULT '[]', `attempts` INTEGER NOT NULL DEFAULT 0, `last_error_code` TEXT, `last_error_detail` TEXT, `lease_owner` TEXT, `lease_until` INTEGER, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`conversation_id`), FOREIGN KEY(`conversation_id`) REFERENCES `ConversationEntity`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "phase",
+            "columnName": "phase",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'PENDING'"
+          },
+          {
+            "fieldPath": "sourceRevision",
+            "columnName": "source_revision",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "legacySourceDigest",
+            "columnName": "legacy_source_digest",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "legacyProjectionDigest",
+            "columnName": "legacy_projection_digest",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "v2ProjectionDigest",
+            "columnName": "v2_projection_digest",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "nextNodeIndex",
+            "columnName": "next_node_index",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "previousSelectedMessageId",
+            "columnName": "previous_selected_message_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "expectedGroupCount",
+            "columnName": "expected_group_count",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "expectedMessageCount",
+            "columnName": "expected_message_count",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "expectedPartCount",
+            "columnName": "expected_part_count",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "writtenGroupCount",
+            "columnName": "written_group_count",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "writtenMessageCount",
+            "columnName": "written_message_count",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "writtenPartCount",
+            "columnName": "written_part_count",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "inferenceFlagsJson",
+            "columnName": "inference_flags_json",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'[]'"
+          },
+          {
+            "fieldPath": "attempts",
+            "columnName": "attempts",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "lastErrorCode",
+            "columnName": "last_error_code",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastErrorDetail",
+            "columnName": "last_error_detail",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "leaseOwner",
+            "columnName": "lease_owner",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "leaseUntil",
+            "columnName": "lease_until",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "conversation_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_conversation_migration_journal_phase_lease_until",
+            "unique": false,
+            "columnNames": [
+              "phase",
+              "lease_until"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_conversation_migration_journal_phase_lease_until` ON `${TABLE_NAME}` (`phase`, `lease_until`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "ConversationEntity",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "conversation_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "conversation_migration_quarantine",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`quarantine_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `node_id` TEXT, `variant_index` INTEGER, `payload_digest` TEXT, `raw_payload` TEXT, `reason_code` TEXT NOT NULL, `detail` TEXT, `created_at` INTEGER NOT NULL, PRIMARY KEY(`quarantine_id`), FOREIGN KEY(`conversation_id`) REFERENCES `ConversationEntity`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "quarantineId",
+            "columnName": "quarantine_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "nodeId",
+            "columnName": "node_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "variantIndex",
+            "columnName": "variant_index",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "payloadDigest",
+            "columnName": "payload_digest",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "rawPayload",
+            "columnName": "raw_payload",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "reasonCode",
+            "columnName": "reason_code",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "detail",
+            "columnName": "detail",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "quarantine_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_conversation_migration_quarantine_conversation_id",
+            "unique": false,
+            "columnNames": [
+              "conversation_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_conversation_migration_quarantine_conversation_id` ON `${TABLE_NAME}` (`conversation_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "ConversationEntity",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "conversation_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "message_fts_outbox",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`event_id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `target_revision` INTEGER NOT NULL, `operation` TEXT NOT NULL, `state` TEXT NOT NULL DEFAULT 'PENDING', `attempts` INTEGER NOT NULL DEFAULT 0, `next_attempt_at` INTEGER NOT NULL DEFAULT 0, `lease_owner` TEXT, `lease_until` INTEGER, `last_error` TEXT, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`event_id`))",
+        "fields": [
+          {
+            "fieldPath": "eventId",
+            "columnName": "event_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetRevision",
+            "columnName": "target_revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "operation",
+            "columnName": "operation",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'PENDING'"
+          },
+          {
+            "fieldPath": "attempts",
+            "columnName": "attempts",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "nextAttemptAt",
+            "columnName": "next_attempt_at",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "leaseOwner",
+            "columnName": "lease_owner",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "leaseUntil",
+            "columnName": "lease_until",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastError",
+            "columnName": "last_error",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "event_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_message_fts_outbox_conversation_id_target_revision_operation",
+            "unique": true,
+            "columnNames": [
+              "conversation_id",
+              "target_revision",
+              "operation"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_message_fts_outbox_conversation_id_target_revision_operation` ON `${TABLE_NAME}` (`conversation_id`, `target_revision`, `operation`)"
+          },
+          {
+            "name": "index_message_fts_outbox_state_next_attempt_at",
+            "unique": false,
+            "columnNames": [
+              "state",
+              "next_attempt_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_message_fts_outbox_state_next_attempt_at` ON `${TABLE_NAME}` (`state`, `next_attempt_at`)"
+          }
+        ]
+      },
+      {
+        "tableName": "MemoryEntity",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `assistant_id` TEXT NOT NULL, `content` TEXT NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "assistantId",
+            "columnName": "assistant_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "content",
+            "columnName": "content",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "GenMediaEntity",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `path` TEXT NOT NULL, `model_id` TEXT NOT NULL, `model_display_name` TEXT, `provider_id` TEXT, `prompt` TEXT NOT NULL, `create_at` INTEGER NOT NULL, `type` TEXT NOT NULL DEFAULT 'image_generation', `source_paths` TEXT, `asset_id` TEXT NOT NULL, `media_kind` TEXT NOT NULL DEFAULT 'image', `display_name` TEXT NOT NULL DEFAULT '', `lifecycle` TEXT NOT NULL DEFAULT 'active', `privacy_scope` TEXT NOT NULL DEFAULT 'private', `retention_policy` TEXT NOT NULL DEFAULT 'library', `deleted_at` INTEGER, `managed_file_id` INTEGER, `origin` TEXT NOT NULL, `mime_type` TEXT NOT NULL, `size_bytes` INTEGER NOT NULL, `width` INTEGER, `height` INTEGER, `sha256` TEXT, `storage_state` TEXT NOT NULL, `visibility` TEXT NOT NULL, `conversation_id` TEXT, `message_node_id` TEXT, `tool_call_id` TEXT, `parent_asset_id` TEXT, `updated_at` INTEGER NOT NULL, `hidden_at` INTEGER, `metadata_version` INTEGER NOT NULL, FOREIGN KEY(`managed_file_id`) REFERENCES `managed_files`(`id`) ON UPDATE CASCADE ON DELETE SET NULL , FOREIGN KEY(`parent_asset_id`) REFERENCES `GenMediaEntity`(`asset_id`) ON UPDATE CASCADE ON DELETE SET NULL )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "path",
+            "columnName": "path",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "modelId",
+            "columnName": "model_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "modelDisplayName",
+            "columnName": "model_display_name",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "providerId",
+            "columnName": "provider_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "prompt",
+            "columnName": "prompt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createAt",
+            "columnName": "create_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'image_generation'"
+          },
+          {
+            "fieldPath": "sourcePaths",
+            "columnName": "source_paths",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "assetId",
+            "columnName": "asset_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mediaKind",
+            "columnName": "media_kind",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'image'"
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "display_name",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "lifecycle",
+            "columnName": "lifecycle",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'active'"
+          },
+          {
+            "fieldPath": "privacyScope",
+            "columnName": "privacy_scope",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'private'"
+          },
+          {
+            "fieldPath": "retentionPolicy",
+            "columnName": "retention_policy",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'library'"
+          },
+          {
+            "fieldPath": "deletedAt",
+            "columnName": "deleted_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "managedFileId",
+            "columnName": "managed_file_id",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "origin",
+            "columnName": "origin",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mimeType",
+            "columnName": "mime_type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sizeBytes",
+            "columnName": "size_bytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "width",
+            "columnName": "width",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "height",
+            "columnName": "height",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "sha256",
+            "columnName": "sha256",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "storageState",
+            "columnName": "storage_state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "visibility",
+            "columnName": "visibility",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "messageNodeId",
+            "columnName": "message_node_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "toolCallId",
+            "columnName": "tool_call_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "parentAssetId",
+            "columnName": "parent_asset_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hiddenAt",
+            "columnName": "hidden_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "metadataVersion",
+            "columnName": "metadata_version",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_GenMediaEntity_path",
+            "unique": true,
+            "columnNames": [
+              "path"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_GenMediaEntity_path` ON `${TABLE_NAME}` (`path`)"
+          },
+          {
+            "name": "index_GenMediaEntity_asset_id",
+            "unique": true,
+            "columnNames": [
+              "asset_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_GenMediaEntity_asset_id` ON `${TABLE_NAME}` (`asset_id`)"
+          },
+          {
+            "name": "index_GenMediaEntity_managed_file_id",
+            "unique": true,
+            "columnNames": [
+              "managed_file_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_GenMediaEntity_managed_file_id` ON `${TABLE_NAME}` (`managed_file_id`)"
+          },
+          {
+            "name": "index_GenMediaEntity_parent_asset_id",
+            "unique": false,
+            "columnNames": [
+              "parent_asset_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_GenMediaEntity_parent_asset_id` ON `${TABLE_NAME}` (`parent_asset_id`)"
+          },
+          {
+            "name": "index_GenMediaEntity_conversation_id",
+            "unique": false,
+            "columnNames": [
+              "conversation_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_GenMediaEntity_conversation_id` ON `${TABLE_NAME}` (`conversation_id`)"
+          },
+          {
+            "name": "index_GenMediaEntity_tool_call_id",
+            "unique": false,
+            "columnNames": [
+              "tool_call_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_GenMediaEntity_tool_call_id` ON `${TABLE_NAME}` (`tool_call_id`)"
+          },
+          {
+            "name": "index_GenMediaEntity_visibility_create_at",
+            "unique": false,
+            "columnNames": [
+              "visibility",
+              "create_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_GenMediaEntity_visibility_create_at` ON `${TABLE_NAME}` (`visibility`, `create_at`)"
+          },
+          {
+            "name": "index_GenMediaEntity_storage_state",
+            "unique": false,
+            "columnNames": [
+              "storage_state"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_GenMediaEntity_storage_state` ON `${TABLE_NAME}` (`storage_state`)"
+          },
+          {
+            "name": "index_GenMediaEntity_media_kind_lifecycle_create_at",
+            "unique": false,
+            "columnNames": [
+              "media_kind",
+              "lifecycle",
+              "create_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_GenMediaEntity_media_kind_lifecycle_create_at` ON `${TABLE_NAME}` (`media_kind`, `lifecycle`, `create_at`)"
+          },
+          {
+            "name": "index_GenMediaEntity_retention_policy_lifecycle",
+            "unique": false,
+            "columnNames": [
+              "retention_policy",
+              "lifecycle"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_GenMediaEntity_retention_policy_lifecycle` ON `${TABLE_NAME}` (`retention_policy`, `lifecycle`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "managed_files",
+            "onDelete": "SET NULL",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "managed_file_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "GenMediaEntity",
+            "onDelete": "SET NULL",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "parent_asset_id"
+            ],
+            "referencedColumns": [
+              "asset_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "message_node",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `conversation_id` TEXT NOT NULL, `node_index` INTEGER NOT NULL, `messages` TEXT NOT NULL, `select_index` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`conversation_id`) REFERENCES `ConversationEntity`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "nodeIndex",
+            "columnName": "node_index",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "messages",
+            "columnName": "messages",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "selectIndex",
+            "columnName": "select_index",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_message_node_conversation_id",
+            "unique": false,
+            "columnNames": [
+              "conversation_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_message_node_conversation_id` ON `${TABLE_NAME}` (`conversation_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "ConversationEntity",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "conversation_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "managed_files",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `file_id` TEXT NOT NULL DEFAULT '', `folder` TEXT NOT NULL, `relative_path` TEXT NOT NULL, `display_name` TEXT NOT NULL, `mime_type` TEXT NOT NULL, `size_bytes` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fileId",
+            "columnName": "file_id",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "folder",
+            "columnName": "folder",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "relativePath",
+            "columnName": "relative_path",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "display_name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mimeType",
+            "columnName": "mime_type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sizeBytes",
+            "columnName": "size_bytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_managed_files_file_id",
+            "unique": true,
+            "columnNames": [
+              "file_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_managed_files_file_id` ON `${TABLE_NAME}` (`file_id`)"
+          },
+          {
+            "name": "index_managed_files_relative_path",
+            "unique": true,
+            "columnNames": [
+              "relative_path"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_managed_files_relative_path` ON `${TABLE_NAME}` (`relative_path`)"
+          },
+          {
+            "name": "index_managed_files_folder",
+            "unique": false,
+            "columnNames": [
+              "folder"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_managed_files_folder` ON `${TABLE_NAME}` (`folder`)"
+          }
+        ]
+      },
+      {
+        "tableName": "media_blob",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`blob_id` TEXT NOT NULL, `sha256` TEXT, `mime_type` TEXT NOT NULL, `size_bytes` INTEGER NOT NULL, `width` INTEGER, `height` INTEGER, `duration_ms` INTEGER, `storage_state` TEXT NOT NULL, `created_at` INTEGER NOT NULL, `verified_at` INTEGER, PRIMARY KEY(`blob_id`))",
+        "fields": [
+          {
+            "fieldPath": "blobId",
+            "columnName": "blob_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sha256",
+            "columnName": "sha256",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "mimeType",
+            "columnName": "mime_type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sizeBytes",
+            "columnName": "size_bytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "width",
+            "columnName": "width",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "height",
+            "columnName": "height",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "durationMs",
+            "columnName": "duration_ms",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "storageState",
+            "columnName": "storage_state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "verifiedAt",
+            "columnName": "verified_at",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "blob_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_media_blob_sha256",
+            "unique": true,
+            "columnNames": [
+              "sha256"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_media_blob_sha256` ON `${TABLE_NAME}` (`sha256`)"
+          },
+          {
+            "name": "index_media_blob_storage_state",
+            "unique": false,
+            "columnNames": [
+              "storage_state"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_media_blob_storage_state` ON `${TABLE_NAME}` (`storage_state`)"
+          }
+        ]
+      },
+      {
+        "tableName": "media_asset_blob",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`asset_id` TEXT NOT NULL, `blob_id` TEXT NOT NULL, `role` TEXT NOT NULL, `created_at` INTEGER NOT NULL, PRIMARY KEY(`asset_id`, `blob_id`, `role`), FOREIGN KEY(`asset_id`) REFERENCES `GenMediaEntity`(`asset_id`) ON UPDATE CASCADE ON DELETE CASCADE , FOREIGN KEY(`blob_id`) REFERENCES `media_blob`(`blob_id`) ON UPDATE CASCADE ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "assetId",
+            "columnName": "asset_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "blobId",
+            "columnName": "blob_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "role",
+            "columnName": "role",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "asset_id",
+            "blob_id",
+            "role"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_media_asset_blob_blob_id",
+            "unique": false,
+            "columnNames": [
+              "blob_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_media_asset_blob_blob_id` ON `${TABLE_NAME}` (`blob_id`)"
+          },
+          {
+            "name": "index_media_asset_blob_asset_id_role",
+            "unique": true,
+            "columnNames": [
+              "asset_id",
+              "role"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_media_asset_blob_asset_id_role` ON `${TABLE_NAME}` (`asset_id`, `role`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "GenMediaEntity",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "asset_id"
+            ],
+            "referencedColumns": [
+              "asset_id"
+            ]
+          },
+          {
+            "table": "media_blob",
+            "onDelete": "NO ACTION",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "blob_id"
+            ],
+            "referencedColumns": [
+              "blob_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "media_replica",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`replica_id` TEXT NOT NULL, `blob_id` TEXT NOT NULL, `kind` TEXT NOT NULL, `managed_file_id` TEXT, `remote_locator` TEXT, `etag` TEXT, `state` TEXT NOT NULL, `encrypted` INTEGER NOT NULL, `verified_at` INTEGER, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`replica_id`), FOREIGN KEY(`blob_id`) REFERENCES `media_blob`(`blob_id`) ON UPDATE CASCADE ON DELETE NO ACTION , FOREIGN KEY(`managed_file_id`) REFERENCES `managed_files`(`file_id`) ON UPDATE CASCADE ON DELETE SET NULL )",
+        "fields": [
+          {
+            "fieldPath": "replicaId",
+            "columnName": "replica_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "blobId",
+            "columnName": "blob_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "managedFileId",
+            "columnName": "managed_file_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "remoteLocator",
+            "columnName": "remote_locator",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "etag",
+            "columnName": "etag",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "encrypted",
+            "columnName": "encrypted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "verifiedAt",
+            "columnName": "verified_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "replica_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_media_replica_blob_id",
+            "unique": false,
+            "columnNames": [
+              "blob_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_media_replica_blob_id` ON `${TABLE_NAME}` (`blob_id`)"
+          },
+          {
+            "name": "index_media_replica_managed_file_id",
+            "unique": true,
+            "columnNames": [
+              "managed_file_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_media_replica_managed_file_id` ON `${TABLE_NAME}` (`managed_file_id`)"
+          },
+          {
+            "name": "index_media_replica_remote_locator",
+            "unique": true,
+            "columnNames": [
+              "remote_locator"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_media_replica_remote_locator` ON `${TABLE_NAME}` (`remote_locator`)"
+          },
+          {
+            "name": "index_media_replica_kind_state",
+            "unique": false,
+            "columnNames": [
+              "kind",
+              "state"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_media_replica_kind_state` ON `${TABLE_NAME}` (`kind`, `state`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "media_blob",
+            "onDelete": "NO ACTION",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "blob_id"
+            ],
+            "referencedColumns": [
+              "blob_id"
+            ]
+          },
+          {
+            "table": "managed_files",
+            "onDelete": "SET NULL",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "managed_file_id"
+            ],
+            "referencedColumns": [
+              "file_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "media_relation",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`relation_id` TEXT NOT NULL, `asset_id` TEXT NOT NULL, `related_asset_id` TEXT NOT NULL, `relation_kind` TEXT NOT NULL, `ordinal` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, PRIMARY KEY(`relation_id`), FOREIGN KEY(`asset_id`) REFERENCES `GenMediaEntity`(`asset_id`) ON UPDATE CASCADE ON DELETE CASCADE , FOREIGN KEY(`related_asset_id`) REFERENCES `GenMediaEntity`(`asset_id`) ON UPDATE CASCADE ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "relationId",
+            "columnName": "relation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "assetId",
+            "columnName": "asset_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "relatedAssetId",
+            "columnName": "related_asset_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "relationKind",
+            "columnName": "relation_kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ordinal",
+            "columnName": "ordinal",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "relation_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_media_relation_asset_id_relation_kind_ordinal",
+            "unique": true,
+            "columnNames": [
+              "asset_id",
+              "relation_kind",
+              "ordinal"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_media_relation_asset_id_relation_kind_ordinal` ON `${TABLE_NAME}` (`asset_id`, `relation_kind`, `ordinal`)"
+          },
+          {
+            "name": "index_media_relation_asset_id_related_asset_id_relation_kind",
+            "unique": true,
+            "columnNames": [
+              "asset_id",
+              "related_asset_id",
+              "relation_kind"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_media_relation_asset_id_related_asset_id_relation_kind` ON `${TABLE_NAME}` (`asset_id`, `related_asset_id`, `relation_kind`)"
+          },
+          {
+            "name": "index_media_relation_related_asset_id",
+            "unique": false,
+            "columnNames": [
+              "related_asset_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_media_relation_related_asset_id` ON `${TABLE_NAME}` (`related_asset_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "GenMediaEntity",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "asset_id"
+            ],
+            "referencedColumns": [
+              "asset_id"
+            ]
+          },
+          {
+            "table": "GenMediaEntity",
+            "onDelete": "NO ACTION",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "related_asset_id"
+            ],
+            "referencedColumns": [
+              "asset_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "message_media_ref",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`ref_id` TEXT NOT NULL, `owner_key` TEXT NOT NULL, `asset_id` TEXT NOT NULL, `conversation_id` TEXT, `message_node_id` TEXT, `message_id` TEXT, `part_id` TEXT, `tool_call_id` TEXT, `created_at` INTEGER NOT NULL, PRIMARY KEY(`ref_id`), FOREIGN KEY(`asset_id`) REFERENCES `GenMediaEntity`(`asset_id`) ON UPDATE CASCADE ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "refId",
+            "columnName": "ref_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ownerKey",
+            "columnName": "owner_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "assetId",
+            "columnName": "asset_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "messageNodeId",
+            "columnName": "message_node_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "messageId",
+            "columnName": "message_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "partId",
+            "columnName": "part_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "toolCallId",
+            "columnName": "tool_call_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "ref_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_message_media_ref_owner_key_asset_id",
+            "unique": true,
+            "columnNames": [
+              "owner_key",
+              "asset_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_message_media_ref_owner_key_asset_id` ON `${TABLE_NAME}` (`owner_key`, `asset_id`)"
+          },
+          {
+            "name": "index_message_media_ref_asset_id",
+            "unique": false,
+            "columnNames": [
+              "asset_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_message_media_ref_asset_id` ON `${TABLE_NAME}` (`asset_id`)"
+          },
+          {
+            "name": "index_message_media_ref_conversation_id",
+            "unique": false,
+            "columnNames": [
+              "conversation_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_message_media_ref_conversation_id` ON `${TABLE_NAME}` (`conversation_id`)"
+          },
+          {
+            "name": "index_message_media_ref_message_node_id",
+            "unique": false,
+            "columnNames": [
+              "message_node_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_message_media_ref_message_node_id` ON `${TABLE_NAME}` (`message_node_id`)"
+          },
+          {
+            "name": "index_message_media_ref_message_id",
+            "unique": false,
+            "columnNames": [
+              "message_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_message_media_ref_message_id` ON `${TABLE_NAME}` (`message_id`)"
+          },
+          {
+            "name": "index_message_media_ref_tool_call_id",
+            "unique": false,
+            "columnNames": [
+              "tool_call_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_message_media_ref_tool_call_id` ON `${TABLE_NAME}` (`tool_call_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "GenMediaEntity",
+            "onDelete": "CASCADE",
+            "onUpdate": "CASCADE",
+            "columns": [
+              "asset_id"
+            ],
+            "referencedColumns": [
+              "asset_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "media_migration_journal",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`journal_id` TEXT NOT NULL, `scope_kind` TEXT NOT NULL, `scope_key` TEXT NOT NULL, `stage` TEXT NOT NULL, `state` TEXT NOT NULL, `detail` TEXT, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`journal_id`))",
+        "fields": [
+          {
+            "fieldPath": "journalId",
+            "columnName": "journal_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scopeKind",
+            "columnName": "scope_kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scopeKey",
+            "columnName": "scope_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stage",
+            "columnName": "stage",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "detail",
+            "columnName": "detail",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "journal_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_media_migration_journal_scope_kind_scope_key_stage",
+            "unique": true,
+            "columnNames": [
+              "scope_kind",
+              "scope_key",
+              "stage"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_media_migration_journal_scope_kind_scope_key_stage` ON `${TABLE_NAME}` (`scope_kind`, `scope_key`, `stage`)"
+          },
+          {
+            "name": "index_media_migration_journal_state_updated_at",
+            "unique": false,
+            "columnNames": [
+              "state",
+              "updated_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_media_migration_journal_state_updated_at` ON `${TABLE_NAME}` (`state`, `updated_at`)"
+          }
+        ]
+      },
+      {
+        "tableName": "favorites",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `type` TEXT NOT NULL, `ref_key` TEXT NOT NULL, `ref_json` TEXT NOT NULL, `snapshot_json` TEXT NOT NULL, `meta_json` TEXT, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "refKey",
+            "columnName": "ref_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "refJson",
+            "columnName": "ref_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "snapshotJson",
+            "columnName": "snapshot_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "metaJson",
+            "columnName": "meta_json",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_favorites_ref_key",
+            "unique": true,
+            "columnNames": [
+              "ref_key"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_favorites_ref_key` ON `${TABLE_NAME}` (`ref_key`)"
+          },
+          {
+            "name": "index_favorites_type",
+            "unique": false,
+            "columnNames": [
+              "type"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_favorites_type` ON `${TABLE_NAME}` (`type`)"
+          },
+          {
+            "name": "index_favorites_created_at",
+            "unique": false,
+            "columnNames": [
+              "created_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_favorites_created_at` ON `${TABLE_NAME}` (`created_at`)"
+          }
+        ]
+      },
+      {
+        "tableName": "workspaces",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `root` TEXT NOT NULL, `shell_status` TEXT NOT NULL, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `last_access_at` INTEGER, `tool_approvals` TEXT NOT NULL DEFAULT '{}', PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "root",
+            "columnName": "root",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "shellStatus",
+            "columnName": "shell_status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastAccessAt",
+            "columnName": "last_access_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "toolApprovals",
+            "columnName": "tool_approvals",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'{}'"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_workspaces_root",
+            "unique": true,
+            "columnNames": [
+              "root"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_workspaces_root` ON `${TABLE_NAME}` (`root`)"
+          },
+          {
+            "name": "index_workspaces_updated_at",
+            "unique": false,
+            "columnNames": [
+              "updated_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_workspaces_updated_at` ON `${TABLE_NAME}` (`updated_at`)"
+          }
+        ]
+      },
+      {
+        "tableName": "conversation_folder",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `assistant_id` TEXT NOT NULL, `name` TEXT NOT NULL, `sort_index` INTEGER NOT NULL DEFAULT 0, `create_at` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "assistantId",
+            "columnName": "assistant_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sortIndex",
+            "columnName": "sort_index",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "createAt",
+            "columnName": "create_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_conversation_folder_assistant_id",
+            "unique": false,
+            "columnNames": [
+              "assistant_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_conversation_folder_assistant_id` ON `${TABLE_NAME}` (`assistant_id`)"
+          }
+        ]
+      },
+      {
+        "tableName": "request_ledger",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`request_id` TEXT NOT NULL, `intent_key` TEXT NOT NULL, `parent_request_id` TEXT, `request_kind` TEXT NOT NULL, `conversation_id` TEXT, `assistant_id` TEXT, `message_id` TEXT, `part_id` TEXT, `legacy_node_id` TEXT, `legacy_message_id` TEXT, `legacy_request_id` TEXT, `workspace_id` TEXT, `mcp_server_id` TEXT, `credential_ref_id` TEXT, `provider_kind` TEXT, `provider_id` TEXT, `model_id` TEXT, `api_surface` TEXT, `input_digest` TEXT NOT NULL, `capability_snapshot_json` TEXT NOT NULL, `resolver_version` INTEGER NOT NULL, `tool_catalog_digest` TEXT, `approval_state` TEXT NOT NULL, `request_state` TEXT NOT NULL, `billable_boundary` TEXT NOT NULL, `attempt_count` INTEGER NOT NULL DEFAULT 0, `active_attempt_id` TEXT, `lease_owner` TEXT, `lease_until` INTEGER, `fencing_epoch` INTEGER NOT NULL DEFAULT 0, `state_revision` INTEGER NOT NULL DEFAULT 0, `billable_at` INTEGER, `dispatch_at` INTEGER, `terminal_at` INTEGER, `remote_request_id` TEXT, `remote_response_id` TEXT, `usage_json` TEXT, `error_kind` TEXT, `error_code` TEXT, `error_message` TEXT, `unknown_outcome_reason` TEXT, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`request_id`), FOREIGN KEY(`parent_request_id`) REFERENCES `request_ledger`(`request_id`) ON UPDATE NO ACTION ON DELETE SET NULL , FOREIGN KEY(`request_id`, `active_attempt_id`) REFERENCES `request_attempt`(`request_id`, `attempt_id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "requestId",
+            "columnName": "request_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "intentKey",
+            "columnName": "intent_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "parentRequestId",
+            "columnName": "parent_request_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "requestKind",
+            "columnName": "request_kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "assistantId",
+            "columnName": "assistant_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "messageId",
+            "columnName": "message_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "partId",
+            "columnName": "part_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "legacyNodeId",
+            "columnName": "legacy_node_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "legacyMessageId",
+            "columnName": "legacy_message_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "legacyRequestId",
+            "columnName": "legacy_request_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "workspaceId",
+            "columnName": "workspace_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "mcpServerId",
+            "columnName": "mcp_server_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "credentialRefId",
+            "columnName": "credential_ref_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "providerKind",
+            "columnName": "provider_kind",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "providerId",
+            "columnName": "provider_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "modelId",
+            "columnName": "model_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "apiSurface",
+            "columnName": "api_surface",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "inputDigest",
+            "columnName": "input_digest",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "capabilitySnapshotJson",
+            "columnName": "capability_snapshot_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "resolverVersion",
+            "columnName": "resolver_version",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "toolCatalogDigest",
+            "columnName": "tool_catalog_digest",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "approvalState",
+            "columnName": "approval_state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "requestState",
+            "columnName": "request_state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "billableBoundary",
+            "columnName": "billable_boundary",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attemptCount",
+            "columnName": "attempt_count",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "activeAttemptId",
+            "columnName": "active_attempt_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "leaseOwner",
+            "columnName": "lease_owner",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "leaseUntil",
+            "columnName": "lease_until",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "fencingEpoch",
+            "columnName": "fencing_epoch",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "stateRevision",
+            "columnName": "state_revision",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "billableAt",
+            "columnName": "billable_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "dispatchAt",
+            "columnName": "dispatch_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "terminalAt",
+            "columnName": "terminal_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "remoteRequestId",
+            "columnName": "remote_request_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "remoteResponseId",
+            "columnName": "remote_response_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "usageJson",
+            "columnName": "usage_json",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "errorKind",
+            "columnName": "error_kind",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "errorCode",
+            "columnName": "error_code",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "errorMessage",
+            "columnName": "error_message",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "unknownOutcomeReason",
+            "columnName": "unknown_outcome_reason",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "request_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_request_ledger_intent_key",
+            "unique": true,
+            "columnNames": [
+              "intent_key"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_request_ledger_intent_key` ON `${TABLE_NAME}` (`intent_key`)"
+          },
+          {
+            "name": "index_request_ledger_parent_request_id",
+            "unique": false,
+            "columnNames": [
+              "parent_request_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_ledger_parent_request_id` ON `${TABLE_NAME}` (`parent_request_id`)"
+          },
+          {
+            "name": "index_request_ledger_conversation_id_created_at",
+            "unique": false,
+            "columnNames": [
+              "conversation_id",
+              "created_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_ledger_conversation_id_created_at` ON `${TABLE_NAME}` (`conversation_id`, `created_at`)"
+          },
+          {
+            "name": "index_request_ledger_request_state_updated_at",
+            "unique": false,
+            "columnNames": [
+              "request_state",
+              "updated_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_ledger_request_state_updated_at` ON `${TABLE_NAME}` (`request_state`, `updated_at`)"
+          },
+          {
+            "name": "index_request_ledger_billable_boundary_updated_at",
+            "unique": false,
+            "columnNames": [
+              "billable_boundary",
+              "updated_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_ledger_billable_boundary_updated_at` ON `${TABLE_NAME}` (`billable_boundary`, `updated_at`)"
+          },
+          {
+            "name": "index_request_ledger_provider_kind_provider_id_model_id",
+            "unique": false,
+            "columnNames": [
+              "provider_kind",
+              "provider_id",
+              "model_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_ledger_provider_kind_provider_id_model_id` ON `${TABLE_NAME}` (`provider_kind`, `provider_id`, `model_id`)"
+          },
+          {
+            "name": "index_request_ledger_request_id_active_attempt_id",
+            "unique": false,
+            "columnNames": [
+              "request_id",
+              "active_attempt_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_ledger_request_id_active_attempt_id` ON `${TABLE_NAME}` (`request_id`, `active_attempt_id`)"
+          },
+          {
+            "name": "index_request_ledger_legacy_request_id",
+            "unique": false,
+            "columnNames": [
+              "legacy_request_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_ledger_legacy_request_id` ON `${TABLE_NAME}` (`legacy_request_id`)"
+          },
+          {
+            "name": "index_request_ledger_remote_request_id",
+            "unique": false,
+            "columnNames": [
+              "remote_request_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_ledger_remote_request_id` ON `${TABLE_NAME}` (`remote_request_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "request_ledger",
+            "onDelete": "SET NULL",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "parent_request_id"
+            ],
+            "referencedColumns": [
+              "request_id"
+            ]
+          },
+          {
+            "table": "request_attempt",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "request_id",
+              "active_attempt_id"
+            ],
+            "referencedColumns": [
+              "request_id",
+              "attempt_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "request_attempt",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`attempt_id` TEXT NOT NULL, `request_id` TEXT NOT NULL, `attempt_ordinal` INTEGER NOT NULL, `idempotency_key` TEXT NOT NULL, `attempt_state` TEXT NOT NULL, `billable_boundary` TEXT NOT NULL, `transport_kind` TEXT, `request_fingerprint` TEXT NOT NULL, `owner_replica_id` TEXT, `foreground_task_id` TEXT, `remote_request_id` TEXT, `remote_response_id` TEXT, `prepared_at` INTEGER NOT NULL, `sent_at` INTEGER, `acknowledged_at` INTEGER, `first_byte_at` INTEGER, `result_received_at` INTEGER, `commit_started_at` INTEGER, `finished_at` INTEGER, `checkpoint_digest` TEXT, `error_kind` TEXT, `error_code` TEXT, `error_message` TEXT, `usage_json` TEXT, `state_revision` INTEGER NOT NULL DEFAULT 0, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`attempt_id`), FOREIGN KEY(`request_id`) REFERENCES `request_ledger`(`request_id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "attemptId",
+            "columnName": "attempt_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "requestId",
+            "columnName": "request_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attemptOrdinal",
+            "columnName": "attempt_ordinal",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "idempotencyKey",
+            "columnName": "idempotency_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attemptState",
+            "columnName": "attempt_state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "billableBoundary",
+            "columnName": "billable_boundary",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "transportKind",
+            "columnName": "transport_kind",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "requestFingerprint",
+            "columnName": "request_fingerprint",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ownerReplicaId",
+            "columnName": "owner_replica_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "foregroundTaskId",
+            "columnName": "foreground_task_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "remoteRequestId",
+            "columnName": "remote_request_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "remoteResponseId",
+            "columnName": "remote_response_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "preparedAt",
+            "columnName": "prepared_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sentAt",
+            "columnName": "sent_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "acknowledgedAt",
+            "columnName": "acknowledged_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "firstByteAt",
+            "columnName": "first_byte_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "resultReceivedAt",
+            "columnName": "result_received_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "commitStartedAt",
+            "columnName": "commit_started_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "finishedAt",
+            "columnName": "finished_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "checkpointDigest",
+            "columnName": "checkpoint_digest",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "errorKind",
+            "columnName": "error_kind",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "errorCode",
+            "columnName": "error_code",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "errorMessage",
+            "columnName": "error_message",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "usageJson",
+            "columnName": "usage_json",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "stateRevision",
+            "columnName": "state_revision",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "attempt_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_request_attempt_request_id_attempt_ordinal",
+            "unique": true,
+            "columnNames": [
+              "request_id",
+              "attempt_ordinal"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_request_attempt_request_id_attempt_ordinal` ON `${TABLE_NAME}` (`request_id`, `attempt_ordinal`)"
+          },
+          {
+            "name": "index_request_attempt_request_id_attempt_id",
+            "unique": true,
+            "columnNames": [
+              "request_id",
+              "attempt_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_request_attempt_request_id_attempt_id` ON `${TABLE_NAME}` (`request_id`, `attempt_id`)"
+          },
+          {
+            "name": "index_request_attempt_idempotency_key",
+            "unique": true,
+            "columnNames": [
+              "idempotency_key"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_request_attempt_idempotency_key` ON `${TABLE_NAME}` (`idempotency_key`)"
+          },
+          {
+            "name": "index_request_attempt_request_id_attempt_state",
+            "unique": false,
+            "columnNames": [
+              "request_id",
+              "attempt_state"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_attempt_request_id_attempt_state` ON `${TABLE_NAME}` (`request_id`, `attempt_state`)"
+          },
+          {
+            "name": "index_request_attempt_remote_request_id",
+            "unique": false,
+            "columnNames": [
+              "remote_request_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_attempt_remote_request_id` ON `${TABLE_NAME}` (`remote_request_id`)"
+          },
+          {
+            "name": "index_request_attempt_foreground_task_id",
+            "unique": false,
+            "columnNames": [
+              "foreground_task_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_attempt_foreground_task_id` ON `${TABLE_NAME}` (`foreground_task_id`)"
+          },
+          {
+            "name": "index_request_attempt_attempt_state_updated_at",
+            "unique": false,
+            "columnNames": [
+              "attempt_state",
+              "updated_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_attempt_attempt_state_updated_at` ON `${TABLE_NAME}` (`attempt_state`, `updated_at`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "request_ledger",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "request_id"
+            ],
+            "referencedColumns": [
+              "request_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "request_output",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`output_id` TEXT NOT NULL, `request_id` TEXT NOT NULL, `attempt_id` TEXT, `output_kind` TEXT NOT NULL, `ordinal` INTEGER NOT NULL, `conversation_id` TEXT, `message_id` TEXT, `part_id` TEXT, `asset_id` TEXT, `source_id` TEXT, `content_digest` TEXT NOT NULL, `committed_at` INTEGER NOT NULL, PRIMARY KEY(`output_id`), FOREIGN KEY(`request_id`) REFERENCES `request_ledger`(`request_id`) ON UPDATE NO ACTION ON DELETE NO ACTION , FOREIGN KEY(`request_id`, `attempt_id`) REFERENCES `request_attempt`(`request_id`, `attempt_id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "outputId",
+            "columnName": "output_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "requestId",
+            "columnName": "request_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attemptId",
+            "columnName": "attempt_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "outputKind",
+            "columnName": "output_kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ordinal",
+            "columnName": "ordinal",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "conversationId",
+            "columnName": "conversation_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "messageId",
+            "columnName": "message_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "partId",
+            "columnName": "part_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "assetId",
+            "columnName": "asset_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sourceId",
+            "columnName": "source_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "contentDigest",
+            "columnName": "content_digest",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "committedAt",
+            "columnName": "committed_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "output_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_request_output_request_id_output_kind_ordinal",
+            "unique": true,
+            "columnNames": [
+              "request_id",
+              "output_kind",
+              "ordinal"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_request_output_request_id_output_kind_ordinal` ON `${TABLE_NAME}` (`request_id`, `output_kind`, `ordinal`)"
+          },
+          {
+            "name": "index_request_output_request_id_attempt_id",
+            "unique": false,
+            "columnNames": [
+              "request_id",
+              "attempt_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_output_request_id_attempt_id` ON `${TABLE_NAME}` (`request_id`, `attempt_id`)"
+          },
+          {
+            "name": "index_request_output_attempt_id",
+            "unique": false,
+            "columnNames": [
+              "attempt_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_output_attempt_id` ON `${TABLE_NAME}` (`attempt_id`)"
+          },
+          {
+            "name": "index_request_output_conversation_id_message_id_part_id",
+            "unique": false,
+            "columnNames": [
+              "conversation_id",
+              "message_id",
+              "part_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_output_conversation_id_message_id_part_id` ON `${TABLE_NAME}` (`conversation_id`, `message_id`, `part_id`)"
+          },
+          {
+            "name": "index_request_output_asset_id",
+            "unique": false,
+            "columnNames": [
+              "asset_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_output_asset_id` ON `${TABLE_NAME}` (`asset_id`)"
+          },
+          {
+            "name": "index_request_output_source_id",
+            "unique": false,
+            "columnNames": [
+              "source_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_output_source_id` ON `${TABLE_NAME}` (`source_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "request_ledger",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "request_id"
+            ],
+            "referencedColumns": [
+              "request_id"
+            ]
+          },
+          {
+            "table": "request_attempt",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "request_id",
+              "attempt_id"
+            ],
+            "referencedColumns": [
+              "request_id",
+              "attempt_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "tool_invocation",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`invocation_id` TEXT NOT NULL, `request_id` TEXT NOT NULL, `attempt_id` TEXT, `provider_tool_call_id` TEXT NOT NULL, `server_id` TEXT, `tool_name` TEXT NOT NULL, `principal_kind` TEXT NOT NULL, `principal_id` TEXT NOT NULL, `action` TEXT NOT NULL, `schema_digest` TEXT NOT NULL, `input_digest` TEXT NOT NULL, `side_effect_class` TEXT NOT NULL, `approval_state` TEXT NOT NULL, `execution_state` TEXT NOT NULL, `permission_id` TEXT, `result_digest` TEXT, `error_kind` TEXT, `error_code` TEXT, `created_at` INTEGER NOT NULL, `approved_at` INTEGER, `started_at` INTEGER, `finished_at` INTEGER, `state_revision` INTEGER NOT NULL DEFAULT 0, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`invocation_id`), FOREIGN KEY(`request_id`) REFERENCES `request_ledger`(`request_id`) ON UPDATE NO ACTION ON DELETE NO ACTION , FOREIGN KEY(`request_id`, `attempt_id`) REFERENCES `request_attempt`(`request_id`, `attempt_id`) ON UPDATE NO ACTION ON DELETE NO ACTION , FOREIGN KEY(`permission_id`) REFERENCES `tool_permission`(`permission_id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "invocationId",
+            "columnName": "invocation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "requestId",
+            "columnName": "request_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attemptId",
+            "columnName": "attempt_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "providerToolCallId",
+            "columnName": "provider_tool_call_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "serverId",
+            "columnName": "server_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "toolName",
+            "columnName": "tool_name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "principalKind",
+            "columnName": "principal_kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "principalId",
+            "columnName": "principal_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "action",
+            "columnName": "action",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "schemaDigest",
+            "columnName": "schema_digest",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "inputDigest",
+            "columnName": "input_digest",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sideEffectClass",
+            "columnName": "side_effect_class",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "approvalState",
+            "columnName": "approval_state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "executionState",
+            "columnName": "execution_state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "permissionId",
+            "columnName": "permission_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "resultDigest",
+            "columnName": "result_digest",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "errorKind",
+            "columnName": "error_kind",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "errorCode",
+            "columnName": "error_code",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "approvedAt",
+            "columnName": "approved_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "startedAt",
+            "columnName": "started_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "finishedAt",
+            "columnName": "finished_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "stateRevision",
+            "columnName": "state_revision",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "invocation_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_tool_invocation_request_id_attempt_id_provider_tool_call_id",
+            "unique": true,
+            "columnNames": [
+              "request_id",
+              "attempt_id",
+              "provider_tool_call_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_tool_invocation_request_id_attempt_id_provider_tool_call_id` ON `${TABLE_NAME}` (`request_id`, `attempt_id`, `provider_tool_call_id`)"
+          },
+          {
+            "name": "index_tool_invocation_request_id_invocation_id",
+            "unique": true,
+            "columnNames": [
+              "request_id",
+              "invocation_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_tool_invocation_request_id_invocation_id` ON `${TABLE_NAME}` (`request_id`, `invocation_id`)"
+          },
+          {
+            "name": "index_tool_invocation_request_id_attempt_id",
+            "unique": false,
+            "columnNames": [
+              "request_id",
+              "attempt_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tool_invocation_request_id_attempt_id` ON `${TABLE_NAME}` (`request_id`, `attempt_id`)"
+          },
+          {
+            "name": "index_tool_invocation_attempt_id",
+            "unique": false,
+            "columnNames": [
+              "attempt_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tool_invocation_attempt_id` ON `${TABLE_NAME}` (`attempt_id`)"
+          },
+          {
+            "name": "index_tool_invocation_server_id_tool_name",
+            "unique": false,
+            "columnNames": [
+              "server_id",
+              "tool_name"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tool_invocation_server_id_tool_name` ON `${TABLE_NAME}` (`server_id`, `tool_name`)"
+          },
+          {
+            "name": "index_tool_invocation_approval_state_execution_state",
+            "unique": false,
+            "columnNames": [
+              "approval_state",
+              "execution_state"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tool_invocation_approval_state_execution_state` ON `${TABLE_NAME}` (`approval_state`, `execution_state`)"
+          },
+          {
+            "name": "index_tool_invocation_permission_id",
+            "unique": false,
+            "columnNames": [
+              "permission_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tool_invocation_permission_id` ON `${TABLE_NAME}` (`permission_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "request_ledger",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "request_id"
+            ],
+            "referencedColumns": [
+              "request_id"
+            ]
+          },
+          {
+            "table": "request_attempt",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "request_id",
+              "attempt_id"
+            ],
+            "referencedColumns": [
+              "request_id",
+              "attempt_id"
+            ]
+          },
+          {
+            "table": "tool_permission",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "permission_id"
+            ],
+            "referencedColumns": [
+              "permission_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "tool_permission",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`permission_id` TEXT NOT NULL, `permission_key` TEXT NOT NULL, `source_request_id` TEXT, `principal_kind` TEXT NOT NULL, `principal_id` TEXT NOT NULL, `server_id` TEXT, `tool_name` TEXT NOT NULL, `action` TEXT NOT NULL, `schema_digest` TEXT NOT NULL, `decision` TEXT NOT NULL, `scope_kind` TEXT NOT NULL, `scope_id` TEXT, `constraints_json` TEXT NOT NULL, `capability_snapshot_json` TEXT NOT NULL, `policy_version` INTEGER NOT NULL, `reason` TEXT, `decided_at` INTEGER NOT NULL, `expires_at` INTEGER, `revoked_at` INTEGER, `state_revision` INTEGER NOT NULL DEFAULT 0, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`permission_id`), FOREIGN KEY(`source_request_id`) REFERENCES `request_ledger`(`request_id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "permissionId",
+            "columnName": "permission_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "permissionKey",
+            "columnName": "permission_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceRequestId",
+            "columnName": "source_request_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "principalKind",
+            "columnName": "principal_kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "principalId",
+            "columnName": "principal_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "serverId",
+            "columnName": "server_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "toolName",
+            "columnName": "tool_name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "action",
+            "columnName": "action",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "schemaDigest",
+            "columnName": "schema_digest",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "decision",
+            "columnName": "decision",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scopeKind",
+            "columnName": "scope_kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scopeId",
+            "columnName": "scope_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "constraintsJson",
+            "columnName": "constraints_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "capabilitySnapshotJson",
+            "columnName": "capability_snapshot_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "policyVersion",
+            "columnName": "policy_version",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "reason",
+            "columnName": "reason",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "decidedAt",
+            "columnName": "decided_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "expiresAt",
+            "columnName": "expires_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "revokedAt",
+            "columnName": "revoked_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "stateRevision",
+            "columnName": "state_revision",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "permission_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_tool_permission_permission_key",
+            "unique": true,
+            "columnNames": [
+              "permission_key"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_tool_permission_permission_key` ON `${TABLE_NAME}` (`permission_key`)"
+          },
+          {
+            "name": "index_tool_permission_source_request_id",
+            "unique": false,
+            "columnNames": [
+              "source_request_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tool_permission_source_request_id` ON `${TABLE_NAME}` (`source_request_id`)"
+          },
+          {
+            "name": "index_tool_permission_principal_kind_principal_id_decision",
+            "unique": false,
+            "columnNames": [
+              "principal_kind",
+              "principal_id",
+              "decision"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tool_permission_principal_kind_principal_id_decision` ON `${TABLE_NAME}` (`principal_kind`, `principal_id`, `decision`)"
+          },
+          {
+            "name": "index_tool_permission_server_id_tool_name_action",
+            "unique": false,
+            "columnNames": [
+              "server_id",
+              "tool_name",
+              "action"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tool_permission_server_id_tool_name_action` ON `${TABLE_NAME}` (`server_id`, `tool_name`, `action`)"
+          },
+          {
+            "name": "index_tool_permission_scope_kind_scope_id",
+            "unique": false,
+            "columnNames": [
+              "scope_kind",
+              "scope_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tool_permission_scope_kind_scope_id` ON `${TABLE_NAME}` (`scope_kind`, `scope_id`)"
+          },
+          {
+            "name": "index_tool_permission_decision_expires_at",
+            "unique": false,
+            "columnNames": [
+              "decision",
+              "expires_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tool_permission_decision_expires_at` ON `${TABLE_NAME}` (`decision`, `expires_at`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "request_ledger",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "source_request_id"
+            ],
+            "referencedColumns": [
+              "request_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "request_audit_event",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`event_id` TEXT NOT NULL, `request_id` TEXT NOT NULL, `event_seq` INTEGER NOT NULL, `attempt_id` TEXT, `invocation_id` TEXT, `permission_id` TEXT, `event_kind` TEXT NOT NULL, `actor_kind` TEXT NOT NULL, `actor_id` TEXT, `payload_digest` TEXT NOT NULL, `payload_json` TEXT NOT NULL, `created_at` INTEGER NOT NULL, PRIMARY KEY(`event_id`), FOREIGN KEY(`request_id`) REFERENCES `request_ledger`(`request_id`) ON UPDATE NO ACTION ON DELETE NO ACTION , FOREIGN KEY(`request_id`, `attempt_id`) REFERENCES `request_attempt`(`request_id`, `attempt_id`) ON UPDATE NO ACTION ON DELETE NO ACTION , FOREIGN KEY(`request_id`, `invocation_id`) REFERENCES `tool_invocation`(`request_id`, `invocation_id`) ON UPDATE NO ACTION ON DELETE NO ACTION , FOREIGN KEY(`invocation_id`) REFERENCES `tool_invocation`(`invocation_id`) ON UPDATE NO ACTION ON DELETE NO ACTION , FOREIGN KEY(`permission_id`) REFERENCES `tool_permission`(`permission_id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "eventId",
+            "columnName": "event_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "requestId",
+            "columnName": "request_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventSeq",
+            "columnName": "event_seq",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attemptId",
+            "columnName": "attempt_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "invocationId",
+            "columnName": "invocation_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "permissionId",
+            "columnName": "permission_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "eventKind",
+            "columnName": "event_kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "actorKind",
+            "columnName": "actor_kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "actorId",
+            "columnName": "actor_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "payloadDigest",
+            "columnName": "payload_digest",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payloadJson",
+            "columnName": "payload_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "event_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_request_audit_event_request_id_event_seq",
+            "unique": true,
+            "columnNames": [
+              "request_id",
+              "event_seq"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_request_audit_event_request_id_event_seq` ON `${TABLE_NAME}` (`request_id`, `event_seq`)"
+          },
+          {
+            "name": "index_request_audit_event_request_id_created_at",
+            "unique": false,
+            "columnNames": [
+              "request_id",
+              "created_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_audit_event_request_id_created_at` ON `${TABLE_NAME}` (`request_id`, `created_at`)"
+          },
+          {
+            "name": "index_request_audit_event_request_id_attempt_id",
+            "unique": false,
+            "columnNames": [
+              "request_id",
+              "attempt_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_audit_event_request_id_attempt_id` ON `${TABLE_NAME}` (`request_id`, `attempt_id`)"
+          },
+          {
+            "name": "index_request_audit_event_request_id_invocation_id",
+            "unique": false,
+            "columnNames": [
+              "request_id",
+              "invocation_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_audit_event_request_id_invocation_id` ON `${TABLE_NAME}` (`request_id`, `invocation_id`)"
+          },
+          {
+            "name": "index_request_audit_event_event_kind_created_at",
+            "unique": false,
+            "columnNames": [
+              "event_kind",
+              "created_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_audit_event_event_kind_created_at` ON `${TABLE_NAME}` (`event_kind`, `created_at`)"
+          },
+          {
+            "name": "index_request_audit_event_attempt_id_created_at",
+            "unique": false,
+            "columnNames": [
+              "attempt_id",
+              "created_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_audit_event_attempt_id_created_at` ON `${TABLE_NAME}` (`attempt_id`, `created_at`)"
+          },
+          {
+            "name": "index_request_audit_event_invocation_id_created_at",
+            "unique": false,
+            "columnNames": [
+              "invocation_id",
+              "created_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_audit_event_invocation_id_created_at` ON `${TABLE_NAME}` (`invocation_id`, `created_at`)"
+          },
+          {
+            "name": "index_request_audit_event_permission_id_created_at",
+            "unique": false,
+            "columnNames": [
+              "permission_id",
+              "created_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_audit_event_permission_id_created_at` ON `${TABLE_NAME}` (`permission_id`, `created_at`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "request_ledger",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "request_id"
+            ],
+            "referencedColumns": [
+              "request_id"
+            ]
+          },
+          {
+            "table": "request_attempt",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "request_id",
+              "attempt_id"
+            ],
+            "referencedColumns": [
+              "request_id",
+              "attempt_id"
+            ]
+          },
+          {
+            "table": "tool_invocation",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "request_id",
+              "invocation_id"
+            ],
+            "referencedColumns": [
+              "request_id",
+              "invocation_id"
+            ]
+          },
+          {
+            "table": "tool_invocation",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "invocation_id"
+            ],
+            "referencedColumns": [
+              "invocation_id"
+            ]
+          },
+          {
+            "table": "tool_permission",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "permission_id"
+            ],
+            "referencedColumns": [
+              "permission_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "tool_audit_event",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`event_id` TEXT NOT NULL, `request_id` TEXT, `invocation_id` TEXT, `permission_id` TEXT, `event_kind` TEXT NOT NULL, `actor_kind` TEXT NOT NULL, `actor_id` TEXT, `summary` TEXT NOT NULL, `payload_digest` TEXT NOT NULL, `created_at` INTEGER NOT NULL, PRIMARY KEY(`event_id`), FOREIGN KEY(`request_id`) REFERENCES `request_ledger`(`request_id`) ON UPDATE NO ACTION ON DELETE NO ACTION , FOREIGN KEY(`request_id`, `invocation_id`) REFERENCES `tool_invocation`(`request_id`, `invocation_id`) ON UPDATE NO ACTION ON DELETE NO ACTION , FOREIGN KEY(`invocation_id`) REFERENCES `tool_invocation`(`invocation_id`) ON UPDATE NO ACTION ON DELETE NO ACTION , FOREIGN KEY(`permission_id`) REFERENCES `tool_permission`(`permission_id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "eventId",
+            "columnName": "event_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "requestId",
+            "columnName": "request_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "invocationId",
+            "columnName": "invocation_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "permissionId",
+            "columnName": "permission_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "eventKind",
+            "columnName": "event_kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "actorKind",
+            "columnName": "actor_kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "actorId",
+            "columnName": "actor_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "summary",
+            "columnName": "summary",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payloadDigest",
+            "columnName": "payload_digest",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "event_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_tool_audit_event_request_id_created_at",
+            "unique": false,
+            "columnNames": [
+              "request_id",
+              "created_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tool_audit_event_request_id_created_at` ON `${TABLE_NAME}` (`request_id`, `created_at`)"
+          },
+          {
+            "name": "index_tool_audit_event_request_id_invocation_id",
+            "unique": false,
+            "columnNames": [
+              "request_id",
+              "invocation_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tool_audit_event_request_id_invocation_id` ON `${TABLE_NAME}` (`request_id`, `invocation_id`)"
+          },
+          {
+            "name": "index_tool_audit_event_invocation_id_created_at",
+            "unique": false,
+            "columnNames": [
+              "invocation_id",
+              "created_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tool_audit_event_invocation_id_created_at` ON `${TABLE_NAME}` (`invocation_id`, `created_at`)"
+          },
+          {
+            "name": "index_tool_audit_event_permission_id_created_at",
+            "unique": false,
+            "columnNames": [
+              "permission_id",
+              "created_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tool_audit_event_permission_id_created_at` ON `${TABLE_NAME}` (`permission_id`, `created_at`)"
+          },
+          {
+            "name": "index_tool_audit_event_event_kind_created_at",
+            "unique": false,
+            "columnNames": [
+              "event_kind",
+              "created_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tool_audit_event_event_kind_created_at` ON `${TABLE_NAME}` (`event_kind`, `created_at`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "request_ledger",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "request_id"
+            ],
+            "referencedColumns": [
+              "request_id"
+            ]
+          },
+          {
+            "table": "tool_invocation",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "request_id",
+              "invocation_id"
+            ],
+            "referencedColumns": [
+              "request_id",
+              "invocation_id"
+            ]
+          },
+          {
+            "table": "tool_invocation",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "invocation_id"
+            ],
+            "referencedColumns": [
+              "invocation_id"
+            ]
+          },
+          {
+            "table": "tool_permission",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "permission_id"
+            ],
+            "referencedColumns": [
+              "permission_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "request_migration_journal",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`journal_id` TEXT NOT NULL, `source_kind` TEXT NOT NULL, `source_id` TEXT NOT NULL, `phase` TEXT NOT NULL, `source_digest` TEXT, `expected_count` INTEGER, `migrated_count` INTEGER NOT NULL DEFAULT 0, `cursor_json` TEXT, `checkpoint_digest` TEXT, `legacy_retained` INTEGER NOT NULL DEFAULT 1, `attempts` INTEGER NOT NULL DEFAULT 0, `last_error_code` TEXT, `last_error_detail` TEXT, `lease_owner` TEXT, `lease_until` INTEGER, `fencing_epoch` INTEGER NOT NULL DEFAULT 0, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `completed_at` INTEGER, PRIMARY KEY(`journal_id`))",
+        "fields": [
+          {
+            "fieldPath": "journalId",
+            "columnName": "journal_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceKind",
+            "columnName": "source_kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceId",
+            "columnName": "source_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "phase",
+            "columnName": "phase",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceDigest",
+            "columnName": "source_digest",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "expectedCount",
+            "columnName": "expected_count",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "migratedCount",
+            "columnName": "migrated_count",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "cursorJson",
+            "columnName": "cursor_json",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "checkpointDigest",
+            "columnName": "checkpoint_digest",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "legacyRetained",
+            "columnName": "legacy_retained",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "1"
+          },
+          {
+            "fieldPath": "attempts",
+            "columnName": "attempts",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "lastErrorCode",
+            "columnName": "last_error_code",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastErrorDetail",
+            "columnName": "last_error_detail",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "leaseOwner",
+            "columnName": "lease_owner",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "leaseUntil",
+            "columnName": "lease_until",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "fencingEpoch",
+            "columnName": "fencing_epoch",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "completedAt",
+            "columnName": "completed_at",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "journal_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_request_migration_journal_source_kind_source_id",
+            "unique": true,
+            "columnNames": [
+              "source_kind",
+              "source_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_request_migration_journal_source_kind_source_id` ON `${TABLE_NAME}` (`source_kind`, `source_id`)"
+          },
+          {
+            "name": "index_request_migration_journal_phase_lease_until",
+            "unique": false,
+            "columnNames": [
+              "phase",
+              "lease_until"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_request_migration_journal_phase_lease_until` ON `${TABLE_NAME}` (`phase`, `lease_until`)"
+          }
+        ]
+      },
+      {
+        "tableName": "sync_replica",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`replica_id` TEXT NOT NULL, `space_id` TEXT NOT NULL, `sync_epoch` TEXT NOT NULL, `device_label` TEXT, `operation_counter` INTEGER NOT NULL DEFAULT 0, `hlc_physical_ms` INTEGER NOT NULL DEFAULT 0, `hlc_logical` INTEGER NOT NULL DEFAULT 0, `acknowledged_vector_json` TEXT NOT NULL DEFAULT '{}', `last_successful_sync_at` INTEGER, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`replica_id`))",
+        "fields": [
+          {
+            "fieldPath": "replicaId",
+            "columnName": "replica_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "spaceId",
+            "columnName": "space_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncEpoch",
+            "columnName": "sync_epoch",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deviceLabel",
+            "columnName": "device_label",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "operationCounter",
+            "columnName": "operation_counter",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "hlcPhysicalMs",
+            "columnName": "hlc_physical_ms",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "hlcLogical",
+            "columnName": "hlc_logical",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "acknowledgedVectorJson",
+            "columnName": "acknowledged_vector_json",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'{}'"
+          },
+          {
+            "fieldPath": "lastSuccessfulSyncAt",
+            "columnName": "last_successful_sync_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "replica_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_sync_replica_space_id",
+            "unique": false,
+            "columnNames": [
+              "space_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sync_replica_space_id` ON `${TABLE_NAME}` (`space_id`)"
+          },
+          {
+            "name": "index_sync_replica_updated_at",
+            "unique": false,
+            "columnNames": [
+              "updated_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sync_replica_updated_at` ON `${TABLE_NAME}` (`updated_at`)"
+          },
+          {
+            "name": "index_sync_replica_space_epoch_replica",
+            "unique": true,
+            "columnNames": [
+              "space_id",
+              "sync_epoch",
+              "replica_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_sync_replica_space_epoch_replica` ON `${TABLE_NAME}` (`space_id`, `sync_epoch`, `replica_id`)"
+          }
+        ]
+      },
+      {
+        "tableName": "sync_record_head",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`space_id` TEXT NOT NULL, `sync_epoch` TEXT NOT NULL, `entity_type` TEXT NOT NULL, `entity_id` TEXT NOT NULL, `operation_id` TEXT NOT NULL, `dot_replica_id` TEXT NOT NULL, `dot_counter` INTEGER NOT NULL, `writer_replica_id` TEXT NOT NULL, `causal_vector_json` TEXT NOT NULL, `hlc_physical_ms` INTEGER NOT NULL, `hlc_logical` INTEGER NOT NULL, `payload_hash` TEXT, `tombstone` INTEGER NOT NULL DEFAULT 0, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`space_id`, `sync_epoch`, `entity_type`, `entity_id`))",
+        "fields": [
+          {
+            "fieldPath": "spaceId",
+            "columnName": "space_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncEpoch",
+            "columnName": "sync_epoch",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "entityType",
+            "columnName": "entity_type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "entityId",
+            "columnName": "entity_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "operationId",
+            "columnName": "operation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dotReplicaId",
+            "columnName": "dot_replica_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dotCounter",
+            "columnName": "dot_counter",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "writerReplicaId",
+            "columnName": "writer_replica_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "causalVectorJson",
+            "columnName": "causal_vector_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hlcPhysicalMs",
+            "columnName": "hlc_physical_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hlcLogical",
+            "columnName": "hlc_logical",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payloadHash",
+            "columnName": "payload_hash",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "tombstone",
+            "columnName": "tombstone",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "space_id",
+            "sync_epoch",
+            "entity_type",
+            "entity_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_sync_record_head_operation_id",
+            "unique": true,
+            "columnNames": [
+              "operation_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_sync_record_head_operation_id` ON `${TABLE_NAME}` (`operation_id`)"
+          },
+          {
+            "name": "index_sync_record_head_dot",
+            "unique": true,
+            "columnNames": [
+              "dot_replica_id",
+              "dot_counter"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_sync_record_head_dot` ON `${TABLE_NAME}` (`dot_replica_id`, `dot_counter`)"
+          },
+          {
+            "name": "index_sync_record_head_writer",
+            "unique": false,
+            "columnNames": [
+              "writer_replica_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sync_record_head_writer` ON `${TABLE_NAME}` (`writer_replica_id`)"
+          },
+          {
+            "name": "index_sync_record_head_updated_at",
+            "unique": false,
+            "columnNames": [
+              "updated_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sync_record_head_updated_at` ON `${TABLE_NAME}` (`updated_at`)"
+          }
+        ]
+      },
+      {
+        "tableName": "sync_outbox",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`operation_id` TEXT NOT NULL, `space_id` TEXT NOT NULL, `sync_epoch` TEXT NOT NULL, `replica_id` TEXT NOT NULL, `sequence` INTEGER NOT NULL, `entity_type` TEXT NOT NULL, `entity_id` TEXT NOT NULL, `base_vector_json` TEXT NOT NULL, `dot_counter` INTEGER NOT NULL, `hlc_physical_ms` INTEGER NOT NULL, `hlc_logical` INTEGER NOT NULL, `payload_hash` TEXT, `tombstone` INTEGER NOT NULL DEFAULT 0, `envelope_bytes` BLOB NOT NULL, `state` TEXT NOT NULL, `attempt_count` INTEGER NOT NULL DEFAULT 0, `next_attempt_at` INTEGER NOT NULL, `lease_owner` TEXT, `lease_until` INTEGER, `remote_etag` TEXT, `last_error` TEXT, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `uploaded_at` INTEGER, PRIMARY KEY(`operation_id`), FOREIGN KEY(`space_id`, `sync_epoch`, `replica_id`) REFERENCES `sync_replica`(`space_id`, `sync_epoch`, `replica_id`) ON UPDATE NO ACTION ON DELETE NO ACTION , FOREIGN KEY(`space_id`, `sync_epoch`, `entity_type`, `entity_id`) REFERENCES `sync_record_head`(`space_id`, `sync_epoch`, `entity_type`, `entity_id`) ON UPDATE NO ACTION ON DELETE NO ACTION )",
+        "fields": [
+          {
+            "fieldPath": "operationId",
+            "columnName": "operation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "spaceId",
+            "columnName": "space_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncEpoch",
+            "columnName": "sync_epoch",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "replicaId",
+            "columnName": "replica_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sequence",
+            "columnName": "sequence",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "entityType",
+            "columnName": "entity_type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "entityId",
+            "columnName": "entity_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseVectorJson",
+            "columnName": "base_vector_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dotCounter",
+            "columnName": "dot_counter",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hlcPhysicalMs",
+            "columnName": "hlc_physical_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hlcLogical",
+            "columnName": "hlc_logical",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payloadHash",
+            "columnName": "payload_hash",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "tombstone",
+            "columnName": "tombstone",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "envelopeBytes",
+            "columnName": "envelope_bytes",
+            "affinity": "BLOB",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attemptCount",
+            "columnName": "attempt_count",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "nextAttemptAt",
+            "columnName": "next_attempt_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "leaseOwner",
+            "columnName": "lease_owner",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "leaseUntil",
+            "columnName": "lease_until",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "remoteEtag",
+            "columnName": "remote_etag",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastError",
+            "columnName": "last_error",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "uploadedAt",
+            "columnName": "uploaded_at",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "operation_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_sync_outbox_replica_sequence",
+            "unique": true,
+            "columnNames": [
+              "space_id",
+              "sync_epoch",
+              "replica_id",
+              "sequence"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_sync_outbox_replica_sequence` ON `${TABLE_NAME}` (`space_id`, `sync_epoch`, `replica_id`, `sequence`)"
+          },
+          {
+            "name": "index_sync_outbox_record",
+            "unique": false,
+            "columnNames": [
+              "space_id",
+              "sync_epoch",
+              "entity_type",
+              "entity_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sync_outbox_record` ON `${TABLE_NAME}` (`space_id`, `sync_epoch`, `entity_type`, `entity_id`)"
+          },
+          {
+            "name": "index_sync_outbox_due",
+            "unique": false,
+            "columnNames": [
+              "space_id",
+              "sync_epoch",
+              "replica_id",
+              "state",
+              "next_attempt_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sync_outbox_due` ON `${TABLE_NAME}` (`space_id`, `sync_epoch`, `replica_id`, `state`, `next_attempt_at`)"
+          },
+          {
+            "name": "index_sync_outbox_lease",
+            "unique": false,
+            "columnNames": [
+              "lease_until"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sync_outbox_lease` ON `${TABLE_NAME}` (`lease_until`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "sync_replica",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "space_id",
+              "sync_epoch",
+              "replica_id"
+            ],
+            "referencedColumns": [
+              "space_id",
+              "sync_epoch",
+              "replica_id"
+            ]
+          },
+          {
+            "table": "sync_record_head",
+            "onDelete": "NO ACTION",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "space_id",
+              "sync_epoch",
+              "entity_type",
+              "entity_id"
+            ],
+            "referencedColumns": [
+              "space_id",
+              "sync_epoch",
+              "entity_type",
+              "entity_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "sync_conflict",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`conflict_id` TEXT NOT NULL, `space_id` TEXT NOT NULL, `sync_epoch` TEXT NOT NULL, `entity_type` TEXT NOT NULL, `entity_id` TEXT NOT NULL, `local_operation_id` TEXT NOT NULL, `remote_operation_id` TEXT NOT NULL, `base_vector_json` TEXT NOT NULL, `local_head_json` TEXT NOT NULL, `remote_head_json` TEXT NOT NULL, `classification` TEXT NOT NULL, `resolution_state` TEXT NOT NULL, `auto_mergeable` INTEGER NOT NULL DEFAULT 0, `resolved_operation_id` TEXT, `detected_at` INTEGER NOT NULL, `resolved_at` INTEGER, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`conflict_id`), FOREIGN KEY(`space_id`, `sync_epoch`, `entity_type`, `entity_id`) REFERENCES `sync_record_head`(`space_id`, `sync_epoch`, `entity_type`, `entity_id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "conflictId",
+            "columnName": "conflict_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "spaceId",
+            "columnName": "space_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncEpoch",
+            "columnName": "sync_epoch",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "entityType",
+            "columnName": "entity_type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "entityId",
+            "columnName": "entity_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "localOperationId",
+            "columnName": "local_operation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteOperationId",
+            "columnName": "remote_operation_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "baseVectorJson",
+            "columnName": "base_vector_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "localHeadJson",
+            "columnName": "local_head_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteHeadJson",
+            "columnName": "remote_head_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "classification",
+            "columnName": "classification",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "resolutionState",
+            "columnName": "resolution_state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "autoMergeable",
+            "columnName": "auto_mergeable",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "resolvedOperationId",
+            "columnName": "resolved_operation_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "detectedAt",
+            "columnName": "detected_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "resolvedAt",
+            "columnName": "resolved_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "conflict_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_sync_conflict_identity",
+            "unique": true,
+            "columnNames": [
+              "space_id",
+              "sync_epoch",
+              "entity_type",
+              "entity_id",
+              "local_operation_id",
+              "remote_operation_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_sync_conflict_identity` ON `${TABLE_NAME}` (`space_id`, `sync_epoch`, `entity_type`, `entity_id`, `local_operation_id`, `remote_operation_id`)"
+          },
+          {
+            "name": "index_sync_conflict_state",
+            "unique": false,
+            "columnNames": [
+              "resolution_state",
+              "updated_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sync_conflict_state` ON `${TABLE_NAME}` (`resolution_state`, `updated_at`)"
+          },
+          {
+            "name": "index_sync_conflict_record",
+            "unique": false,
+            "columnNames": [
+              "space_id",
+              "sync_epoch",
+              "entity_type",
+              "entity_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sync_conflict_record` ON `${TABLE_NAME}` (`space_id`, `sync_epoch`, `entity_type`, `entity_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "sync_record_head",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "space_id",
+              "sync_epoch",
+              "entity_type",
+              "entity_id"
+            ],
+            "referencedColumns": [
+              "space_id",
+              "sync_epoch",
+              "entity_type",
+              "entity_id"
+            ]
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'cd60adfe09461215cdc1f9dd24eb2b4b')"
+    ]
+  }
+}

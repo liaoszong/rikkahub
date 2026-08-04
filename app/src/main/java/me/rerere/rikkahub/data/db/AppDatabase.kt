@@ -16,6 +16,7 @@ import me.rerere.rikkahub.data.db.dao.ManagedFileDAO
 import me.rerere.rikkahub.data.db.dao.MemoryDAO
 import me.rerere.rikkahub.data.db.dao.MessageNodeDAO
 import me.rerere.rikkahub.data.db.dao.MessageFtsOutboxDAO
+import me.rerere.rikkahub.data.db.dao.SyncV2DAO
 import me.rerere.rikkahub.data.db.dao.WorkspaceDAO
 import me.rerere.rikkahub.data.db.entity.ConversationEntity
 import me.rerere.rikkahub.data.db.entity.ConversationMessageEntity
@@ -36,6 +37,10 @@ import me.rerere.rikkahub.data.db.entity.MessageBranchGroupEntity
 import me.rerere.rikkahub.data.db.entity.MessageFtsOutboxEntity
 import me.rerere.rikkahub.data.db.entity.MessageNodeEntity
 import me.rerere.rikkahub.data.db.entity.MessagePartEntity
+import me.rerere.rikkahub.data.db.entity.SyncConflictEntity
+import me.rerere.rikkahub.data.db.entity.SyncOutboxEntity
+import me.rerere.rikkahub.data.db.entity.SyncRecordHeadEntity
+import me.rerere.rikkahub.data.db.entity.SyncReplicaEntity
 import me.rerere.rikkahub.data.db.entity.WorkspaceEntity
 import me.rerere.rikkahub.data.db.migrations.Migration_16_17
 import me.rerere.rikkahub.data.db.migrations.Migration_22_23
@@ -81,8 +86,12 @@ import me.rerere.rikkahub.utils.JsonInstant
         RequestAuditEventEntity::class,
         ToolAuditEventEntity::class,
         RequestMigrationJournalEntity::class,
+        SyncReplicaEntity::class,
+        SyncRecordHeadEntity::class,
+        SyncOutboxEntity::class,
+        SyncConflictEntity::class,
     ],
-    version = 29,
+    version = 30,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
@@ -129,6 +138,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun folderDao(): FolderDAO
 
     abstract fun requestLedgerDao(): RequestLedgerDAO
+
+    abstract fun syncV2Dao(): SyncV2DAO
 }
 
 object TokenUsageConverter {
