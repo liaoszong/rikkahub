@@ -14,10 +14,12 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.db.AppDatabase
 import me.rerere.rikkahub.data.db.entity.ConversationEntity
+import me.rerere.rikkahub.data.db.entity.CitationValues
 import me.rerere.rikkahub.data.db.entity.ConversationMigrationJournalEntity
 import me.rerere.rikkahub.data.db.entity.ConversationV2Values
 import me.rerere.rikkahub.data.db.entity.FavoriteEntity
@@ -78,6 +80,7 @@ class ConversationV2CutoverTest {
             database.conversationGraphDao(),
             database.conversationMigrationDao(),
             JsonInstant,
+            database.citationDao(),
         )
         val mediaReferenceIndexer = ConversationMediaReferenceIndexer(
             database = database,
@@ -99,6 +102,7 @@ class ConversationV2CutoverTest {
             json = JsonInstant,
             mediaReferenceIndexer = mediaReferenceIndexer,
             mediaReferenceBackfillScheduler = MediaReferenceBackfillScheduler {},
+            citationDAO = database.citationDao(),
             nowMillis = { ++clock },
         )
         val ftsManager = MessageFtsManager(database)
@@ -326,6 +330,507 @@ class ConversationV2CutoverTest {
 
         assertEquals(0L, error.expectedRevision)
         assertEquals(1L, error.actualRevision)
+    }
+
+    @Test
+    fun liveWriteMakesNormalizedCitationRowsAuthoritativeInSameRevision() = runBlocking {
+        val sourceMessage = message(51, "answer").copy(
+            role = MessageRole.ASSISTANT,
+            annotations = listOf(
+                UIMessageAnnotation.UrlCitation(
+                    title = "Example",
+                    url = "https://EXAMPLE.com:443/source#fragment",
+                    providerMetadata = JsonObject(
+                        mapOf("authorization" to JsonPrimitive("Bearer must-not-persist")),
+                    ),
+                ),
+            ),
+        )
+        val inserted = writer.insert(conversation("citation-live", listOf(node(51, sourceMessage))))
+        val rows = database.citationDao().getResolvedCitations(inserted.id.toString())
+        val journal = requireNotNull(database.citationDao().getJournal(inserted.id.toString()))
+
+        assertEquals(1, rows.size)
+        assertEquals("https://example.com/source", rows.single().canonicalUrl)
+        assertTrue(!rows.single().providerMetadataJson.contains("must-not-persist"))
+        assertTrue(rows.single().providerMetadataJson.contains("[redacted]"))
+        assertEquals(inserted.storageRevision, journal.sourceRevision)
+        assertEquals(1, journal.citationCount)
+        val projected = requireNotNull(projector.loadReady(inserted.id.toString()))
+        val annotation = projected.nodes.single().messages.single().annotations.single()
+            as UIMessageAnnotation.UrlCitation
+        assertEquals(rows.single().sourceId, annotation.sourceId)
+        assertEquals(rows.single().citationId, annotation.citationId)
+
+        val metadataOnly = writer.update(inserted.copy(title = "citation-live-renamed"))
+        assertEquals(
+            requireNotNull(projector.loadReady(inserted.id.toString())).asLegacyMessageNodes(),
+            metadataOnly.messageNodes,
+        )
+        assertEquals(
+            metadataOnly.storageRevision,
+            database.citationDao().getJournal(inserted.id.toString())?.sourceRevision,
+        )
+        assertEquals(rows.single().citationId, database.citationDao().getResolvedCitations(inserted.id.toString()).single().citationId)
+    }
+
+    @Test
+    fun authoritativeCitationHydrationPagesLongConversationsWithoutLosingOccurrences() = runBlocking {
+        val nodes = List(3) { messageIndex ->
+            val seed = 151 + messageIndex
+            node(
+                seed,
+                message(seed, "answer-$messageIndex").copy(
+                    role = MessageRole.ASSISTANT,
+                    annotations = List(100) { citationIndex ->
+                        UIMessageAnnotation.UrlCitation(
+                            title = "Source $citationIndex in message $messageIndex",
+                            url = "https://example.com/source/$citationIndex",
+                            quote = "quote-$messageIndex-$citationIndex",
+                        )
+                    },
+                ),
+            )
+        }
+        val inserted = writer.insert(conversation("citation-paged-hydration", nodes))
+        val journal = requireNotNull(database.citationDao().getJournal(inserted.id.toString()))
+
+        val projected = requireNotNull(projector.loadReady(inserted.id.toString()))
+        val annotations = projected.nodes.flatMap { node ->
+            node.messages.single().annotations.filterIsInstance<UIMessageAnnotation.UrlCitation>()
+        }
+
+        assertEquals(300, journal.citationCount)
+        assertEquals(3, projected.nodes.size)
+        assertTrue(projected.nodes.all { it.messages.single().annotations.size == 100 })
+        assertEquals(300, annotations.size)
+        assertEquals(300, annotations.mapNotNull { it.citationId }.distinct().size)
+        assertEquals(100, annotations.mapNotNull { it.sourceId }.distinct().size)
+    }
+
+    @Test
+    fun writerReturnsOccurrenceSnapshotWithoutSharedSourceRewritingHistory() = runBlocking {
+        val url = "https://example.com/shared-authority"
+        writer.insert(
+            conversation(
+                "citation-rich-source",
+                listOf(
+                    node(
+                        57,
+                        message(57, "rich").copy(
+                            role = MessageRole.ASSISTANT,
+                            annotations = listOf(
+                                UIMessageAnnotation.UrlCitation(
+                                    title = "A much richer authoritative source title",
+                                    url = url,
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val inserted = writer.insert(
+            conversation(
+                "citation-poor-source",
+                listOf(
+                    node(
+                        58,
+                        message(58, "poor").copy(
+                            role = MessageRole.ASSISTANT,
+                            annotations = listOf(UIMessageAnnotation.UrlCitation(title = "Short", url = url)),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val insertedProjection = requireNotNull(projector.loadReady(inserted.id.toString()))
+        assertEquals(insertedProjection.asLegacyMessageNodes(), inserted.messageNodes)
+        assertEquals(
+            "Short",
+            (inserted.messageNodes.single().messages.single().annotations.single()
+                as UIMessageAnnotation.UrlCitation).title,
+        )
+        val resolved = database.citationDao().getResolvedCitations(inserted.id.toString()).single()
+        assertEquals("A much richer authoritative source title", resolved.title)
+        assertEquals("Short", resolved.displayTitle)
+
+        val noOp = writer.patchMetadata(inserted, ConversationMetadataPatch())
+        assertEquals(
+            requireNotNull(projector.loadReady(inserted.id.toString())).asLegacyMessageNodes(),
+            noOp.messageNodes,
+        )
+        val changed = writer.patchMetadata(
+            noOp,
+            ConversationMetadataPatch(title = ConversationMetadataField.Set("renamed")),
+        )
+        assertEquals(
+            requireNotNull(projector.loadReady(inserted.id.toString())).asLegacyMessageNodes(),
+            changed.messageNodes,
+        )
+    }
+
+    @Test
+    fun unavailableOccurrenceDoesNotTombstoneSameUrlInOtherConversation() = runBlocking {
+        val url = "https://example.com/occurrence-availability"
+        val available = writer.insert(
+            conversation(
+                "citation-available",
+                listOf(
+                    node(
+                        59,
+                        message(59, "available").copy(
+                            role = MessageRole.ASSISTANT,
+                            annotations = listOf(
+                                UIMessageAnnotation.UrlCitation(title = "Available", url = url),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val unavailable = writer.insert(
+            conversation(
+                "citation-unavailable",
+                listOf(
+                    node(
+                        60,
+                        message(60, "unavailable").copy(
+                            role = MessageRole.ASSISTANT,
+                            annotations = listOf(
+                                UIMessageAnnotation.UrlCitation(
+                                    title = "Unavailable snapshot",
+                                    url = url,
+                                    isAvailable = false,
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val availableAnnotation = requireNotNull(projector.loadReady(available.id.toString()))
+            .nodes.single().messages.single().annotations.single() as UIMessageAnnotation.UrlCitation
+        val unavailableAnnotation = requireNotNull(projector.loadReady(unavailable.id.toString()))
+            .nodes.single().messages.single().annotations.single() as UIMessageAnnotation.UrlCitation
+        val sourceRow = database.citationDao().getResolvedCitations(available.id.toString()).single()
+
+        assertTrue(availableAnnotation.isAvailable)
+        assertTrue(!unavailableAnnotation.isAvailable)
+        assertNull(sourceRow.sourceDeletedAt)
+    }
+
+    @Test
+    fun softDeletedCitationSourceKeepsOrdinalButProjectsAsUnavailable() = runBlocking {
+        val sourceMessage = message(53, "answer").copy(
+            role = MessageRole.ASSISTANT,
+            annotations = listOf(
+                UIMessageAnnotation.UrlCitation(
+                    title = "Example",
+                    url = "https://example.com/source",
+                ),
+            ),
+        )
+        val inserted = writer.insert(conversation("citation-deleted-source", listOf(node(53, sourceMessage))))
+        val row = database.citationDao().getResolvedCitations(inserted.id.toString()).single()
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE citation_source SET deleted_at = ? WHERE source_id = ?",
+            arrayOf<Any>(123_456L, row.sourceId),
+        )
+
+        val projected = requireNotNull(projector.loadReady(inserted.id.toString()))
+        val annotation = projected.nodes.single().messages.single().annotations.single()
+            as UIMessageAnnotation.UrlCitation
+
+        assertEquals(row.citationId, annotation.citationId)
+        assertEquals(row.sourceId, annotation.sourceId)
+        assertEquals(row.ordinal, annotation.ordinal)
+        assertEquals("Example", annotation.title)
+        assertEquals("https://example.com/source", annotation.url)
+        assertTrue(!annotation.isAvailable)
+
+        val updated = writer.update(
+            inserted.copy(messageNodes = listOf(node(53, projected.nodes.single().messages.single()))),
+        )
+        val afterUpdateRow = database.citationDao().getResolvedCitations(updated.id.toString()).single()
+        val afterUpdateAnnotation = requireNotNull(projector.loadReady(updated.id.toString()))
+            .nodes.single().messages.single().annotations.single() as UIMessageAnnotation.UrlCitation
+
+        assertEquals(row.citationId, afterUpdateRow.citationId)
+        assertEquals(123_456L, afterUpdateRow.sourceDeletedAt)
+        assertEquals(row.ordinal, afterUpdateRow.ordinal)
+        assertEquals("Example", afterUpdateRow.title)
+        assertTrue(!afterUpdateAnnotation.isAvailable)
+        assertEquals("Example", afterUpdateAnnotation.title)
+    }
+
+    @Test
+    fun forkedConversationCannotMoveCitationRowsOutOfSourceConversation() = runBlocking {
+        val sourceMessage = message(54, "answer").copy(
+            role = MessageRole.ASSISTANT,
+            annotations = listOf(
+                UIMessageAnnotation.UrlCitation(
+                    title = "Example",
+                    url = "https://example.com/fork-source",
+                ),
+            ),
+        )
+        val source = writer.insert(conversation("citation-fork-source", listOf(node(54, sourceMessage))))
+        val normalizedMessage = requireNotNull(projector.loadReady(source.id.toString()))
+            .nodes.single().messages.single()
+        val sourceRow = database.citationDao().getResolvedCitations(source.id.toString()).single()
+
+        val fork = writer.insert(conversation("citation-fork-target", listOf(node(55, normalizedMessage))))
+        val forkRow = database.citationDao().getResolvedCitations(fork.id.toString()).single()
+
+        assertEquals(sourceRow.sourceId, forkRow.sourceId)
+        assertTrue(sourceRow.citationId != forkRow.citationId)
+        assertEquals(source.id.toString(), sourceRow.conversationId)
+        assertEquals(fork.id.toString(), forkRow.conversationId)
+        assertEquals(
+            sourceRow.citationId,
+            database.citationDao().getResolvedCitations(source.id.toString()).single().citationId,
+        )
+        assertEquals(
+            sourceRow.citationId,
+            (requireNotNull(projector.loadReady(source.id.toString()))
+                .nodes.single().messages.single().annotations.single() as UIMessageAnnotation.UrlCitation).citationId,
+        )
+    }
+
+    @Test
+    fun legacyAnnotationBackfillIsRestartSafeAndSwitchesAuthorityOnlyWhenReady() = runBlocking {
+        val legacyMessage = message(52, "legacy answer").copy(
+            role = MessageRole.ASSISTANT,
+            annotations = listOf(
+                UIMessageAnnotation.UrlCitation(
+                    title = "Legacy source",
+                    url = "https://legacy.example/source",
+                ),
+            ),
+        )
+        val legacy = conversation("citation-backfill", listOf(node(52, legacyMessage)))
+        database.conversationDao().insert(legacy.toLegacyEntity(revision = 0))
+        database.messageNodeDao().insertAll(rawLegacyNodes(legacy))
+        assertEquals(1, coordinator().runPending(maxConversations = 1).ready)
+        val citationBackfill = CitationBackfillCoordinator(
+            database = database,
+            graphDAO = database.conversationGraphDao(),
+            migrationDAO = database.conversationMigrationDao(),
+            citationDAO = database.citationDao(),
+            shadowProjector = projector,
+            citationProjector = CitationProjector(JsonInstant),
+            scrubProjectedConversation = writer::scrubProjectedCitationPayloads,
+            nowMillis = { ++clock },
+        )
+
+        val first = citationBackfill.backfillBatch()
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE ConversationEntity SET revision = revision + 1 WHERE id = ?",
+            arrayOf(legacy.id.toString()),
+        )
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE conversation_migration_journal SET source_revision = source_revision + 1 WHERE conversation_id = ?",
+            arrayOf(legacy.id.toString()),
+        )
+        val staleReplay = citationBackfill.backfillBatch()
+        val second = citationBackfill.backfillBatch()
+
+        assertEquals(1, first.migrated)
+        assertEquals(1, staleReplay.migrated)
+        assertEquals(0, second.attempted)
+        assertEquals(1, database.citationDao().getResolvedCitations(legacy.id.toString()).size)
+        assertEquals(
+            "https://legacy.example/source",
+            (requireNotNull(projector.loadReady(legacy.id.toString()))
+                .nodes.single().messages.single().annotations.single() as UIMessageAnnotation.UrlCitation).url,
+        )
+    }
+
+    @Test
+    fun citationBackfillPhysicallyScrubsLegacyAndV2AnnotationSecretsBeforeReady() = runBlocking {
+        val secret = "historical-provider-secret"
+        val legacyMessage = message(62, "legacy secret answer").copy(
+            role = MessageRole.ASSISTANT,
+            annotations = listOf(
+                UIMessageAnnotation.UrlCitation(
+                    title = "Legacy source",
+                    url = "https://legacy.example/source?continuation=Bearer%20$secret&lang=zh#token=$secret",
+                    providerMetadata = JsonObject(
+                        mapOf(
+                            "authorization" to JsonPrimitive("Bearer $secret"),
+                            "semanticHeader" to JsonObject(
+                                mapOf(
+                                    "name" to JsonPrimitive("Authorization"),
+                                    "value" to JsonPrimitive("Basic $secret"),
+                                ),
+                            ),
+                            "embeddedHeader" to JsonPrimitive(
+                                """{"name":"Authorization","value":"Bearer $secret"}""",
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val legacy = conversation("citation-secret-scrub", listOf(node(62, legacyMessage)))
+        database.conversationDao().insert(legacy.toLegacyEntity(revision = 0))
+        database.messageNodeDao().insertAll(rawLegacyNodes(legacy))
+        assertEquals(1, coordinator().runPending(maxConversations = 1).ready)
+        val citationBackfill = CitationBackfillCoordinator(
+            database = database,
+            graphDAO = database.conversationGraphDao(),
+            migrationDAO = database.conversationMigrationDao(),
+            citationDAO = database.citationDao(),
+            shadowProjector = projector,
+            citationProjector = CitationProjector(JsonInstant),
+            scrubProjectedConversation = writer::scrubProjectedCitationPayloads,
+            nowMillis = { ++clock },
+        )
+
+        val result = citationBackfill.backfillBatch()
+
+        assertEquals(1, result.migrated)
+        assertEquals(
+            CitationValues.MIGRATION_READY,
+            database.citationDao().getJournal(legacy.id.toString())?.phase,
+        )
+        val v2Annotations = database.conversationGraphDao()
+            .getMessages(legacy.id.toString())
+            .single()
+            .annotationsJson
+        val legacyEnvelope = requireNotNull(
+            database.messageNodeDao().getMessagesChunk(
+                legacy.messageNodes.single().id.toString(),
+                start = 1,
+                length = 1_000_000,
+            ),
+        )
+        assertTrue(!v2Annotations.contains(secret))
+        assertTrue(!legacyEnvelope.contains(secret))
+        assertTrue(v2Annotations.contains("https://legacy.example/source?lang=zh"))
+        assertTrue(legacyEnvelope.contains("https://legacy.example/source?lang=zh"))
+    }
+
+    @Test
+    fun projectedCitationAuthoritySurvivesScrubInterruptionAndRetries() = runBlocking {
+        val secret = "interrupted-provider-secret"
+        val legacyMessage = message(63, "interrupted legacy answer").copy(
+            role = MessageRole.ASSISTANT,
+            annotations = listOf(
+                UIMessageAnnotation.UrlCitation(
+                    title = "Interrupted source",
+                    url = "https://legacy.example/interrupted?sig=$secret&lang=zh#token=$secret",
+                    providerMetadata = JsonObject(
+                        mapOf("authorization" to JsonPrimitive("Bearer $secret")),
+                    ),
+                ),
+            ),
+        )
+        val legacy = conversation("citation-scrub-retry", listOf(node(63, legacyMessage)))
+        database.conversationDao().insert(legacy.toLegacyEntity(revision = 0))
+        database.messageNodeDao().insertAll(rawLegacyNodes(legacy))
+        assertEquals(1, coordinator().runPending(maxConversations = 1).ready)
+        var allowScrub = false
+        val citationBackfill = CitationBackfillCoordinator(
+            database = database,
+            graphDAO = database.conversationGraphDao(),
+            migrationDAO = database.conversationMigrationDao(),
+            citationDAO = database.citationDao(),
+            shadowProjector = projector,
+            citationProjector = CitationProjector(JsonInstant),
+            scrubProjectedConversation = { conversationId ->
+                allowScrub && writer.scrubProjectedCitationPayloads(conversationId)
+            },
+            nowMillis = { clock },
+        )
+
+        val interrupted = citationBackfill.backfillBatch(limit = 1)
+
+        assertEquals(1, interrupted.attempted)
+        assertEquals(0, interrupted.migrated)
+        assertEquals(1, interrupted.deferred)
+        assertTrue(interrupted.hasMore)
+        assertEquals(
+            CitationValues.MIGRATION_PROJECTED,
+            database.citationDao().getJournal(legacy.id.toString())?.phase,
+        )
+        val projectedCitation = requireNotNull(projector.loadReady(legacy.id.toString()))
+            .nodes.single().messages.single().annotations.single() as UIMessageAnnotation.UrlCitation
+        assertEquals("https://legacy.example/interrupted?lang=zh", projectedCitation.url)
+        assertTrue(projectedCitation.providerMetadata?.toString()?.contains(secret) != true)
+        assertTrue(
+            database.conversationGraphDao().getMessages(legacy.id.toString())
+                .single().annotationsJson.contains(secret),
+        )
+
+        clock += 30_001
+        allowScrub = true
+        val resumed = citationBackfill.backfillBatch()
+
+        assertEquals(1, resumed.migrated)
+        assertEquals(0, resumed.deferred)
+        assertEquals(
+            CitationValues.MIGRATION_READY,
+            database.citationDao().getJournal(legacy.id.toString())?.phase,
+        )
+        assertTrue(
+            !database.conversationGraphDao().getMessages(legacy.id.toString())
+                .single().annotationsJson.contains(secret),
+        )
+        assertTrue(
+            !requireNotNull(
+                database.messageNodeDao().getMessagesChunk(
+                    legacy.messageNodes.single().id.toString(),
+                    start = 1,
+                    length = 1_000_000,
+                ),
+            ).contains(secret),
+        )
+    }
+
+    @Test
+    fun retryableCitationBackfillFailureHonorsBackoffWithoutQuarantine() = runBlocking {
+        val inserted = writer.insert(conversation("citation-retry", listOf(node(56, message(56, "answer")))))
+        val dao = database.citationDao()
+        val journal = requireNotNull(dao.getJournal(inserted.id.toString()))
+        val failedAt = clock + 100
+        dao.upsertJournal(
+            journal.copy(
+                phase = CitationValues.MIGRATION_PROCESSING,
+                attempts = 1,
+                leaseOwner = "retry-worker",
+                leaseUntil = failedAt + 1_000,
+            ),
+        )
+
+        assertEquals(
+            1,
+            dao.releaseForRetry(
+                conversationId = inserted.id.toString(),
+                owner = "retry-worker",
+                error = "IOException",
+                now = failedAt,
+            ),
+        )
+        assertTrue(
+            dao.getLeaseCandidates(
+                now = failedAt,
+                retryBefore = failedAt - 30_000,
+                limit = 10,
+            ).isEmpty(),
+        )
+        assertEquals(
+            listOf(inserted.id.toString()),
+            dao.getLeaseCandidates(
+                now = failedAt + 30_001,
+                retryBefore = failedAt + 1,
+                limit = 10,
+            ),
+        )
+        assertEquals(CitationValues.MIGRATION_PENDING, dao.getJournal(inserted.id.toString())?.phase)
     }
 
     @Test

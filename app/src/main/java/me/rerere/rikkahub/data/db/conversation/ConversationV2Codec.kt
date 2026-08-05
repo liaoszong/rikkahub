@@ -13,6 +13,8 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.db.entity.ConversationMessageEntity
 import me.rerere.rikkahub.data.db.entity.ConversationV2Values
+import me.rerere.rikkahub.data.db.entity.CitationSourceEntity
+import me.rerere.rikkahub.data.db.entity.MessageCitationEntity
 import me.rerere.rikkahub.data.db.entity.MessageBranchGroupEntity
 import me.rerere.rikkahub.data.db.entity.MessageNodeEntity
 import me.rerere.rikkahub.data.db.entity.MessagePartEntity
@@ -29,12 +31,15 @@ internal data class EncodedConversationV2(
     val graph: ConversationV2Graph,
     val legacySourceDigest: String,
     val normalizedMessageNodes: List<MessageNode>,
+    val citationSources: List<CitationSourceEntity>,
+    val citations: List<MessageCitationEntity>,
     val inferenceFlags: Set<String>,
 )
 
 /** Pure, deterministic projection from the in-memory compatibility model to both durable stores. */
 internal class ConversationV2Codec(
     private val json: Json,
+    private val citationProjector: CitationProjector = CitationProjector(json),
 ) {
     fun encode(conversation: Conversation): EncodedConversationV2 {
         val conversationId = conversation.id.toString()
@@ -44,7 +49,23 @@ internal class ConversationV2Codec(
         val messages = mutableListOf<ConversationMessageEntity>()
         val parts = mutableListOf<MessagePartEntity>()
         val legacyNodes = mutableListOf<MessageNodeEntity>()
-        val normalizedNodes = conversation.messageNodes.filter { it.messages.isNotEmpty() }
+        val citationSources = linkedMapOf<String, CitationSourceEntity>()
+        val citations = mutableListOf<MessageCitationEntity>()
+        val normalizedNodes = conversation.messageNodes
+            .filter { it.messages.isNotEmpty() }
+            .map { node ->
+                node.copy(
+                    messages = node.messages.map { message ->
+                        val projection = citationProjector.project(conversationId, message)
+                        projection.sources.forEach { source ->
+                            citationSources[source.sourceId] = citationSources[source.sourceId]
+                                ?.mergePreferRicher(source) ?: source
+                        }
+                        citations += projection.citations
+                        projection.message
+                    },
+                )
+            }
         val inferenceFlags = buildSet {
             if (normalizedNodes.size != conversation.messageNodes.size) {
                 add(INFERENCE_EMPTY_BRANCH_GROUP_DROPPED)
@@ -182,6 +203,8 @@ internal class ConversationV2Codec(
             graph = graph,
             legacySourceDigest = digestLegacyConversationSource(conversationId, legacyNodes),
             normalizedMessageNodes = normalizedNodes,
+            citationSources = citationSources.values.toList(),
+            citations = citations,
             inferenceFlags = inferenceFlags,
         )
     }

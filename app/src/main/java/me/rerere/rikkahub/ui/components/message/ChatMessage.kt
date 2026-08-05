@@ -60,9 +60,6 @@ import androidx.core.net.toFile
 import androidx.core.net.toUri
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessage
@@ -91,8 +88,10 @@ import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.theme.LocalChatFontFamily
 import me.rerere.rikkahub.ui.theme.rememberChatFontFamily
 import me.rerere.rikkahub.ui.theme.extendColors
-import me.rerere.rikkahub.utils.JsonInstant
+import me.rerere.rikkahub.utils.CitationEgressSanitizer
 import me.rerere.rikkahub.utils.openUrl
+import me.rerere.rikkahub.utils.resolveMessageCitationUrl
+import me.rerere.rikkahub.utils.safeHttpUrlOrNull
 import me.rerere.rikkahub.utils.urlDecode
 import java.util.Locale
 import kotlin.time.Duration.Companion.milliseconds
@@ -283,25 +282,11 @@ private fun MessagePartsBlock(
     val hapticFeedback = LocalHapticFeedback.current
     val settings = LocalSettings.current
     val partsState by rememberUpdatedState(parts)
+    val annotationsState by rememberUpdatedState(annotations)
 
     val handleClickCitation: (String) -> Unit = remember {
-        handler@{ citationId ->
-            partsState.forEach { part ->
-                if (part is UIMessagePart.Tool && part.toolName == "search_web" && part.isExecuted) {
-                    val outputText = part.output.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text }
-                    val items =
-                        runCatching { JsonInstant.parseToJsonElement(outputText).jsonObject["items"]?.jsonArray }.getOrNull()
-                            ?: return@forEach
-                    items.forEach { item ->
-                        val id = item.jsonObject["id"]?.jsonPrimitive?.content ?: return@forEach
-                        val url = item.jsonObject["url"]?.jsonPrimitive?.content ?: return@forEach
-                        if (citationId == id) {
-                            context.openUrl(url)
-                            return@handler
-                        }
-                    }
-                }
-            }
+        { citationId ->
+            resolveMessageCitationUrl(citationId, annotationsState, partsState)?.let(context::openUrl)
         }
     }
     LaunchedEffect(settings.displaySetting) {
@@ -594,7 +579,15 @@ private fun MessagePartsBlock(
     }
 
     // Annotations (always rendered at the end)
-    if (annotations.isNotEmpty()) {
+    val displayAnnotations = remember(annotations) {
+        CitationEgressSanitizer.sanitizeAnnotations(annotations).distinctBy { annotation ->
+            when (annotation) {
+                is UIMessageAnnotation.UrlCitation ->
+                    annotation.sourceId ?: annotation.url.ifBlank { annotation.citationId ?: annotation.title }
+            }
+        }
+    }
+    if (displayAnnotations.isNotEmpty()) {
         Column(
             modifier = Modifier.animateContentSize(),
         ) {
@@ -618,18 +611,28 @@ private fun MessagePartsBlock(
                             .padding(4.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        annotations.fastForEachIndexed { index, annotation ->
+                        displayAnnotations.fastForEachIndexed { index, annotation ->
                             when (annotation) {
                                 is UIMessageAnnotation.UrlCitation -> {
+                                    val safeUrl = annotation.url.safeHttpUrlOrNull().takeIf { annotation.isAvailable }
+                                    val displayTitle = annotation.title.ifBlank {
+                                        annotation.publisher ?: safeUrl ?: "Source unavailable"
+                                    }
                                     Row(
                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        Favicon(annotation.url, modifier = Modifier.size(20.dp))
+                                        if (safeUrl != null) {
+                                            Favicon(safeUrl, modifier = Modifier.size(20.dp))
+                                        }
                                         Text(
                                             text = buildAnnotatedString {
                                                 append("${index + 1}. ")
-                                                withLink(LinkAnnotation.Url(annotation.url)) {
-                                                    append(annotation.title.urlDecode())
+                                                if (safeUrl != null) {
+                                                    withLink(LinkAnnotation.Url(safeUrl)) {
+                                                        append(displayTitle.urlDecode())
+                                                    }
+                                                } else {
+                                                    append("Source unavailable")
                                                 }
                                             }
                                         )
@@ -645,7 +648,7 @@ private fun MessagePartsBlock(
                     expand = !expand
                 }
             ) {
-                Text(stringResource(R.string.citations_count, annotations.size))
+                Text(stringResource(R.string.citations_count, displayAnnotations.size))
             }
         }
     }

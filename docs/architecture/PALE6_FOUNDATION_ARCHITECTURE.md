@@ -211,11 +211,12 @@ active request、设备私有 permission 和 vault secret 不同步；credential
 
 ## 11. Citation（Room 31）
 
-- `citation_source`：`source_id`、canonical URL、title、publisher、retrieved_at、snippet/content hash、metadata。
-- `message_citation`：`citation_id`、`message_id`、`source_id`、ordinal、text start/end、quote、provenance（provider/search/tool/import）、provider metadata。
-- `UIMessageAnnotation.UrlCitation` 升级为带稳定 citation/source ID 的兼容 DTO；旧 title/url 自动映射。
-- Search tool 返回结构化 source，不再只靠 prompt 要求模型输出 `[citation,domain](id)`；Markdown marker 保留为旧消息解析兼容层。
-- UI、分享、导出、Web DTO 与 Sync v2 使用同一引用记录；缺来源时显示“来源不可用”，不让序号错配到另一 URL。
+- `citation_source` 保存按 canonical URL 派生的稳定 `source_id`、来源内容快照和全局 tombstone；正常会话写入采用 first-write-wins，不能覆盖其他会话已登记的全局来源，也不能隐式复活 tombstone。
+- `message_citation` 保存稳定 `citation_id`、message/source 关系、ordinal、text span/part ordinal/offset unit、quote、provenance 和经清洗的 provider metadata；同时持有本次引用的 title/publisher/retrievedAt/availability 快照，UI 不从共享 source 读取会话级展示状态，避免跨会话污染。
+- `UIMessageAnnotation.UrlCitation` 是 Provider streaming、ConversationStore、Android/Web UI、复制和 Markdown 导出的共同兼容 DTO；OpenAI Chat/Responses 与 Gemini 的 provider 坐标先映射到稳定 text-part ordinal，再由投影器转换成消息级 UTF-16 span。
+- Search tool 的结构化结果本身就是 message-level citation；旧 `[citation,domain](id)` marker 只补充精确 span/snippet，并作为历史消息兼容层。没有 marker 不再丢失来源。
+- canonicalizer 拒绝 userinfo，删除 fragment 和 credential-bearing query；provider metadata 在持久化前递归清洗秘密字段、URL 与体积。UI 只打开 `http/https` 安全 URL，分享、导出和 Web DTO 消费同一投影；缺来源显示不可用，不把序号错配到另一 URL。
+- Room 30→31 只建表；启动先恢复付费 RequestLedger，再以独立 best-effort backfill 扫描历史 ConversationStore。回填使用 lease/backoff/quarantine 和 digest 幂等，Citation 故障不能阻塞图片/工具恢复，也不会自动重发任何付费请求。
 
 ## 12. 验证与发布硬门槛
 

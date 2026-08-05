@@ -41,6 +41,7 @@ import me.rerere.rikkahub.web.dto.UpdateConversationInjectionsRequest
 import me.rerere.rikkahub.web.dto.UpdateConversationTitleRequest
 import me.rerere.rikkahub.web.dto.toDto
 import me.rerere.rikkahub.web.dto.toListDto
+import me.rerere.rikkahub.utils.CitationEgressSanitizer
 import me.rerere.rikkahub.utils.JsonInstant
 import kotlin.time.Duration.Companion.seconds
 import kotlin.uuid.Uuid
@@ -386,8 +387,11 @@ fun Route.conversationRoutes(
                         .asSequence()
                         .filter { it.conversationId == uuid && knownErrorIds.add(it.id) }
                         .map { chatError ->
-                            chatError.error.message?.takeIf { it.isNotBlank() }
-                                ?: chatError.error.toString()
+                            CitationEgressSanitizer.sanitizeDiagnosticText(
+                                raw = chatError.error.message?.takeIf { it.isNotBlank() }
+                                    ?: chatError.error.toString(),
+                                fallback = "Generation failed",
+                            )
                         }
                         .toList()
                 }.map { events ->

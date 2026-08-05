@@ -28,6 +28,8 @@ import me.rerere.rikkahub.data.credential.CredentialMigrationJournal
 import me.rerere.rikkahub.data.credential.CredentialVault
 import me.rerere.rikkahub.data.credential.CredentialVaultProjectionStore
 import me.rerere.rikkahub.data.db.AppDatabase
+import me.rerere.rikkahub.data.db.conversation.CitationBackfillCoordinator
+import me.rerere.rikkahub.data.db.conversation.CitationProjector
 import me.rerere.rikkahub.data.db.conversation.ConversationV2BackfillCoordinator
 import me.rerere.rikkahub.data.db.conversation.ConversationV2Codec
 import me.rerere.rikkahub.data.db.conversation.ConversationV2ShadowProjector
@@ -49,6 +51,7 @@ import me.rerere.rikkahub.data.db.migrations.Migration_26_27
 import me.rerere.rikkahub.data.db.migrations.Migration_27_28
 import me.rerere.rikkahub.data.db.migrations.Migration_28_29
 import me.rerere.rikkahub.data.db.migrations.Migration_29_30
+import me.rerere.rikkahub.data.db.migrations.Migration_30_31
 import me.rerere.rikkahub.data.ai.mcp.McpManager
 import me.rerere.rikkahub.data.sync.webdav.WebDavSync
 import me.rerere.rikkahub.data.sync.BackupRestoreCoordinator
@@ -87,6 +90,7 @@ val dataSourceModule = module {
                 Migration_27_28,
                 Migration_28_29,
                 Migration_29_30,
+                Migration_30_31,
             )
             .addCallback(object : RoomDatabase.Callback() {
                 override fun onOpen(db: SupportSQLiteDatabase) {
@@ -187,11 +191,26 @@ val dataSourceModule = module {
         ConversationV2ShadowProjector(
             graphDAO = get<AppDatabase>().conversationGraphDao(),
             migrationDAO = get<AppDatabase>().conversationMigrationDao(),
+            citationDAO = get<AppDatabase>().citationDao(),
             json = get(),
         )
     }
 
-    single { ConversationV2Codec(get()) }
+    single { CitationProjector(get()) }
+
+    single { ConversationV2Codec(get(), get()) }
+
+    single {
+        CitationBackfillCoordinator(
+            database = get(),
+            graphDAO = get<AppDatabase>().conversationGraphDao(),
+            migrationDAO = get<AppDatabase>().conversationMigrationDao(),
+            citationDAO = get<AppDatabase>().citationDao(),
+            shadowProjector = get(),
+            citationProjector = get(),
+            scrubProjectedConversation = get<ConversationV2Writer>()::scrubProjectedCitationPayloads,
+        )
+    }
 
     single {
         val context: Context = get()
@@ -218,6 +237,7 @@ val dataSourceModule = module {
             conversationDAO = get<AppDatabase>().conversationDao(),
             messageNodeDAO = get<AppDatabase>().messageNodeDao(),
             graphDAO = get<AppDatabase>().conversationGraphDao(),
+            citationDAO = get<AppDatabase>().citationDao(),
             migrationDAO = get<AppDatabase>().conversationMigrationDao(),
             ftsOutboxDAO = get<AppDatabase>().messageFtsOutboxDao(),
             projector = get(),

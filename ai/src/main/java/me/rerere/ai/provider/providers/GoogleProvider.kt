@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonArrayBuilder
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -44,6 +45,7 @@ import me.rerere.ai.provider.providers.vertex.ServiceAccountTokenProvider
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.GoogleThoughtMetadata
 import me.rerere.ai.ui.MessageChunk
+import me.rerere.ai.ui.STREAM_PART_ID_METADATA_KEY
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.UIMessageChoice
@@ -371,6 +373,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 
         Log.i(TAG, "streamText: model=${params.model.modelId} messages=${messages.size}")
 
+        val groundingAccumulator = GoogleGroundingAccumulator()
         val listener = object : EventSourceListener() {
             override fun onEvent(
                 eventSource: EventSource,
@@ -394,19 +397,25 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                         choices = candidates.mapIndexed { index, candidate ->
                             val candidateObj = candidate.jsonObject
                             val content = candidateObj["content"]?.jsonObject
-                            val groundingMetadata = candidateObj["groundingMetadata"]?.jsonObject
+                            val candidateIndex = candidateObj["index"]?.jsonPrimitive?.intOrNull ?: index
+                            val textPartOrdinals = groundingAccumulator.observeTextParts(candidateIndex, content)
+                            val groundingMetadata = (candidateObj["groundingMetadata"] as? JsonObject)?.let {
+                                groundingAccumulator.accumulate(candidateIndex, it)
+                            }
                             val finishReason =
                                 candidateObj["finishReason"]?.jsonPrimitive?.contentOrNull
 
-                            val message = content?.let {
+                            val message = if (content != null || groundingMetadata != null) {
                                 parseMessage(buildJsonObject {
                                     put("role", JsonPrimitive("model"))
-                                    put("content", it)
+                                    put("content", content ?: buildJsonObject {
+                                        put("parts", JsonArray(emptyList()))
+                                    })
                                     groundingMetadata?.let { groundingMetadata ->
                                         put("groundingMetadata", groundingMetadata)
                                     }
-                                })
-                            }
+                                }, textPartOrdinals, "gemini:$candidateIndex")
+                            } else null
 
                             UIMessageChoice(
                                 index = index,
@@ -653,17 +662,28 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
-    private fun parseMessage(message: JsonObject): UIMessage {
+    private fun parseMessage(
+        message: JsonObject,
+        observedTextPartOrdinals: Map<Int, Int>? = null,
+        streamPartIdPrefix: String? = null,
+    ): UIMessage {
         val role = googleRoleToCommonRole(
             message["role"]?.jsonPrimitive?.contentOrNull ?: "model"
         )
         val content = message["content"]?.jsonObject ?: error("No content")
-        val parts = content["parts"]?.jsonArray?.map { part ->
-            parseMessagePart(part.jsonObject)
-        } ?: emptyList()
+        val rawParts = content["parts"]?.jsonArray?.map(JsonElement::jsonObject).orEmpty()
+        val parts = rawParts.mapIndexed { providerPartIndex, part ->
+            parseMessagePart(
+                jsonObject = part,
+                streamPartId = streamPartIdPrefix?.let { "$it:$providerPartIndex" },
+            )
+        }
 
-        val groundingMetadata = message["groundingMetadata"]?.jsonObject
-        val annotations = parseSearchGroundingMetadata(groundingMetadata)
+        val groundingMetadata = message["groundingMetadata"] as? JsonObject
+        val annotations = parseSearchGroundingMetadata(
+            groundingMetadata,
+            observedTextPartOrdinals ?: googleTextPartOrdinals(rawParts),
+        )
 
         return UIMessage(
             role = role,
@@ -672,22 +692,15 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         )
     }
 
-    private fun parseSearchGroundingMetadata(jsonObject: JsonObject?): List<UIMessageAnnotation> {
-        if (jsonObject == null) return emptyList()
-        val groundingChunks = jsonObject["groundingChunks"]?.jsonArray ?: emptyList()
-        val chunks = groundingChunks.mapNotNull { chunk ->
-            val web = chunk.jsonObject["web"]?.jsonObject ?: return@mapNotNull null
-            val uri = web["uri"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-            val title = web["title"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-            UIMessageAnnotation.UrlCitation(
-                title = title,
-                url = uri
-            )
-        }
-        return chunks
-    }
+    private fun parseSearchGroundingMetadata(
+        jsonObject: JsonObject?,
+        textPartOrdinals: Map<Int, Int>,
+    ): List<UIMessageAnnotation> = parseGoogleSearchGroundingMetadata(jsonObject, textPartOrdinals)
 
-    private fun parseMessagePart(jsonObject: JsonObject): UIMessagePart {
+    private fun parseMessagePart(
+        jsonObject: JsonObject,
+        streamPartId: String? = null,
+    ): UIMessagePart {
         return when {
             jsonObject.containsKey("text") -> {
                 val thought = jsonObject["thought"]?.jsonPrimitive?.booleanOrNull ?: false
@@ -696,7 +709,12 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     reasoning = text,
                     createdAt = Clock.System.now(),
                     finishedAt = null
-                ) else UIMessagePart.Text(text)
+                ) else UIMessagePart.Text(
+                    text = text,
+                    metadata = streamPartId?.let {
+                        buildJsonObject { put(STREAM_PART_ID_METADATA_KEY, it) }
+                    },
+                )
             }
 
             jsonObject.containsKey("functionCall") -> {
@@ -944,5 +962,99 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             totalTokens = totalTokens,
             cachedTokens = cachedTokens
         )
+    }
+}
+
+internal fun parseGoogleSearchGroundingMetadata(
+    jsonObject: JsonObject?,
+    textPartOrdinals: Map<Int, Int> = emptyMap(),
+): List<UIMessageAnnotation> {
+    if (jsonObject == null) return emptyList()
+    val groundingChunks = jsonObject["groundingChunks"] as? JsonArray ?: JsonArray(emptyList())
+    // Keep the provider's original indexes: groundingChunkIndices addresses this raw array.
+    // Compacting invalid chunks here could silently bind a support span to the wrong URL.
+    val chunks = groundingChunks.map { chunk ->
+        val chunkObject = chunk as? JsonObject ?: return@map null
+        val web = chunkObject["web"] as? JsonObject ?: return@map null
+        val uri = (web["uri"] as? JsonPrimitive)?.contentOrNull ?: return@map null
+        val title = (web["title"] as? JsonPrimitive)?.contentOrNull ?: return@map null
+        UIMessageAnnotation.UrlCitation(
+            title = title,
+            url = uri,
+            provenance = "provider",
+            providerMetadata = chunkObject,
+        )
+    }
+    val supports = jsonObject["groundingSupports"] as? JsonArray ?: JsonArray(emptyList())
+    val supported = supports.flatMap { supportElement ->
+        val support = supportElement as? JsonObject ?: return@flatMap emptyList()
+        val segment = support["segment"] as? JsonObject
+        val providerPartIndex = (segment?.get("partIndex") as? JsonPrimitive)?.intOrNull
+        val indices = support["groundingChunkIndices"] as? JsonArray ?: JsonArray(emptyList())
+        indices.mapNotNull { indexElement ->
+            val index = (indexElement as? JsonPrimitive)?.intOrNull ?: return@mapNotNull null
+            chunks.getOrNull(index)?.copy(
+                startIndex = (segment?.get("startIndex") as? JsonPrimitive)?.intOrNull,
+                endIndex = (segment?.get("endIndex") as? JsonPrimitive)?.intOrNull,
+                textPartOrdinal = providerPartIndex?.let(textPartOrdinals::get),
+                offsetUnit = "utf8_byte",
+                quote = (segment?.get("text") as? JsonPrimitive)?.contentOrNull,
+                providerMetadata = support,
+            )
+        }
+    }
+    return supported.ifEmpty { chunks.filterNotNull() }
+}
+
+/** Gemini streaming indexes grounding chunks across all events for one candidate. */
+internal class GoogleGroundingAccumulator {
+    private val chunksByCandidate = mutableMapOf<Int, MutableList<JsonElement>>()
+    private val textPartOrdinalsByCandidate = mutableMapOf<Int, Map<Int, Int>>()
+
+    fun accumulate(candidateIndex: Int, metadata: JsonObject): JsonObject {
+        val accumulated = chunksByCandidate.getOrPut(candidateIndex) { mutableListOf() }
+        (metadata["groundingChunks"] as? JsonArray)?.let(accumulated::addAll)
+        return buildJsonObject {
+            metadata.forEach { (key, value) ->
+                if (key != "groundingChunks") put(key, value)
+            }
+            put("groundingChunks", JsonArray(accumulated.toList()))
+        }
+    }
+
+    fun observeTextParts(candidateIndex: Int, content: JsonObject?): Map<Int, Int> {
+        val observed = (content?.get("parts") as? JsonArray)
+            ?.let(::googleTextPartOrdinals)
+            .orEmpty()
+        if (observed.isNotEmpty()) {
+            textPartOrdinalsByCandidate[candidateIndex] =
+                textPartOrdinalsByCandidate[candidateIndex].orEmpty() + observed
+        }
+        return textPartOrdinalsByCandidate[candidateIndex].orEmpty()
+    }
+}
+
+internal fun googleTextPartOrdinals(parts: List<JsonObject>): Map<Int, Int> = buildMap {
+    var ordinal = 0
+    parts.forEachIndexed { providerPartIndex, part ->
+        val isThought = (part["thought"] as? JsonPrimitive)?.booleanOrNull == true
+        if (part["text"] is JsonPrimitive && !isThought) {
+            put(providerPartIndex, ordinal++)
+        }
+    }
+}
+
+/**
+ * Streaming metadata addresses the provider's raw parts array. Invalid side-channel
+ * elements must be ignored without compacting the indexes of the remaining parts.
+ */
+internal fun googleTextPartOrdinals(parts: JsonArray): Map<Int, Int> = buildMap {
+    var ordinal = 0
+    parts.forEachIndexed { providerPartIndex, element ->
+        val part = element as? JsonObject ?: return@forEachIndexed
+        val isThought = (part["thought"] as? JsonPrimitive)?.booleanOrNull == true
+        if (part["text"] is JsonPrimitive && !isThought) {
+            put(providerPartIndex, ordinal++)
+        }
     }
 }

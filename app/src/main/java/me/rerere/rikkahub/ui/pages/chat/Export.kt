@@ -98,10 +98,14 @@ import me.rerere.rikkahub.ui.context.LocalSettings
 import com.dokar.sonner.rememberToasterState
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.theme.RikkahubTheme
+import me.rerere.rikkahub.utils.CitationEgressSanitizer
+import me.rerere.rikkahub.utils.JsonInstant
+import me.rerere.rikkahub.utils.JsonInstantPretty
 import me.rerere.rikkahub.utils.exportImage
 import me.rerere.rikkahub.utils.getActivity
-import me.rerere.rikkahub.utils.JsonInstantPretty
 import me.rerere.rikkahub.utils.jsonPrimitiveOrNull
+import me.rerere.rikkahub.utils.portableCitations
+import me.rerere.rikkahub.utils.safeHttpUrlOrNull
 import me.rerere.rikkahub.utils.toLocalString
 import java.io.FileOutputStream
 import java.time.LocalDateTime
@@ -287,7 +291,9 @@ private fun exportToMarkdown(
                         appendLine()
                         append("```json")
                         appendLine()
-                        append(JsonInstantPretty.encodeToString(part.inputAsJson()))
+                        val safeInput = CitationEgressSanitizer.sanitizeToolPayloadText(part.input)
+                        val safeInputJson = runCatching { JsonInstant.parseToJsonElement(safeInput) }.getOrNull()
+                        append(safeInputJson?.let { JsonInstantPretty.encodeToString(it) } ?: safeInput)
                         appendLine()
                         append("```")
                         appendLine()
@@ -300,14 +306,14 @@ private fun exportToMarkdown(
                                     is UIMessagePart.Text -> {
                                         append("```text")
                                         appendLine()
-                                        append(outputPart.text)
+                                        append(CitationEgressSanitizer.sanitizeToolPayloadText(outputPart.text))
                                         appendLine()
                                         append("```")
                                         appendLine()
                                     }
 
                                     is UIMessagePart.Reasoning -> {
-                                        outputPart.reasoning.lines()
+                                        CitationEgressSanitizer.sanitizeToolPayloadText(outputPart.reasoning).lines()
                                             .filter { it.isNotBlank() }
                                             .forEach {
                                                 append("> $it")
@@ -321,17 +327,18 @@ private fun exportToMarkdown(
                                     }
 
                                     is UIMessagePart.Document -> {
-                                        append("[Document: ${outputPart.fileName}](${outputPart.url})")
+                                        val safeUrl = CitationEgressSanitizer.sanitizeResourceUrl(outputPart.url)
+                                        append("[Document: ${outputPart.fileName}]($safeUrl)")
                                         appendLine()
                                     }
 
                                     is UIMessagePart.Video -> {
-                                        append("[Video](${outputPart.url})")
+                                        append("[Video](${CitationEgressSanitizer.sanitizeResourceUrl(outputPart.url)})")
                                         appendLine()
                                     }
 
                                     is UIMessagePart.Audio -> {
-                                        append("[Audio](${outputPart.url})")
+                                        append("[Audio](${CitationEgressSanitizer.sanitizeResourceUrl(outputPart.url)})")
                                         appendLine()
                                     }
 
@@ -343,6 +350,24 @@ private fun exportToMarkdown(
                     }
 
                     else -> {}
+                }
+            }
+            val citations = message.portableCitations()
+            if (citations.isNotEmpty()) {
+                appendLine()
+                appendLine("**Sources**")
+                citations.forEachIndexed { index, citation ->
+                    val safeUrl = citation.url.safeHttpUrlOrNull().takeIf { citation.isAvailable }
+                    val label = if (citation.isAvailable) {
+                        citation.title.ifBlank { citation.publisher ?: safeUrl ?: "Source unavailable" }
+                    } else {
+                        "Source unavailable"
+                    }
+                    if (safeUrl != null) {
+                        appendLine("${index + 1}. [${label.escapeMarkdownLabel()}](<$safeUrl>)")
+                    } else {
+                        appendLine("${index + 1}. ${label.replace(Regex("[\\r\\n]+"), " ")}")
+                    }
                 }
             }
             appendLine()
@@ -376,6 +401,12 @@ private fun exportToMarkdown(
         e.printStackTrace()
     }
 }
+
+private fun String.escapeMarkdownLabel(): String =
+    replace("\\", "\\\\")
+        .replace("[", "\\[")
+        .replace("]", "\\]")
+        .replace(Regex("[\r\n]+"), " ")
 
 private suspend fun exportToImage(
     context: Context,
@@ -671,6 +702,32 @@ private fun ExportedChatMessage(
                                 // Other parts are not rendered in image export for now
                             }
                         }
+                    }
+                }
+            }
+            val citations = message.portableCitations()
+            if (citations.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = "Sources",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    citations.forEachIndexed { index, citation ->
+                        Text(
+                            text = buildString {
+                                val safeUrl = citation.url.safeHttpUrlOrNull().takeIf { citation.isAvailable }
+                                val label = if (citation.isAvailable) {
+                                    citation.title.ifBlank { citation.publisher ?: safeUrl ?: "Source unavailable" }
+                                } else {
+                                    "Source unavailable"
+                                }
+                                append("${index + 1}. $label")
+                                safeUrl?.let { append('\n').append(it) }
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }

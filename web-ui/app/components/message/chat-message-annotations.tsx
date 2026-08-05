@@ -2,25 +2,9 @@ import * as React from "react";
 
 import { ExternalLink } from "lucide-react";
 
+import { citationPresentation, distinctUrlCitations } from "~/lib/citations";
 import { cn } from "~/lib/utils";
 import type { UIMessageAnnotation } from "~/types";
-
-function getCitationLabel(annotation: UIMessageAnnotation): string {
-  if (annotation.title.trim().length > 0) {
-    return annotation.title;
-  }
-
-  try {
-    const hostname = new URL(annotation.url).hostname.replace(/^www\./, "");
-    if (hostname.length > 0) {
-      return hostname;
-    }
-  } catch {
-    return annotation.url;
-  }
-
-  return annotation.url;
-}
 
 export function ChatMessageAnnotationsRow({
   annotations,
@@ -29,10 +13,7 @@ export function ChatMessageAnnotationsRow({
   annotations?: UIMessageAnnotation[];
   alignRight: boolean;
 }) {
-  const citations = React.useMemo(
-    () => annotations?.filter((annotation) => annotation.type === "url_citation") ?? [],
-    [annotations],
-  );
+  const citations = React.useMemo(() => distinctUrlCitations(annotations), [annotations]);
 
   if (citations.length === 0) {
     return null;
@@ -46,20 +27,27 @@ export function ChatMessageAnnotationsRow({
       )}
     >
       {citations.map((annotation, index) => {
-        const label = getCitationLabel(annotation);
+        const { label, safeUrl } = citationPresentation(annotation);
 
-        return (
+        return safeUrl ? (
           <a
-            key={`${annotation.url}-${index}`}
-            href={annotation.url}
+            key={annotation.citationId ?? `${annotation.url}-${index}`}
+            href={safeUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-background px-2 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
-            title={annotation.url || label}
+            title={safeUrl}
           >
             <span className="max-w-[220px] truncate">{label}</span>
             <ExternalLink className="size-3" />
           </a>
+        ) : (
+          <span
+            key={annotation.citationId ?? annotation.sourceId ?? `unavailable-${index}`}
+            className="inline-flex max-w-full items-center rounded-full border border-border bg-muted px-2 py-1 text-xs text-muted-foreground"
+          >
+            <span className="max-w-[220px] truncate">{label || "Source unavailable"}</span>
+          </span>
         );
       })}
     </div>

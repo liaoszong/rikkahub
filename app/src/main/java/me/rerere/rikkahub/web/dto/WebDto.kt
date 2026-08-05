@@ -8,6 +8,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
+import me.rerere.rikkahub.utils.CitationEgressSanitizer
 
 // ========== Request DTOs ==========
 
@@ -350,8 +351,8 @@ fun MessageNode.toDto() = MessageNodeDto(
 fun UIMessage.toDto() = MessageDto(
     id = id.toString(),
     role = role.name,
-    parts = parts,
-    annotations = annotations,
+    parts = CitationEgressSanitizer.sanitizeMessageParts(parts),
+    annotations = CitationEgressSanitizer.sanitizeAnnotations(annotations),
     createdAt = createdAt.toString(),
     finishedAt = finishedAt?.toString(),
     modelId = modelId?.toString(),

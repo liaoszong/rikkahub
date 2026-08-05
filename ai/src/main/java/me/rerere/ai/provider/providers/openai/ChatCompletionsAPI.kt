@@ -786,22 +786,7 @@ class ChatCompletionsAPI(
     }
 
     private fun parseAnnotations(jsonArray: JsonArray): List<UIMessageAnnotation> {
-        return jsonArray.map { element ->
-            val type =
-                element.jsonObject["type"]?.jsonPrimitive?.contentOrNull ?: error("type is null")
-            when (type) {
-                "url_citation" -> {
-                    UIMessageAnnotation.UrlCitation(
-                        title = element.jsonObject["url_citation"]?.jsonObject?.get("title")?.jsonPrimitive?.contentOrNull
-                            ?: "",
-                        url = element.jsonObject["url_citation"]?.jsonObject?.get("url")?.jsonPrimitive?.contentOrNull
-                            ?: "",
-                    )
-                }
-
-                else -> error("unknown annotation type: $type")
-            }
-        }
+        return parseChatCompletionAnnotations(jsonArray)
     }
 
     private fun parseTokenUsage(jsonObject: JsonObject?): TokenUsage? {
@@ -824,4 +809,27 @@ class ChatCompletionsAPI(
         val texts = filter { it is UIMessagePart.Text }.size
         return gonnaSend == texts && texts == 1
     }
+}
+
+internal fun parseChatCompletionAnnotations(element: JsonElement?): List<UIMessageAnnotation.UrlCitation> =
+    (element as? JsonArray).orEmpty().mapNotNull { annotation ->
+        (annotation as? JsonObject)?.let(::parseChatCompletionUrlCitationAnnotation)
+    }
+
+internal fun parseChatCompletionUrlCitationAnnotation(
+    annotation: JsonObject,
+): UIMessageAnnotation.UrlCitation? {
+    if ((annotation["type"] as? JsonPrimitive)?.contentOrNull != "url_citation") return null
+    val payload = annotation["url_citation"] as? JsonObject ?: return null
+    val url = (payload["url"] as? JsonPrimitive)?.contentOrNull
+        ?.takeIf(String::isNotBlank) ?: return null
+    return UIMessageAnnotation.UrlCitation(
+        title = (payload["title"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
+        url = url,
+        startIndex = (payload["start_index"] as? JsonPrimitive)?.intOrNull,
+        endIndex = (payload["end_index"] as? JsonPrimitive)?.intOrNull,
+        offsetUnit = "provider_character",
+        provenance = "provider",
+        providerMetadata = annotation,
+    )
 }

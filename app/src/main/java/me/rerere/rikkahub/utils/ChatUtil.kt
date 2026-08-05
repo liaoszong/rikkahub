@@ -3,7 +3,13 @@ package me.rerere.rikkahub.utils
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessageAnnotation
+import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.ui.context.Navigator
 import kotlin.uuid.Uuid
@@ -29,7 +35,74 @@ fun navigateToChatPage(
 }
 
 fun Context.copyMessageToClipboard(message: UIMessage) {
-    this.writeClipboardText(message.toText())
+    this.writeClipboardText(message.toPortableText())
+}
+
+/** Lossless-enough plain text for clipboard/share surfaces that cannot carry annotation objects. */
+fun UIMessage.toPortableText(): String = buildString {
+    append(toText())
+    val citations = portableCitations()
+    if (citations.isNotEmpty()) {
+        append("\n\nSources:\n")
+        citations.forEachIndexed { index, citation ->
+            append('[').append(index + 1).append("] ")
+            val safeUrl = citation.url.safeHttpUrlOrNull().takeIf { citation.isAvailable }
+            val label = if (citation.isAvailable) {
+                citation.title.ifBlank { citation.publisher ?: safeUrl ?: "Source unavailable" }
+            } else {
+                "Source unavailable"
+            }
+            append(label.replace(Regex("[\\r\\n]+"), " "))
+            safeUrl?.let { append(" — ").append(it) }
+            if (index != citations.lastIndex) append('\n')
+        }
+    }
+}
+
+fun UIMessage.portableCitations(): List<UIMessageAnnotation.UrlCitation> = annotations
+    .filterIsInstance<UIMessageAnnotation.UrlCitation>()
+    .map(CitationEgressSanitizer::sanitize)
+    .distinctBy { it.sourceId ?: it.url.ifBlank { it.citationId ?: it.title } }
+
+fun resolveMessageCitationUrl(
+    citationId: String,
+    annotations: List<UIMessageAnnotation>,
+    parts: List<UIMessagePart>,
+): String? {
+    val stableCitations = annotations.filterIsInstance<UIMessageAnnotation.UrlCitation>()
+        .filter { it.citationId != null || it.sourceId != null }
+    stableCitations.firstOrNull { citation ->
+        citation.citationId == citationId ||
+            citation.sourceId == citationId ||
+            (citation.providerMetadata?.get("legacyShortId") as? JsonPrimitive)?.contentOrNull == citationId
+    }?.let { authority ->
+        return authority.url.safeHttpUrlOrNull().takeIf { authority.isAvailable }
+    }
+    // Once Room 31 authority exists for this message, an unknown or tombstoned reference
+    // must not be resurrected from the legacy search tool payload.
+    if (stableCitations.isNotEmpty()) return null
+
+    parts.filterIsInstance<UIMessagePart.Tool>()
+        .filter { it.toolName == "search_web" && it.isExecuted }
+        .forEach { tool ->
+            val outputText = tool.output.filterIsInstance<UIMessagePart.Text>().joinToString("\n") { it.text }
+            val items = runCatching {
+                (JsonInstant.parseToJsonElement(outputText) as? JsonObject)
+                    ?.get("items") as? JsonArray
+            }.getOrNull() ?: return@forEach
+            items.forEach itemLoop@ { item ->
+                val itemObject = item as? JsonObject ?: return@itemLoop
+                if ((itemObject["id"] as? JsonPrimitive)?.contentOrNull != citationId) return@itemLoop
+                return (itemObject["url"] as? JsonPrimitive)?.contentOrNull?.safeHttpUrlOrNull()
+            }
+        }
+    return null
+}
+
+fun String.safeHttpUrlOrNull(): String? {
+    val raw = trim()
+    if (raw.isEmpty() || raw.length > 8 * 1024) return null
+    return CitationEgressSanitizer.sanitizeUrl(raw)
 }
 
 private val ALLOWED_MIME_TYPES = setOf(

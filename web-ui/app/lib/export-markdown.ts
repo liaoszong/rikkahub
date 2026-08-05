@@ -1,9 +1,23 @@
 import type { ConversationDto, MessageDto } from "~/types";
+import { citationPresentation, distinctUrlCitations, escapeMarkdownLabel } from "~/lib/citations";
 
-export function convertMessageToMarkdown(
-  message: MessageDto,
-  includeReasoning: boolean,
-): string {
+function appendCitationList(lines: string[], message: MessageDto) {
+  const citations = distinctUrlCitations(message.annotations);
+  if (citations.length === 0) return;
+
+  lines.push("**Sources**", "");
+  citations.forEach((citation, index) => {
+    const { label, safeUrl } = citationPresentation(citation);
+    lines.push(
+      safeUrl
+        ? `${index + 1}. [${escapeMarkdownLabel(label)}](<${safeUrl}>)`
+        : `${index + 1}. ${label.replace(/[\r\n]+/g, " ")}`,
+    );
+  });
+  lines.push("");
+}
+
+export function convertMessageToMarkdown(message: MessageDto, includeReasoning: boolean): string {
   const lines: string[] = [];
 
   for (const part of message.parts) {
@@ -24,6 +38,8 @@ export function convertMessageToMarkdown(
       lines.push("");
     }
   }
+
+  appendCitationList(lines, message);
 
   return lines.join("\n").trim();
 }
@@ -71,6 +87,7 @@ export function convertConversationToMarkdown(
         lines.push("");
       }
     }
+    appendCitationList(lines, message);
   }
 
   return lines.join("\n").trim();

@@ -25,6 +25,7 @@ import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.FolderRepository
 import me.rerere.rikkahub.service.ChatService
+import me.rerere.rikkahub.utils.CitationEgressSanitizer
 import me.rerere.rikkahub.utils.JsonInstant
 import me.rerere.rikkahub.web.dto.ErrorResponse
 import me.rerere.rikkahub.web.dto.WebAuthTokenRequest
@@ -77,12 +78,21 @@ fun Application.configureWebApi(
             call.respond(status, ErrorResponse("Not Found", status.value))
         }
         exception<ApiException> { call, cause ->
-            call.respond(cause.status, ErrorResponse(cause.message, cause.status.value))
+            call.respond(
+                cause.status,
+                ErrorResponse(
+                    CitationEgressSanitizer.sanitizeDiagnosticText(cause.message, "Request failed"),
+                    cause.status.value,
+                ),
+            )
         }
         exception<Throwable> { call, cause ->
             call.respond(
                 HttpStatusCode.InternalServerError,
-                ErrorResponse(cause.message ?: "Internal server error", 500)
+                ErrorResponse(
+                    CitationEgressSanitizer.sanitizeDiagnosticText(cause.message, "Internal server error"),
+                    500,
+                ),
             )
         }
     }

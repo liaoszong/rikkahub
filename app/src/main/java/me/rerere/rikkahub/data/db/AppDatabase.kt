@@ -7,6 +7,7 @@ import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import me.rerere.ai.core.TokenUsage
 import me.rerere.rikkahub.data.db.dao.ConversationDAO
+import me.rerere.rikkahub.data.db.dao.CitationDAO
 import me.rerere.rikkahub.data.db.dao.ConversationGraphDAO
 import me.rerere.rikkahub.data.db.dao.ConversationMigrationDAO
 import me.rerere.rikkahub.data.db.dao.FavoriteDAO
@@ -19,6 +20,8 @@ import me.rerere.rikkahub.data.db.dao.MessageFtsOutboxDAO
 import me.rerere.rikkahub.data.db.dao.SyncV2DAO
 import me.rerere.rikkahub.data.db.dao.WorkspaceDAO
 import me.rerere.rikkahub.data.db.entity.ConversationEntity
+import me.rerere.rikkahub.data.db.entity.CitationMigrationJournalEntity
+import me.rerere.rikkahub.data.db.entity.CitationSourceEntity
 import me.rerere.rikkahub.data.db.entity.ConversationMessageEntity
 import me.rerere.rikkahub.data.db.entity.ConversationMigrationJournalEntity
 import me.rerere.rikkahub.data.db.entity.ConversationMigrationQuarantineEntity
@@ -33,6 +36,7 @@ import me.rerere.rikkahub.data.db.entity.MediaRelationEntity
 import me.rerere.rikkahub.data.db.entity.MediaReplicaEntity
 import me.rerere.rikkahub.data.db.entity.MemoryEntity
 import me.rerere.rikkahub.data.db.entity.MessageMediaRefEntity
+import me.rerere.rikkahub.data.db.entity.MessageCitationEntity
 import me.rerere.rikkahub.data.db.entity.MessageBranchGroupEntity
 import me.rerere.rikkahub.data.db.entity.MessageFtsOutboxEntity
 import me.rerere.rikkahub.data.db.entity.MessageNodeEntity
@@ -65,6 +69,9 @@ import me.rerere.rikkahub.utils.JsonInstant
         ConversationMigrationJournalEntity::class,
         ConversationMigrationQuarantineEntity::class,
         MessageFtsOutboxEntity::class,
+        CitationSourceEntity::class,
+        MessageCitationEntity::class,
+        CitationMigrationJournalEntity::class,
         MemoryEntity::class,
         MediaAssetEntity::class,
         MessageNodeEntity::class,
@@ -91,7 +98,7 @@ import me.rerere.rikkahub.utils.JsonInstant
         SyncOutboxEntity::class,
         SyncConflictEntity::class,
     ],
-    version = 30,
+    version = 31,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
@@ -122,6 +129,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun conversationMigrationDao(): ConversationMigrationDAO
 
     abstract fun messageFtsOutboxDao(): MessageFtsOutboxDAO
+
+    abstract fun citationDao(): CitationDAO
 
     abstract fun memoryDao(): MemoryDAO
 

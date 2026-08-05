@@ -8,10 +8,16 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessageAnnotation
+import me.rerere.rikkahub.data.db.dao.CitationDAO
+import me.rerere.rikkahub.data.db.dao.MessageCitationCount
 import me.rerere.rikkahub.data.db.dao.ConversationGraphDAO
 import me.rerere.rikkahub.data.db.dao.ConversationMigrationDAO
 import me.rerere.rikkahub.data.db.dao.ConversationV2State
 import me.rerere.rikkahub.data.db.entity.ConversationMessageEntity
+import me.rerere.rikkahub.data.db.entity.CitationSourceEntity
+import me.rerere.rikkahub.data.db.entity.CitationValues
+import me.rerere.rikkahub.data.db.entity.MessageCitationEntity
 import me.rerere.rikkahub.data.db.entity.ConversationMigrationJournalEntity
 import me.rerere.rikkahub.data.db.entity.ConversationV2Values
 import me.rerere.rikkahub.data.db.entity.MessageBranchGroupEntity
@@ -51,6 +57,7 @@ class ConversationV2ShadowProjector(
     private val graphDAO: ConversationGraphDAO,
     private val migrationDAO: ConversationMigrationDAO,
     private val json: Json,
+    private val citationDAO: CitationDAO? = null,
 ) {
     suspend fun loadReady(conversationId: String): ConversationV2ShadowProjection? {
         val state = migrationDAO.getConversationState(conversationId) ?: return null
@@ -183,6 +190,20 @@ class ConversationV2ShadowProjector(
         activeLeafMessageId: String?,
     ): ConversationV2ShadowProjection {
         val graph = loadConversationV2Graph(graphDAO, conversationId, activeLeafMessageId)
+        val citationJournal = citationDAO?.getJournal(conversationId)
+        val authoritativeCitations = if (
+            citationJournal?.phase == CitationValues.MIGRATION_PROJECTED ||
+            citationJournal?.phase == CitationValues.MIGRATION_READY
+        ) {
+            val state = migrationDAO.getConversationState(conversationId)
+                ?: failIntegrity(conversationId, "Citation projection has no owning conversation")
+            if (citationJournal.sourceRevision != state.revision) {
+                failIntegrity(conversationId, "Citation projection revision does not match conversation revision")
+            }
+            loadAuthoritativeCitations(conversationId, citationJournal.citationCount, citationJournal.projectionDigest)
+        } else {
+            null
+        }
         val messagesById = graph.messages.associateBy { it.messageId }
         val selectedPath = mutableListOf<ConversationMessageEntity>()
         val visited = mutableSetOf<String>()
@@ -242,7 +263,12 @@ class ConversationV2ShadowProjector(
             ConversationV2ShadowNode(
                 branchGroupId = group.branchGroupId,
                 messages = siblings.map { message ->
-                    decodeMessage(message, partsByMessage[message.messageId].orEmpty())
+                    decodeMessage(
+                        message,
+                        partsByMessage[message.messageId].orEmpty(),
+                        authoritativeCitations?.get(message.messageId).orEmpty()
+                            .takeIf { authoritativeCitations != null },
+                    )
                 },
                 selectedIndex = selectedIndex,
             )
@@ -256,9 +282,90 @@ class ConversationV2ShadowProjector(
         )
     }
 
-    private fun decodeMessage(
+    private suspend fun loadAuthoritativeCitations(
+        conversationId: String,
+        expectedCitationCount: Int,
+        expectedProjectionDigest: String?,
+    ): Map<String, List<UIMessageAnnotation.UrlCitation>> {
+        val dao = checkNotNull(citationDAO)
+        val counts = dao.getCitationCountsByMessage(conversationId)
+        if (counts.sumOf { it.citationCount.toLong() } != expectedCitationCount.toLong()) {
+            failIntegrity(conversationId, "Citation projection row count does not match its journal")
+        }
+        val batches = try {
+            planCitationHydrationBatches(counts)
+        } catch (error: IllegalArgumentException) {
+            throw ConversationV2IntegrityException(
+                conversationId,
+                "Citation hydration budget validation failed",
+                error,
+            )
+        }
+        val annotationsByMessage = linkedMapOf<String, MutableList<UIMessageAnnotation.UrlCitation>>()
+        val digest = CitationProjectionDigestAccumulator()
+        val canonicalUrlBySourceId = mutableMapOf<String, String>()
+        val sourceIdByCanonicalUrl = mutableMapOf<String, String>()
+        val seenCitationIds = mutableSetOf<String>()
+        var loadedCitationCount = 0
+
+        batches.forEach { batch ->
+            val citations = dao.getCitationsForMessages(conversationId, batch.messageIds)
+            if (citations.size != batch.citationCount) {
+                failIntegrity(conversationId, "Citation hydration batch changed while loading")
+            }
+            val sourceIds = citations.map(MessageCitationEntity::sourceId).distinct()
+            val sources = if (sourceIds.isEmpty()) emptyList() else dao.getSources(sourceIds)
+            if (sources.size != sourceIds.size) {
+                failIntegrity(conversationId, "Citation hydration batch references a missing source")
+            }
+            try {
+                requireValidCitationProjection(conversationId, sources, citations)
+            } catch (error: IllegalArgumentException) {
+                throw ConversationV2IntegrityException(
+                    conversationId,
+                    "Citation projection identity validation failed",
+                    error,
+                )
+            }
+            sources.forEach { source ->
+                canonicalUrlBySourceId.putIfAbsent(source.sourceId, source.canonicalUrl)?.let { previous ->
+                    if (previous != source.canonicalUrl) {
+                        failIntegrity(conversationId, "Citation source identity changed while loading")
+                    }
+                }
+                sourceIdByCanonicalUrl.putIfAbsent(source.canonicalUrl, source.sourceId)?.let { previous ->
+                    if (previous != source.sourceId) {
+                        failIntegrity(conversationId, "Canonical citation URL maps to multiple source identities")
+                    }
+                }
+            }
+            val sourcesById = sources.associateBy(CitationSourceEntity::sourceId)
+            citations.sortedWith(CITATION_HYDRATION_ORDER).forEach { citation ->
+                if (!seenCitationIds.add(citation.citationId)) {
+                    failIntegrity(conversationId, "Citation occurrence is duplicated across hydration batches")
+                }
+                val source = sourcesById[citation.sourceId]
+                    ?: failIntegrity(conversationId, "Citation hydration batch references a missing source")
+                digest.add(citation, source)
+                annotationsByMessage.getOrPut(citation.messageId, ::mutableListOf) +=
+                    citation.toAnnotation(source, json)
+            }
+            loadedCitationCount += citations.size
+        }
+
+        if (loadedCitationCount != expectedCitationCount) {
+            failIntegrity(conversationId, "Citation hydration count changed while loading")
+        }
+        if (digest.finish() != expectedProjectionDigest) {
+            failIntegrity(conversationId, "Citation projection digest does not match its journal")
+        }
+        return annotationsByMessage
+    }
+
+    internal fun decodeMessage(
         message: ConversationMessageEntity,
         parts: List<MessagePartEntity>,
+        authoritativeAnnotations: List<UIMessageAnnotation>?,
     ): UIMessage {
         val envelope = message.envelopeExtrasJson
             ?.let(json::parseToJsonElement)
@@ -285,8 +392,80 @@ class ConversationV2ShadowProjector(
         message.modelId?.let { envelope["modelId"] = JsonPrimitive(it) }
         message.usageJson?.let { envelope["usage"] = json.parseToJsonElement(it) }
         message.translation?.let { envelope["translation"] = JsonPrimitive(it) }
-        return json.decodeFromJsonElement(UIMessage.serializer(), JsonObject(envelope))
+        val decoded = json.decodeFromJsonElement(UIMessage.serializer(), JsonObject(envelope))
+        return authoritativeAnnotations?.let { authoritative ->
+            decoded.copy(
+                annotations = decoded.annotations.filterNot { it is UIMessageAnnotation.UrlCitation } + authoritative,
+            )
+        } ?: decoded
     }
+}
+
+private fun MessageCitationEntity.toAnnotation(
+    source: CitationSourceEntity,
+    json: Json,
+): UIMessageAnnotation.UrlCitation = UIMessageAnnotation.UrlCitation(
+    title = displayTitle,
+    url = source.canonicalUrl,
+    sourceId = sourceId,
+    citationId = citationId,
+    ordinal = ordinal,
+    publisher = displayPublisher,
+    retrievedAt = displayRetrievedAt,
+    startIndex = textStart,
+    endIndex = textEnd,
+    textPartOrdinal = textPartOrdinal,
+    offsetUnit = offsetUnit,
+    quote = quote,
+    isAvailable = isAvailable && source.deletedAt == null,
+    provenance = provenance,
+    providerMetadata = runCatching { json.parseToJsonElement(providerMetadataJson) as? JsonObject }.getOrNull(),
+)
+
+internal data class CitationHydrationBatch(
+    val messageIds: List<String>,
+    val citationCount: Int,
+)
+
+internal fun planCitationHydrationBatches(
+    counts: List<MessageCitationCount>,
+    maxMessages: Int = CITATION_HYDRATION_MAX_MESSAGES_PER_BATCH,
+    maxOccurrences: Int = CITATION_HYDRATION_MAX_OCCURRENCES_PER_BATCH,
+): List<CitationHydrationBatch> {
+    require(maxMessages > 0)
+    require(maxOccurrences > 0)
+    require(counts.map(MessageCitationCount::messageId).distinct().size == counts.size) {
+        "Citation hydration counts contain duplicate message IDs"
+    }
+    val batches = mutableListOf<CitationHydrationBatch>()
+    var messageIds = mutableListOf<String>()
+    var citationCount = 0
+
+    fun flush() {
+        if (messageIds.isEmpty()) return
+        batches += CitationHydrationBatch(messageIds.toList(), citationCount)
+        messageIds = mutableListOf()
+        citationCount = 0
+    }
+
+    counts.sortedBy(MessageCitationCount::messageId).forEach { count ->
+        require(count.citationCount in 1..MAX_CITATIONS_PER_MESSAGE) {
+            "Message ${count.messageId} exceeds the citation hydration budget"
+        }
+        require(count.citationCount <= maxOccurrences) {
+            "Message ${count.messageId} cannot fit in a citation hydration batch"
+        }
+        if (
+            messageIds.isNotEmpty() &&
+            (messageIds.size >= maxMessages || citationCount + count.citationCount > maxOccurrences)
+        ) {
+            flush()
+        }
+        messageIds += count.messageId
+        citationCount += count.citationCount
+    }
+    flush()
+    return batches
 }
 
 class ConversationV2IntegrityException(
@@ -299,6 +478,11 @@ private fun failIntegrity(conversationId: String, detail: String): Nothing =
     throw ConversationV2IntegrityException(conversationId, detail)
 
 private const val READY_LEGACY_DIGEST_CHUNK_SIZE = 256 * 1024
+internal const val CITATION_HYDRATION_MAX_MESSAGES_PER_BATCH = 64
+internal const val CITATION_HYDRATION_MAX_OCCURRENCES_PER_BATCH = 256
+private val CITATION_HYDRATION_ORDER = compareBy<MessageCitationEntity>(MessageCitationEntity::messageId)
+    .thenBy(MessageCitationEntity::ordinal)
+    .thenBy(MessageCitationEntity::citationId)
 
 private data class ReadyLegacySource(
     val digest: String,

@@ -7,6 +7,8 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.provider.Model
@@ -15,6 +17,8 @@ import kotlin.math.roundToInt
 import kotlin.time.Clock
 import kotlin.time.Instant
 import kotlin.uuid.Uuid
+
+internal const val STREAM_PART_ID_METADATA_KEY = "_rikkahubStreamPartId"
 
 // 公共消息抽象, 具体的Provider实现会转换为API接口需要的DTO
 @Serializable
@@ -43,9 +47,18 @@ data class UIMessage(
                             acc
                         } else {
                             val lastPart = acc.lastOrNull()
-                            if (lastPart is UIMessagePart.Text) {
+                            val deltaStreamPartId = deltaPart.metadata.streamPartIdOrNull()
+                            val lastStreamPartId = (lastPart as? UIMessagePart.Text)?.metadata.streamPartIdOrNull()
+                            val canMerge = lastPart is UIMessagePart.Text && when {
+                                deltaStreamPartId == null && lastStreamPartId == null -> true
+                                deltaStreamPartId != null && deltaStreamPartId == lastStreamPartId -> true
+                                else -> false
+                            }
+                            if (canMerge) {
                                 // Append to the last Text part
-                                acc.dropLast(1) + lastPart.copy(text = lastPart.text + deltaPart.text)
+                                acc.dropLast(1) + lastPart.copy(
+                                    text = lastPart.text + deltaPart.text,
+                                )
                             } else {
                                 // Create new Text part
                                 acc + deltaPart
@@ -138,8 +151,10 @@ data class UIMessage(
                 }
             }
             // Handle annotations
-            val newAnnotations = delta.annotations.ifEmpty {
+            val newAnnotations = if (delta.annotations.isEmpty()) {
                 annotations
+            } else {
+                mergeMessageAnnotations(annotations, delta.annotations)
             }
             copy(
                 parts = newParts,
@@ -832,8 +847,110 @@ sealed class UIMessageAnnotation {
     @SerialName("url_citation")
     data class UrlCitation(
         val title: String,
-        val url: String
+        val url: String,
+        /** Stable host-owned source identity; absent on provider/legacy input before persistence. */
+        val sourceId: String? = null,
+        /** Stable identity for this occurrence in one durable message. */
+        val citationId: String? = null,
+        val ordinal: Int? = null,
+        val publisher: String? = null,
+        val retrievedAt: Long? = null,
+        val startIndex: Int? = null,
+        val endIndex: Int? = null,
+        /** Text-part ordinal for part-local spans; null for message-global/provider-unknown spans. */
+        val textPartOrdinal: Int? = null,
+        /** utf8_byte, utf16_code_unit, message_flattened_utf16, or provider_character. */
+        val offsetUnit: String? = null,
+        val quote: String? = null,
+        /** False keeps a tombstoned source occurrence stable while all presentation surfaces disable navigation. */
+        val isAvailable: Boolean = true,
+        /** provider, search_tool, import, or legacy_markdown. */
+        val provenance: String? = null,
+        /** Provider/tool metadata; persistence applies a bounded canonical envelope. */
+        val providerMetadata: JsonObject? = null,
     ) : UIMessageAnnotation()
+}
+
+internal fun mergeMessageAnnotations(
+    existing: List<UIMessageAnnotation>,
+    incoming: List<UIMessageAnnotation>,
+): List<UIMessageAnnotation> {
+    val result = existing.toMutableList()
+    incoming.forEach { candidate ->
+        val index = result.indexOfFirst { current -> annotationsDescribeSameOccurrence(current, candidate) }
+        if (index < 0) {
+            result += candidate
+        } else {
+            val current = result[index]
+            result[index] = if (
+                current is UIMessageAnnotation.UrlCitation && candidate is UIMessageAnnotation.UrlCitation
+            ) {
+                current.mergeStreamingCitation(candidate)
+            } else {
+                candidate
+            }
+        }
+    }
+    return result
+}
+
+private fun JsonObject?.streamPartIdOrNull(): String? = this
+    ?.get(STREAM_PART_ID_METADATA_KEY)
+    .let { it as? JsonPrimitive }
+    ?.contentOrNull
+
+private fun annotationsDescribeSameOccurrence(
+    current: UIMessageAnnotation,
+    incoming: UIMessageAnnotation,
+): Boolean {
+    if (current !is UIMessageAnnotation.UrlCitation || incoming !is UIMessageAnnotation.UrlCitation) {
+        return current == incoming
+    }
+    if (current.citationId != null && incoming.citationId != null) {
+        return current.citationId == incoming.citationId
+    }
+    val sameSource = when {
+        current.sourceId != null && incoming.sourceId != null -> current.sourceId == incoming.sourceId
+        else -> current.url.trim() == incoming.url.trim()
+    }
+    if (!sameSource) return false
+    val currentHasSpan = current.hasCitationSpan()
+    val incomingHasSpan = incoming.hasCitationSpan()
+    if (!currentHasSpan || !incomingHasSpan) return true
+    return current.startIndex == incoming.startIndex &&
+        current.endIndex == incoming.endIndex &&
+        current.textPartOrdinal == incoming.textPartOrdinal &&
+        current.offsetUnit == incoming.offsetUnit
+}
+
+private fun UIMessageAnnotation.UrlCitation.hasCitationSpan(): Boolean =
+    startIndex != null || endIndex != null || textPartOrdinal != null
+
+private fun UIMessageAnnotation.UrlCitation.mergeStreamingCitation(
+    incoming: UIMessageAnnotation.UrlCitation,
+): UIMessageAnnotation.UrlCitation {
+    val incomingHasSpan = incoming.hasCitationSpan()
+    return copy(
+        title = incoming.title.takeIf { it.length > title.length } ?: title,
+        url = incoming.url.takeIf(String::isNotBlank) ?: url,
+        sourceId = incoming.sourceId ?: sourceId,
+        citationId = incoming.citationId ?: citationId,
+        ordinal = incoming.ordinal ?: ordinal,
+        publisher = incoming.publisher ?: publisher,
+        retrievedAt = listOfNotNull(retrievedAt, incoming.retrievedAt).maxOrNull(),
+        startIndex = incoming.startIndex ?: startIndex,
+        endIndex = incoming.endIndex ?: endIndex,
+        textPartOrdinal = incoming.textPartOrdinal ?: textPartOrdinal,
+        offsetUnit = incoming.offsetUnit ?: offsetUnit,
+        quote = incoming.quote ?: quote,
+        isAvailable = isAvailable && incoming.isAvailable,
+        provenance = incoming.provenance ?: provenance,
+        providerMetadata = if (incomingHasSpan || !hasCitationSpan()) {
+            incoming.providerMetadata ?: providerMetadata
+        } else {
+            providerMetadata ?: incoming.providerMetadata
+        },
+    )
 }
 
 @Serializable

@@ -6,16 +6,21 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import me.rerere.rikkahub.data.db.AppDatabase
 import me.rerere.rikkahub.data.db.dao.ConversationDAO
+import me.rerere.rikkahub.data.db.dao.CitationDAO
 import me.rerere.rikkahub.data.db.dao.ConversationGraphDAO
 import me.rerere.rikkahub.data.db.dao.ConversationMigrationDAO
 import me.rerere.rikkahub.data.db.dao.MessageFtsOutboxDAO
 import me.rerere.rikkahub.data.db.dao.MessageNodeDAO
 import me.rerere.rikkahub.data.db.entity.ConversationEntity
+import me.rerere.rikkahub.data.db.entity.CitationMigrationJournalEntity
+import me.rerere.rikkahub.data.db.entity.CitationSourceEntity
+import me.rerere.rikkahub.data.db.entity.CitationValues
 import me.rerere.rikkahub.data.db.entity.ConversationMessageEntity
 import me.rerere.rikkahub.data.db.entity.ConversationMigrationJournalEntity
 import me.rerere.rikkahub.data.db.entity.ConversationV2Values
 import me.rerere.rikkahub.data.db.entity.MessageBranchGroupEntity
 import me.rerere.rikkahub.data.db.entity.MessageFtsOutboxEntity
+import me.rerere.rikkahub.data.db.entity.MessageCitationEntity
 import me.rerere.rikkahub.data.db.entity.MessagePartEntity
 import me.rerere.rikkahub.data.db.media.ConversationMediaReferenceIndexer
 import me.rerere.rikkahub.data.db.media.MediaReferenceBackfillScheduler
@@ -35,6 +40,7 @@ class ConversationV2Writer internal constructor(
     private val json: Json,
     private val mediaReferenceIndexer: ConversationMediaReferenceIndexer,
     private val mediaReferenceBackfillScheduler: MediaReferenceBackfillScheduler,
+    private val citationDAO: CitationDAO? = null,
     private val nowMillis: () -> Long = System::currentTimeMillis,
 ) {
     suspend fun insert(conversation: Conversation): Conversation {
@@ -42,16 +48,16 @@ class ConversationV2Writer internal constructor(
         val persisted = database.withTransaction {
             val conversationId = conversation.id.toString()
             val revision = 0L
-            conversationDAO.insert(
-                conversation.toEntity(
-                    revision = revision,
-                    storageVersion = ConversationV2Values.STORAGE_VERSION_V2,
-                    activeLeafMessageId = encoded.graph.activeLeafMessageId,
-                    internalMarker = CONVERSATION_V2_INTERNAL_WRITER_MARKER,
-                ),
+            val insertedEntity = conversation.toEntity(
+                revision = revision,
+                storageVersion = ConversationV2Values.STORAGE_VERSION_V2,
+                activeLeafMessageId = encoded.graph.activeLeafMessageId,
+                internalMarker = CONVERSATION_V2_INTERNAL_WRITER_MARKER,
             )
+            conversationDAO.insert(insertedEntity)
             replaceLegacyProjection(conversationId, encoded)
             val writtenGraph = reconcileGraph(conversationId, encoded.graph)
+            reconcileCitations(conversationId, revision, encoded)
             writeReadyJournal(
                 conversationId,
                 revision,
@@ -65,9 +71,11 @@ class ConversationV2Writer internal constructor(
                 now = nowMillis(),
             )
             clearInternalMarker(conversationId)
-            projector.loadReady(conversationId)
-                ?: throw ConversationV2IntegrityException(conversationId, "Inserted READY graph is unavailable")
-            conversation.normalized(encoded, revision)
+            loadAuthoritativeConversation(
+                conversation = conversation,
+                entity = insertedEntity,
+                unavailableDetail = "Inserted READY graph is unavailable",
+            )
         }
         mediaReferenceBackfillScheduler.requestBackfill()
         return persisted
@@ -118,6 +126,44 @@ class ConversationV2Writer internal constructor(
         }
         mediaReferenceBackfillScheduler.requestBackfill()
         return persisted
+    }
+
+    /**
+     * Rewrites both the v2 message envelope and the legacy MessageNode mirror from the normalized
+     * citation authority. The PROJECTED journal phase makes this restart-safe: a crash before this
+     * transaction leaves the sanitized citation rows authoritative and the next backfill retries
+     * the physical scrub; success advances the conversation revision and citation journal together.
+     */
+    internal suspend fun scrubProjectedCitationPayloads(conversationId: String): Boolean {
+        val rewritten = database.withTransaction {
+            val citationDAO = citationDAO ?: return@withTransaction false
+            val citationJournal = citationDAO.getJournal(conversationId) ?: return@withTransaction true
+            if (citationJournal.phase == CitationValues.MIGRATION_READY) return@withTransaction true
+            if (citationJournal.phase != CitationValues.MIGRATION_PROJECTED) return@withTransaction false
+            val state = migrationDAO.getConversationState(conversationId) ?: return@withTransaction true
+            val entity = conversationDAO.getConversationById(conversationId) ?: return@withTransaction true
+            val readyJournal = migrationDAO.getJournal(conversationId)
+                ?.takeIf { it.phase == ConversationV2Values.MIGRATION_READY }
+                ?: throw ConversationV2IntegrityException(
+                    conversationId,
+                    "Cannot scrub citation payloads without a READY conversation journal",
+                )
+            val projection = projector.loadForState(state, readyJournal)
+                ?: throw ConversationV2IntegrityException(
+                    conversationId,
+                    "Cannot load the PROJECTED citation authority for physical scrub",
+                )
+            val normalized = Conversation(
+                id = Uuid.parse(entity.id),
+                assistantId = Uuid.parse(entity.assistantId),
+                messageNodes = projection.asLegacyMessageNodes(),
+            ).withMetadataFrom(entity)
+            val encoded = codec.encode(normalized)
+            updateReady(normalized, encoded, state.revision, readyJournal)
+            true
+        }
+        if (rewritten) mediaReferenceBackfillScheduler.requestBackfill()
+        return rewritten
     }
 
     internal suspend fun patchMetadata(
@@ -209,16 +255,16 @@ class ConversationV2Writer internal constructor(
             actualRevision = actualRevision,
             storageVersion = ConversationV2Values.STORAGE_VERSION_V2,
         )
-        updateClaimedEntity(
-            conversation.toEntity(
-                revision = targetRevision,
-                storageVersion = ConversationV2Values.STORAGE_VERSION_V2,
-                activeLeafMessageId = encoded.graph.activeLeafMessageId,
-                internalMarker = CONVERSATION_V2_INTERNAL_WRITER_MARKER,
-            ),
+        val claimedEntity = conversation.toEntity(
+            revision = targetRevision,
+            storageVersion = ConversationV2Values.STORAGE_VERSION_V2,
+            activeLeafMessageId = encoded.graph.activeLeafMessageId,
+            internalMarker = CONVERSATION_V2_INTERNAL_WRITER_MARKER,
         )
+        updateClaimedEntity(claimedEntity)
         replaceLegacyProjection(conversationId, encoded)
         val writtenGraph = reconcileGraph(conversationId, encoded.graph)
+        reconcileCitations(conversationId, targetRevision, encoded)
         writeReadyJournal(
             conversationId,
             targetRevision,
@@ -232,9 +278,11 @@ class ConversationV2Writer internal constructor(
             now = nowMillis(),
         )
         clearInternalMarker(conversationId)
-        projector.loadReady(conversationId)
-            ?: throw ConversationV2IntegrityException(conversationId, "Updated READY graph is unavailable")
-        return conversation.normalized(encoded, targetRevision)
+        return loadAuthoritativeConversation(
+            conversation = conversation,
+            entity = claimedEntity,
+            unavailableDetail = "Updated READY graph is unavailable",
+        )
     }
 
     private suspend fun promoteLegacy(
@@ -250,16 +298,16 @@ class ConversationV2Writer internal constructor(
             actualRevision = actualRevision,
             storageVersion = ConversationV2Values.STORAGE_VERSION_LEGACY,
         )
-        updateClaimedEntity(
-            conversation.toEntity(
-                revision = targetRevision,
-                storageVersion = ConversationV2Values.STORAGE_VERSION_V2,
-                activeLeafMessageId = encoded.graph.activeLeafMessageId,
-                internalMarker = CONVERSATION_V2_INTERNAL_WRITER_MARKER,
-            ),
+        val claimedEntity = conversation.toEntity(
+            revision = targetRevision,
+            storageVersion = ConversationV2Values.STORAGE_VERSION_V2,
+            activeLeafMessageId = encoded.graph.activeLeafMessageId,
+            internalMarker = CONVERSATION_V2_INTERNAL_WRITER_MARKER,
         )
+        updateClaimedEntity(claimedEntity)
         replaceLegacyProjection(conversationId, encoded)
         val writtenGraph = reconcileGraph(conversationId, encoded.graph)
+        reconcileCitations(conversationId, targetRevision, encoded)
         writeReadyJournal(
             conversationId,
             targetRevision,
@@ -273,9 +321,11 @@ class ConversationV2Writer internal constructor(
             now = nowMillis(),
         )
         clearInternalMarker(conversationId)
-        projector.loadReady(conversationId)
-            ?: throw ConversationV2IntegrityException(conversationId, "Promoted READY graph is unavailable")
-        return conversation.normalized(encoded, targetRevision)
+        return loadAuthoritativeConversation(
+            conversation = conversation,
+            entity = claimedEntity,
+            unavailableDetail = "Promoted READY graph is unavailable",
+        )
     }
 
     private suspend fun patchReadyMetadata(
@@ -293,9 +343,11 @@ class ConversationV2Writer internal constructor(
             )
         val updatedEntity = currentEntity.withMetadataPatch(patch)
         if (updatedEntity == currentEntity) {
-            projector.loadReady(conversationId)
-                ?: throw ConversationV2IntegrityException(conversationId, "Unchanged metadata READY graph is unavailable")
-            return conversation.withMetadataFrom(currentEntity)
+            return loadAuthoritativeConversation(
+                conversation = conversation,
+                entity = currentEntity,
+                unavailableDetail = "Unchanged metadata READY graph is unavailable",
+            )
         }
 
         val targetRevision = claimRevision(
@@ -330,10 +382,20 @@ class ConversationV2Writer internal constructor(
                 operation = ConversationV2Values.OUTBOX_UPSERT,
             )
         }
+        citationDAO?.getJournal(conversationId)?.let { journal ->
+            if (
+                journal.phase == CitationValues.MIGRATION_PROJECTED ||
+                journal.phase == CitationValues.MIGRATION_READY
+            ) {
+                citationDAO.upsertJournal(journal.copy(sourceRevision = targetRevision, updatedAt = nowMillis()))
+            }
+        }
         clearInternalMarker(conversationId)
-        projector.loadReady(conversationId)
-            ?: throw ConversationV2IntegrityException(conversationId, "Metadata-patched READY graph is unavailable")
-        return conversation.withMetadataFrom(claimedEntity)
+        return loadAuthoritativeConversation(
+            conversation = conversation,
+            entity = claimedEntity,
+            unavailableDetail = "Metadata-patched READY graph is unavailable",
+        )
     }
 
     private suspend fun claimRevision(
@@ -419,6 +481,55 @@ class ConversationV2Writer internal constructor(
             throw ConversationV2IntegrityException(conversationId, "Incremental graph write did not reconcile")
         }
         return written
+    }
+
+    private suspend fun reconcileCitations(
+        conversationId: String,
+        sourceRevision: Long,
+        encoded: EncodedConversationV2,
+    ) {
+        val citationDAO = citationDAO ?: return
+        val incomingSources = encoded.citationSources
+        val oldSources = if (incomingSources.isEmpty()) {
+            emptyMap()
+        } else {
+            citationDAO.getSources(incomingSources.map(CitationSourceEntity::sourceId))
+                .associateBy(CitationSourceEntity::sourceId)
+        }
+        val sources = incomingSources.map { incoming ->
+            val old = oldSources[incoming.sourceId]
+            // Shared source identity is immutable under ordinary conversation writes. Display
+            // metadata and availability belong to message_citation, so another conversation
+            // cannot rewrite history or revive an explicit global source tombstone.
+            old ?: incoming
+        }
+        if (sources.isNotEmpty()) citationDAO.upsertSources(sources)
+
+        val oldCitations = citationDAO.getCitations(conversationId).associateBy(MessageCitationEntity::citationId)
+        val citations = encoded.citations.map { incoming ->
+            val old = oldCitations[incoming.citationId]
+            when {
+                old == null -> incoming
+                old.recordDigest == incoming.recordDigest && old.deletedAt == null -> incoming.copy(revision = old.revision)
+                else -> incoming.copy(revision = Math.addExact(old.revision, 1L))
+            }
+        }
+        requireValidCitationProjection(conversationId, sources, citations)
+        val removedIds = oldCitations.keys - citations.mapTo(mutableSetOf(), MessageCitationEntity::citationId)
+        if (removedIds.isNotEmpty()) citationDAO.deleteCitations(conversationId, removedIds.toList())
+        if (citations.isNotEmpty()) citationDAO.upsertCitations(citations)
+
+        val digest = digestCitationProjection(sources, citations)
+        citationDAO.upsertJournal(
+            CitationMigrationJournalEntity(
+                conversationId = conversationId,
+                phase = CitationValues.MIGRATION_READY,
+                sourceRevision = sourceRevision,
+                projectionDigest = digest,
+                citationCount = citations.size,
+                updatedAt = nowMillis(),
+            ),
+        )
     }
 
     private suspend fun writeReadyJournal(
@@ -508,10 +619,17 @@ class ConversationV2Writer internal constructor(
         return json.encodeToString((previous + current).distinct().sorted())
     }
 
-    private fun Conversation.normalized(encoded: EncodedConversationV2, revision: Long): Conversation = copy(
-        messageNodes = encoded.normalizedMessageNodes,
-        storageRevision = revision,
-    )
+    private suspend fun loadAuthoritativeConversation(
+        conversation: Conversation,
+        entity: ConversationEntity,
+        unavailableDetail: String,
+    ): Conversation {
+        val projection = projector.loadReady(entity.id)
+            ?: throw ConversationV2IntegrityException(entity.id, unavailableDetail)
+        return conversation.withMetadataFrom(entity).copy(
+            messageNodes = projection.asLegacyMessageNodes(),
+        )
+    }
 
     private fun Conversation.toEntity(
         revision: Long,

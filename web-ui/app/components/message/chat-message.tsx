@@ -30,6 +30,7 @@ import type {
 
 import { copyTextToClipboard } from "~/lib/clipboard";
 import { convertMessageToMarkdown, downloadMarkdown } from "~/lib/export-markdown";
+import { appendCitationsToPlainText, getSafeCitationUrl } from "~/lib/citations";
 import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
 import {
@@ -199,8 +200,31 @@ function parseToolOutputJson(text: string): unknown {
   }
 }
 
-function buildCitationUrlMap(parts: UIMessagePart[]): Map<string, string> {
+function buildCitationUrlMap(
+  parts: UIMessagePart[],
+  annotations: MessageDto["annotations"],
+): Map<string, string> {
   const map = new Map<string, string>();
+  const stableAuthorities = (annotations ?? []).filter(
+    (annotation) =>
+      annotation.type === "url_citation" && Boolean(annotation.citationId || annotation.sourceId),
+  );
+
+  stableAuthorities.forEach((annotation) => {
+    if (annotation.type !== "url_citation" || annotation.isAvailable === false) return;
+    const url = getSafeCitationUrl(annotation.url);
+    if (!url) return;
+    if (annotation.citationId) map.set(annotation.citationId, url);
+    if (annotation.sourceId) map.set(annotation.sourceId, url);
+    const legacyShortId = annotation.providerMetadata?.legacyShortId;
+    if (typeof legacyShortId === "string" && legacyShortId.trim()) {
+      map.set(legacyShortId.trim(), url);
+    }
+  });
+
+  // A Room 31 projection is authoritative for the whole message. Falling back to the
+  // tool payload here would revive a tombstoned/unavailable source.
+  if (stableAuthorities.length > 0) return map;
 
   parts.forEach((part) => {
     if (part.type !== "tool" || part.toolName !== "search_web") return;
@@ -216,7 +240,7 @@ function buildCitationUrlMap(parts: UIMessagePart[]): Map<string, string> {
     items.forEach((item) => {
       if (!item || typeof item !== "object") return;
       const id = String((item as { id?: unknown }).id ?? "").trim();
-      const url = String((item as { url?: unknown }).url ?? "").trim();
+      const url = getSafeCitationUrl(String((item as { url?: unknown }).url ?? "").trim());
       if (!id || !url) return;
       if (!map.has(id)) {
         map.set(id, url);
@@ -255,7 +279,7 @@ const ChatMessageActionsRow = React.memo(({
   const [forking, setForking] = React.useState(false);
 
   const handleCopy = React.useCallback(async () => {
-    const text = buildCopyText(message.parts, t);
+    const text = appendCitationsToPlainText(buildCopyText(message.parts, t), message.annotations);
     if (!text) return;
 
     try {
@@ -263,7 +287,7 @@ const ChatMessageActionsRow = React.memo(({
     } catch {
       // Ignore copy failures to keep action row interaction uninterrupted.
     }
-  }, [message.parts, t]);
+  }, [message.annotations, message.parts, t]);
 
   const handleRegenerate = React.useCallback(async () => {
     if (!onRegenerate) return;
@@ -528,7 +552,10 @@ export const ChatMessage = React.memo(({
   const isUser = message.role === "USER";
   const hasMessageContent = message.parts.some(hasRenderablePart);
   const showActions = isLastMessage ? !loading : hasMessageContent;
-  const citationUrlMap = React.useMemo(() => buildCitationUrlMap(message.parts), [message.parts]);
+  const citationUrlMap = React.useMemo(
+    () => buildCitationUrlMap(message.parts, message.annotations),
+    [message.parts, message.annotations],
+  );
   const handleClickCitation = React.useCallback(
     (citationId: string) => {
       const url = citationUrlMap.get(citationId.trim());

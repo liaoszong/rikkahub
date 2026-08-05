@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonArrayBuilder
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -37,7 +38,9 @@ import me.rerere.ai.provider.providers.groupPartsByToolBoundary
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.OpenAIReasoningMetadata
+import me.rerere.ai.ui.STREAM_PART_ID_METADATA_KEY
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
@@ -133,6 +136,7 @@ class ResponseAPI(
 
         Log.i(TAG, "streamText: model=${params.model.modelId} messages=${messages.size}")
 
+        val citationPartTracker = ResponseTextPartOrdinalTracker()
         val listener = object : EventSourceListener() {
             override fun onEvent(
                 eventSource: EventSource,
@@ -146,7 +150,7 @@ class ResponseAPI(
                 }
                 Log.d(TAG, "onEvent: id=$id type=$type")
                 val json = json.parseToJsonElement(data).jsonObject
-                val chunk = parseResponseDelta(json)
+                val chunk = parseResponseDelta(json, citationPartTracker)
                 if (chunk != null) {
                     trySend(chunk).onFailure { e ->
                         Log.w(TAG, "onEvent: chunk dropped (${e?.javaClass?.simpleName})")
@@ -468,24 +472,83 @@ class ResponseAPI(
         })
     }
 
-    private fun parseResponseDelta(jsonObject: JsonObject): MessageChunk? {
+    private fun parseResponseDelta(
+        jsonObject: JsonObject,
+        citationPartTracker: ResponseTextPartOrdinalTracker,
+    ): MessageChunk? {
         val chunkType = jsonObject["type"]?.jsonPrimitive?.content ?: error("chunk type not found")
 
         when (chunkType) {
             "response.output_text.delta" -> {
+                val outputIndex = jsonObject["output_index"]?.jsonPrimitive?.intOrNull
+                val contentIndex = jsonObject["content_index"]?.jsonPrimitive?.intOrNull
+                val itemId = jsonObject["item_id"]?.jsonPrimitive?.contentOrNull
+                citationPartTracker.ordinalFor(
+                    outputIndex = outputIndex,
+                    contentIndex = contentIndex,
+                    itemId = itemId,
+                )
                 return MessageChunk(
                     id = jsonObject["item_id"]?.jsonPrimitive?.contentOrNull ?: "",
                     model = "",
                     choices = listOf(
                         UIMessageChoice(
                             index = 0,
-                            delta = UIMessage.assistant(
-                                jsonObject["delta"]?.jsonPrimitive?.contentOrNull ?: ""
+                            delta = UIMessage(
+                                role = MessageRole.ASSISTANT,
+                                parts = listOf(
+                                    UIMessagePart.Text(
+                                        text = jsonObject["delta"]?.jsonPrimitive?.contentOrNull ?: "",
+                                        metadata = citationPartTracker.partIdFor(
+                                            outputIndex = outputIndex,
+                                            contentIndex = contentIndex,
+                                            itemId = itemId,
+                                        )?.let { streamPartId ->
+                                            buildJsonObject {
+                                                put(STREAM_PART_ID_METADATA_KEY, streamPartId)
+                                            }
+                                        },
+                                    ),
+                                ),
                             ),
                             message = null,
                             finishReason = null
                         )
                     )
+                )
+            }
+
+            "response.output_text.annotation.added" -> {
+                val outputIndex = jsonObject["output_index"]?.jsonPrimitive?.intOrNull
+                val contentIndex = jsonObject["content_index"]?.jsonPrimitive?.intOrNull
+                val annotation = (jsonObject["annotation"] as? JsonObject)
+                    ?.let {
+                        parseResponseUrlCitationAnnotation(
+                            annotation = it,
+                            textPartOrdinal = citationPartTracker.ordinalFor(
+                                outputIndex = outputIndex,
+                                contentIndex = contentIndex,
+                                itemId = jsonObject["item_id"]?.jsonPrimitive?.contentOrNull,
+                            ),
+                            outputIndex = outputIndex,
+                            contentIndex = contentIndex,
+                        )
+                    } ?: return null
+                return MessageChunk(
+                    id = jsonObject["item_id"]?.jsonPrimitive?.contentOrNull ?: "",
+                    model = "",
+                    choices = listOf(
+                        UIMessageChoice(
+                            index = 0,
+                            delta = UIMessage(
+                                role = MessageRole.ASSISTANT,
+                                parts = emptyList(),
+                                annotations = listOf(annotation),
+                            ),
+                            message = null,
+                            finishReason = null,
+                        ),
+                    ),
                 )
             }
 
@@ -686,8 +749,10 @@ class ResponseAPI(
     private fun parseResponseOutput(jsonObject: JsonObject): MessageChunk {
         val outputs = jsonObject["output"]?.jsonArray ?: error("output not found")
         val parts = arrayListOf<UIMessagePart>()
+        val annotations = arrayListOf<UIMessageAnnotation>()
+        var textPartOrdinal = 0
 
-        outputs.forEach { outputItem ->
+        outputs.forEachIndexed { outputIndex, outputItem ->
             val output = outputItem.jsonObject
             val type = output["type"]?.jsonPrimitive?.content ?: error("output type not found")
             when (type) {
@@ -727,14 +792,21 @@ class ResponseAPI(
 
                 "message" -> {
                     val content = output["content"]?.jsonArray ?: error("content not found")
-                    content.map { it.jsonObject }.forEach { part ->
+                    content.map { it.jsonObject }.forEachIndexed { contentIndex, part ->
                         val partType = part["type"]?.jsonPrimitive?.content ?: error("part type not found")
                         when (partType) {
                             "output_text" -> {
-                                val text = part["text"]?.jsonPrimitive?.content ?: error("text not found")
+                                val currentTextPartOrdinal = textPartOrdinal++
+                                val parsed = parseResponseOutputTextWithCitations(
+                                    part = part,
+                                    textPartOrdinal = currentTextPartOrdinal,
+                                    outputIndex = outputIndex,
+                                    contentIndex = contentIndex,
+                                ) ?: error("text not found")
+                                annotations += parsed.annotations
                                 parts.add(
                                     UIMessagePart.Text(
-                                        text = text
+                                        text = parsed.text
                                     )
                                 )
                             }
@@ -755,6 +827,7 @@ class ResponseAPI(
                     message = UIMessage(
                         role = MessageRole.ASSISTANT,
                         parts = parts,
+                        annotations = annotations,
                     ),
                     finishReason = null,
                     delta = null
@@ -775,6 +848,82 @@ class ResponseAPI(
         )
     }
 }
+
+internal data class ParsedResponseOutputText(
+    val text: String,
+    val annotations: List<UIMessageAnnotation.UrlCitation>,
+)
+
+internal fun parseResponseOutputTextWithCitations(
+    part: JsonObject,
+    textPartOrdinal: Int,
+    outputIndex: Int,
+    contentIndex: Int,
+): ParsedResponseOutputText? {
+    val text = (part["text"] as? JsonPrimitive)?.contentOrNull ?: return null
+    val annotations = (part["annotations"] as? JsonArray).orEmpty().mapNotNull { element ->
+        (element as? JsonObject)?.let {
+            parseResponseUrlCitationAnnotation(
+                annotation = it,
+                textPartOrdinal = textPartOrdinal,
+                outputIndex = outputIndex,
+                contentIndex = contentIndex,
+            )
+        }
+    }
+    return ParsedResponseOutputText(text = text, annotations = annotations)
+}
+
+internal fun parseResponseUrlCitationAnnotation(
+    annotation: JsonObject,
+    textPartOrdinal: Int? = null,
+    outputIndex: Int? = null,
+    contentIndex: Int? = null,
+): UIMessageAnnotation.UrlCitation? {
+    if ((annotation["type"] as? JsonPrimitive)?.contentOrNull != "url_citation") return null
+    val url = (annotation["url"] as? JsonPrimitive)?.contentOrNull
+        ?.takeIf(String::isNotBlank) ?: return null
+    return UIMessageAnnotation.UrlCitation(
+        title = (annotation["title"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
+        url = url,
+        startIndex = (annotation["start_index"] as? JsonPrimitive)?.intOrNull,
+        endIndex = (annotation["end_index"] as? JsonPrimitive)?.intOrNull,
+        textPartOrdinal = textPartOrdinal,
+        offsetUnit = "provider_character",
+        provenance = "provider",
+        providerMetadata = if (outputIndex == null && contentIndex == null) {
+            annotation
+        } else {
+            buildJsonObject {
+                annotation.forEach { (key, value) -> put(key, value) }
+                outputIndex?.let { put("responseOutputIndex", it) }
+                contentIndex?.let { put("responseContentIndex", it) }
+            }
+        },
+    )
+}
+
+internal class ResponseTextPartOrdinalTracker {
+    private val ordinals = linkedMapOf<ResponseTextPartKey, Int>()
+
+    fun ordinalFor(outputIndex: Int?, contentIndex: Int?, itemId: String?): Int? {
+        val resolvedContentIndex = contentIndex ?: return null
+        val key = ResponseTextPartKey(outputIndex, itemId.orEmpty(), resolvedContentIndex)
+        return ordinals.getOrPut(key) { ordinals.size }
+    }
+
+    fun partIdFor(outputIndex: Int?, contentIndex: Int?, itemId: String?): String? {
+        val resolvedContentIndex = contentIndex ?: return null
+        return listOf(outputIndex?.toString().orEmpty(), itemId.orEmpty(), resolvedContentIndex.toString())
+            .joinToString(":")
+    }
+}
+
+private data class ResponseTextPartKey(
+    val outputIndex: Int?,
+    val itemId: String,
+    val contentIndex: Int,
+)
 
 private fun isModelAllowTemperature(model: Model): Boolean {
     return !ModelRegistry.OPENAI_O_MODELS.match(model.modelId) && !ModelRegistry.GPT_5.match(model.modelId)

@@ -14,6 +14,7 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import me.rerere.rikkahub.data.files.FileFolders
 import java.io.File
@@ -31,21 +32,18 @@ import me.rerere.rikkahub.di.repositoryModule
 import me.rerere.rikkahub.di.viewModelModule
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.imggen.MediaAssetRecovery
-import me.rerere.rikkahub.data.imggen.ImageMediaReconciliationResult
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.credential.CredentialReadiness
 import me.rerere.rikkahub.data.db.conversation.ConversationV2BackfillCoordinator
-import me.rerere.rikkahub.data.db.conversation.ConversationV2BackfillSummary
+import me.rerere.rikkahub.data.db.conversation.CitationBackfillCoordinator
+import me.rerere.rikkahub.data.db.conversation.runCitationBackfillSchedule
 import me.rerere.rikkahub.data.db.fts.MessageFtsOutboxProcessor
 import me.rerere.rikkahub.data.db.media.ConversationMediaReferenceBackfillProcessor
 import me.rerere.rikkahub.fork.pale.request.ChatRequestReconciler
-import me.rerere.rikkahub.fork.pale.request.ChatRequestReconcileReport
 import me.rerere.rikkahub.fork.pale.request.ToolRequestReconciler
 import me.rerere.rikkahub.fork.pale.request.ToolRequestReconcileReport
 import me.rerere.rikkahub.fork.pale.request.ImageRequestReconciler
-import me.rerere.rikkahub.fork.pale.request.ImageRequestReconcileReport
 import me.rerere.rikkahub.fork.pale.request.ImageTaskRecoveryCoordinator
-import me.rerere.rikkahub.fork.pale.request.ImageTaskRecoveryReport
 import me.rerere.rikkahub.service.WebServerService
 import me.rerere.rikkahub.utils.CrashHandler
 import me.rerere.rikkahub.utils.DatabaseUtil
@@ -65,15 +63,25 @@ const val CHAT_LIVE_UPDATE_NOTIFICATION_CHANNEL_ID = "chat_live_update"
 const val WEB_SERVER_NOTIFICATION_CHANNEL_ID = "web_server"
 const val IMAGE_GENERATION_NOTIFICATION_CHANNEL_ID = "image_generation"
 
-private data class DurableStartupRecoveryResult(
-    val conversation: ConversationV2BackfillSummary,
-    val chat: ChatRequestReconcileReport,
-    val media: ImageMediaReconciliationResult,
-    val imageRequests: ImageRequestReconcileReport,
-    val imageTasks: ImageTaskRecoveryReport,
-    val imagePasses: Int,
-    val tools: ToolRequestReconcileReport,
+internal data class StartupRecoveryDomain(
+    val name: String,
+    val recover: suspend () -> Unit,
 )
+
+internal suspend fun runIndependentStartupRecoveryDomains(
+    domains: List<StartupRecoveryDomain>,
+    onFailure: (domain: String, error: Throwable) -> Unit,
+) {
+    domains.forEach { domain ->
+        try {
+            domain.recover()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            onFailure(domain.name, error)
+        }
+    }
+}
 
 private operator fun ToolRequestReconcileReport.plus(other: ToolRequestReconcileReport) =
     ToolRequestReconcileReport(
@@ -224,91 +232,118 @@ class RikkaHubApp : Application() {
 
     private fun backfillConversationStoreV2() {
         get<AppScope>().launch(Dispatchers.IO) {
-            runCatching {
-                val result = get<ConversationV2BackfillCoordinator>().runPending()
-                val requestRecovery = get<ChatRequestReconciler>().reconcilePending()
-                var imageRequestRecovery = get<ImageRequestReconciler>().reconcilePending()
-                var imageTaskRecovery = get<ImageTaskRecoveryCoordinator>().reconcilePending()
-                // Rebuild the durable task descriptor before orphan file registration so
-                // MediaAsset never freezes a generated/edited image with legacy placeholder
-                // model, provider, prompt, or lineage metadata.
-                val mediaRecovery = get<MediaAssetRecovery>().reconcilePending()
-                var imageRecoveryPasses = 1
-                var toolRecovery = get<ToolRequestReconciler>().reconcilePending()
-                // A dead process can leave at most one 90-second fenced lease. Wait in this
-                // background coroutine and retry locally; never reclaim or resend it early.
-                while (imageTaskRecovery.pending > 0 && imageRecoveryPasses < 20) {
-                    delay(5_000)
-                    imageRequestRecovery = get<ImageRequestReconciler>().reconcilePending()
-                    imageTaskRecovery = get<ImageTaskRecoveryCoordinator>().reconcilePending()
-                    imageRecoveryPasses++
-                }
-                if (imageRecoveryPasses > 1) {
-                    toolRecovery += get<ToolRequestReconciler>().reconcilePending()
-                }
-                DurableStartupRecoveryResult(
-                    conversation = result,
-                    chat = requestRecovery,
-                    media = mediaRecovery,
-                    imageRequests = imageRequestRecovery,
-                    imageTasks = imageTaskRecovery,
-                    imagePasses = imageRecoveryPasses,
-                    tools = toolRecovery,
-                )
-            }.onSuccess { recovery ->
-                get<MessageFtsOutboxProcessor>().requestDrain()
-                get<ConversationMediaReferenceBackfillProcessor>().requestBackfill()
-                val result = recovery.conversation
-                val requestRecovery = recovery.chat
-                val toolRecovery = recovery.tools
-                if (requestRecovery.inspected > 0 || requestRecovery.failures.isNotEmpty()) {
-                    Log.i(
-                        TAG,
-                        "reconcileChatRequests: inspected=${requestRecovery.inspected} " +
-                            "committed=${requestRecovery.committed} unknown=${requestRecovery.unknown} " +
-                            "interrupted=${requestRecovery.interrupted} failed=${requestRecovery.failed} " +
-                            "errors=${requestRecovery.failures.size}",
-                    )
-                }
-                if (recovery.media.inspected > 0 || recovery.media.failures.isNotEmpty()) {
-                    Log.i(
-                        TAG,
-                        "reconcileGeneratedImages: inspected=${recovery.media.inspected} " +
-                            "registered=${recovery.media.registered} failures=${recovery.media.failures.size}",
-                    )
-                }
-                if (recovery.imageRequests.inspected > 0 || recovery.imageTasks.failures.isNotEmpty()) {
-                    Log.i(
-                        TAG,
-                        "reconcileImageRequests: inspected=${recovery.imageRequests.inspected} " +
-                            "committed=${recovery.imageRequests.committed} " +
-                            "unknown=${recovery.imageRequests.unknown} " +
-                            "interrupted=${recovery.imageRequests.interrupted} " +
-                            "taskProjected=${recovery.imageTasks.projected} " +
-                            "pending=${recovery.imageTasks.pending} passes=${recovery.imagePasses}",
-                    )
-                }
-                if (toolRecovery.inspected > 0 || toolRecovery.failures.isNotEmpty()) {
-                    Log.i(
-                        TAG,
-                        "reconcileToolRequests: inspected=${toolRecovery.inspected} " +
-                            "committed=${toolRecovery.committed} unknown=${toolRecovery.unknown} " +
-                            "cancelled=${toolRecovery.cancelled} failed=${toolRecovery.failed} " +
-                            "deferred=${toolRecovery.deferred} " +
-                            "errors=${toolRecovery.failures.size}",
-                    )
-                }
-                if (result.inspected > 0) {
-                    Log.i(
-                        TAG,
-                        "backfillConversationStoreV2: inspected=${result.inspected} " +
-                            "ready=${result.ready} quarantined=${result.quarantined} " +
-                            "inProgress=${result.inProgress} failed=${result.failed}",
-                    )
-                }
-            }.onFailure {
-                Log.e(TAG, "backfillConversationStoreV2 failed", it)
-            }
+            var imageRecoveryPasses = 1
+            runIndependentStartupRecoveryDomains(
+                domains = listOf(
+                    // Preserve the original dependency order: every recovery domain below may
+                    // read or write conversations through the v2 authority.
+                    StartupRecoveryDomain("conversation_store") {
+                        val result = get<ConversationV2BackfillCoordinator>().runPending()
+                        get<MessageFtsOutboxProcessor>().requestDrain()
+                        get<ConversationMediaReferenceBackfillProcessor>().requestBackfill()
+                        if (result.inspected > 0) {
+                            Log.i(
+                                TAG,
+                                "backfillConversationStoreV2: inspected=${result.inspected} " +
+                                    "ready=${result.ready} quarantined=${result.quarantined} " +
+                                    "inProgress=${result.inProgress} failed=${result.failed}",
+                            )
+                        }
+                    },
+                    StartupRecoveryDomain("chat_request_ledger") {
+                        val recovery = get<ChatRequestReconciler>().reconcilePending()
+                        if (recovery.inspected > 0 || recovery.failures.isNotEmpty()) {
+                            Log.i(
+                                TAG,
+                                "reconcileChatRequests: inspected=${recovery.inspected} " +
+                                    "committed=${recovery.committed} unknown=${recovery.unknown} " +
+                                    "interrupted=${recovery.interrupted} failed=${recovery.failed} " +
+                                    "errors=${recovery.failures.size}",
+                            )
+                        }
+                    },
+                    StartupRecoveryDomain("image_request_and_media") {
+                        var requestRecovery = get<ImageRequestReconciler>().reconcilePending()
+                        var taskRecovery = get<ImageTaskRecoveryCoordinator>().reconcilePending()
+                        // Rebuild the durable task descriptor before orphan file registration so
+                        // MediaAsset never freezes a paid result with placeholder lineage.
+                        val mediaRecovery = get<MediaAssetRecovery>().reconcilePending()
+                        // A dead process can leave at most one 90-second fenced lease. Wait here;
+                        // never reclaim or resend a charged request early.
+                        while (taskRecovery.pending > 0 && imageRecoveryPasses < 20) {
+                            delay(5_000)
+                            requestRecovery = get<ImageRequestReconciler>().reconcilePending()
+                            taskRecovery = get<ImageTaskRecoveryCoordinator>().reconcilePending()
+                            imageRecoveryPasses++
+                        }
+                        if (mediaRecovery.inspected > 0 || mediaRecovery.failures.isNotEmpty()) {
+                            Log.i(
+                                TAG,
+                                "reconcileGeneratedImages: inspected=${mediaRecovery.inspected} " +
+                                    "registered=${mediaRecovery.registered} " +
+                                    "failures=${mediaRecovery.failures.size}",
+                            )
+                        }
+                        if (requestRecovery.inspected > 0 || taskRecovery.failures.isNotEmpty()) {
+                            Log.i(
+                                TAG,
+                                "reconcileImageRequests: inspected=${requestRecovery.inspected} " +
+                                    "committed=${requestRecovery.committed} unknown=${requestRecovery.unknown} " +
+                                    "interrupted=${requestRecovery.interrupted} " +
+                                    "taskProjected=${taskRecovery.projected} pending=${taskRecovery.pending} " +
+                                    "passes=$imageRecoveryPasses",
+                            )
+                        }
+                    },
+                    StartupRecoveryDomain("tool_request_ledger") {
+                        var recovery = get<ToolRequestReconciler>().reconcilePending()
+                        if (imageRecoveryPasses > 1) {
+                            recovery += get<ToolRequestReconciler>().reconcilePending()
+                        }
+                        if (recovery.inspected > 0 || recovery.failures.isNotEmpty()) {
+                            Log.i(
+                                TAG,
+                                "reconcileToolRequests: inspected=${recovery.inspected} " +
+                                    "committed=${recovery.committed} unknown=${recovery.unknown} " +
+                                    "cancelled=${recovery.cancelled} failed=${recovery.failed} " +
+                                    "deferred=${recovery.deferred} errors=${recovery.failures.size}",
+                            )
+                        }
+                    },
+                    StartupRecoveryDomain("citation_store") {
+                        backfillCitationStore()
+                    },
+                ),
+                onFailure = { domain, error ->
+                    // Never serialize recovery payloads or exception messages into logs: a
+                    // malformed legacy row may itself contain credentials.
+                    Log.e(TAG, "startup recovery domain=$domain failed type=${error::class.java.name}")
+                },
+            )
+        }
+    }
+
+    private suspend fun backfillCitationStore() {
+        var attempted = 0
+        var migrated = 0
+        var quarantined = 0
+        var deferred = 0
+        val coordinator = get<CitationBackfillCoordinator>()
+        runCitationBackfillSchedule(
+            runBatch = { coordinator.backfillBatch() },
+            onBatch = { batch ->
+                attempted += batch.attempted
+                migrated += batch.migrated
+                quarantined += batch.quarantined
+                deferred += batch.deferred
+            },
+        )
+        if (attempted > 0) {
+            Log.i(
+                TAG,
+                "backfillCitationStore: attempted=$attempted ready=$migrated " +
+                    "quarantined=$quarantined deferred=$deferred",
+            )
         }
     }
 
