@@ -1,6 +1,5 @@
 package me.rerere.search
 
-import android.util.Log
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -81,7 +80,7 @@ object PerplexitySearchService : SearchService<SearchServiceOptions.PerplexityOp
                 }
             }
 
-            Log.i(TAG, "search: $body")
+            logSearchStarted(TAG)
 
             val request = Request.Builder()
                 .url(PERPLEXITY_ENDPOINT)
@@ -114,7 +113,7 @@ object PerplexitySearchService : SearchService<SearchServiceOptions.PerplexityOp
                     )
                 )
             } else {
-                error("response failed #${response.code}: ${response.body?.string()}")
+                error("response failed #${response.code}")
             }
         }
     }

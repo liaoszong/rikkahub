@@ -33,6 +33,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
+import me.rerere.rikkahub.utils.logSafeError
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.ui.UIMessage
@@ -85,8 +86,10 @@ private fun SillyTavernImporter(
                             filesManager = filesManager,
                         )
                     }.onFailure { exception ->
-                        exception.printStackTrace()
-                        toaster.show(exception.message ?: context.getString(R.string.assistant_importer_import_failed))
+                        logSafeError("AssistantImporter", "import", "import_assistant", exception, warning = true)
+                        toaster.show(exception.javaClass.simpleName.ifBlank {
+                            context.getString(R.string.assistant_importer_import_failed)
+                        })
                     }
                 } finally {
                     isLoading = false
@@ -111,8 +114,10 @@ private fun SillyTavernImporter(
                             filesManager = filesManager,
                         )
                     }.onFailure { exception ->
-                        exception.printStackTrace()
-                        toaster.show(exception.message ?: context.getString(R.string.assistant_importer_import_failed))
+                        logSafeError("AssistantImporter", "import", "import_assistant", exception, warning = true)
+                        toaster.show(exception.javaClass.simpleName.ifBlank {
+                            context.getString(R.string.assistant_importer_import_failed)
+                        })
                     }
                 } finally {
                     isLoading = false
@@ -282,9 +287,11 @@ private suspend fun importAssistantFromUri(
         val assistant = parseAssistantFromJson(context = context, json = json, background = backgroundStr)
         onImport(assistant)
     } catch (exception: Exception) {
-        exception.printStackTrace()
+        logSafeError("AssistantImporter", "import", "parse_assistant", exception, warning = true)
         toaster.show(
-            message = exception.message ?: context.getString(R.string.assistant_importer_import_failed),
+            message = exception.javaClass.simpleName.ifBlank {
+                context.getString(R.string.assistant_importer_import_failed)
+            },
             type = ToastType.Error
         )
     }

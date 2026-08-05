@@ -26,6 +26,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import me.rerere.rikkahub.CHAT_LIVE_UPDATE_NOTIFICATION_CHANNEL_ID
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.utils.logSafeError
 import me.rerere.rikkahub.RouteActivity
 import me.rerere.rikkahub.data.imggen.ChatImageGenerationForegroundController
 import me.rerere.rikkahub.data.imggen.ChatImageGenerationTaskCoordinator
@@ -274,7 +275,7 @@ class ChatGenerationForegroundService : Service() {
         }
         true
     } catch (error: Exception) {
-        Log.e(TAG, "Unable to start chat generation foreground service", error)
+        logSafeError(TAG, "chat", "start_foreground_service", error)
         false
     }
 
@@ -308,7 +309,7 @@ class ChatGenerationForegroundService : Service() {
             NotificationManagerCompat.from(this)
                 .notify(NOTIFICATION_ID_RUNNING, buildRunningNotification())
         }.onFailure {
-            Log.e(TAG, "Unable to update chat generation notification", it)
+            logSafeError(TAG, "chat", "update_foreground_notification", it)
         }
     }
 

@@ -1,6 +1,5 @@
 package me.rerere.search
 
-import android.util.Log
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -90,7 +89,7 @@ object GrokSearchService : SearchService<SearchServiceOptions.GrokOptions> {
                 put("store", JsonPrimitive(false))
             }
 
-            Log.i(TAG, "search: $query")
+            logSearchStarted(TAG)
 
             val request = Request.Builder()
                 .url(serviceOptions.customUrl)
@@ -133,7 +132,7 @@ object GrokSearchService : SearchService<SearchServiceOptions.GrokOptions> {
                     )
                 )
             } else {
-                error("response failed #${response.code}: ${response.body?.string()}")
+                error("response failed #${response.code}")
             }
         }
     }

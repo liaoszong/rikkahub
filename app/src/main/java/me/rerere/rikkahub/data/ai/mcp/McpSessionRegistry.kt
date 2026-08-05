@@ -1,6 +1,5 @@
 package me.rerere.rikkahub.data.ai.mcp
 
-import android.util.Log
 import io.ktor.client.HttpClient
 import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.util.StringValues
@@ -38,6 +37,10 @@ import me.rerere.ai.core.InputSchema
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.credential.effectiveMcpCredentialReference
+import me.rerere.rikkahub.utils.logSafeError
+import me.rerere.rikkahub.utils.logSafeFailure
+import me.rerere.rikkahub.utils.logSafeStarted
+import me.rerere.rikkahub.utils.logSafeSuccess
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.seconds
 import kotlin.uuid.Uuid
@@ -172,7 +175,7 @@ internal class McpSessionRegistry(
             .effectiveMcpCredentialReference(serverId.toString())
         requireFrozenMcpCredential(expectedCredentialRefId, dispatchCredentialRefId)
         val config = session.connectedConfig ?: session.config
-        Log.i(TAG, "Calling tool $toolName on $serverId (${config.commonOptions.name})")
+        logSafeStarted(TAG, "mcp", "call_tool")
         return try {
             sdkClient.callTool(
                 request = CallToolRequest(
@@ -275,14 +278,20 @@ internal class McpSessionRegistry(
                 session.client = sdkClient
                 session.reconnectAttempt = 0
                 statusStore.update(config.id, McpStatus.Connected)
-                Log.i(TAG, "Connected MCP server ${config.id} (${config.commonOptions.name})")
+                logSafeSuccess(TAG, "mcp", "connect_server")
                 ConnectResult.Success
             } catch (e: CancellationException) {
                 closeClient(sdkClient, config.commonOptions.name)
                 throw e
             } catch (e: Exception) {
                 closeClient(sdkClient, config.commonOptions.name)
-                Log.e(TAG, "Failed to connect MCP server ${config.id}", e)
+                logSafeError(
+                    tag = TAG,
+                    domain = "mcp",
+                    operation = "connect_server",
+                    error = e,
+                    requestId = config.id.toString(),
+                )
                 if (oauthCoordinator.needsAuthorization(config, e)) {
                     statusStore.update(config.id, McpStatus.NeedsAuthorization)
                     ConnectResult.NeedsAuthorization
@@ -336,7 +345,7 @@ internal class McpSessionRegistry(
         connectionConfig: McpServerConfig,
     ): McpServerConfig {
         val serverTools = sdkClient.listTools().tools
-        Log.i(TAG, "Synced ${serverTools.size} tools from ${connectionConfig.id}")
+        logSafeSuccess(TAG, "mcp", "sync_tools", itemCount = serverTools.size)
         var updatedConfig = connectionConfig
         settingsStore.update { old ->
             old.copy(
@@ -365,11 +374,23 @@ internal class McpSessionRegistry(
         transport: AbstractTransport,
     ) {
         transport.onClose {
-            Log.i(TAG, "Transport closed for ${config.id} (${config.commonOptions.name})")
+            logSafeFailure(
+                tag = TAG,
+                domain = "mcp",
+                operation = "transport_closed",
+                warning = true,
+                requestId = config.id.toString(),
+            )
             requestReconnect(config.id, sdkClient)
         }
         transport.onError { error ->
-            Log.e(TAG, "Transport error for ${config.id}: ${error.message}")
+            logSafeError(
+                tag = TAG,
+                domain = "mcp",
+                operation = "transport_error",
+                error = error,
+                requestId = config.id.toString(),
+            )
             if (!isSseStreamGiveUpError(error)) requestReconnect(config.id, sdkClient)
         }
     }
@@ -451,9 +472,9 @@ internal class McpSessionRegistry(
         }
     }
 
-    private suspend fun closeClient(client: Client, serverName: String) {
+    private suspend fun closeClient(client: Client, _serverName: String) {
         runCatching { client.close() }
-            .onFailure { Log.w(TAG, "Failed to close MCP client $serverName", it) }
+            .onFailure { logSafeError(TAG, "mcp", "close_client", it, warning = true) }
     }
 
     private fun createSdkClient(config: McpServerConfig): Client = Client(

@@ -33,6 +33,7 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedCard
+import me.rerere.rikkahub.utils.logSafeError
 import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -218,9 +219,9 @@ fun ChatExportSheet(
                                                 options = imageExportOptions
                                             )
                                         }.onFailure {
-                                            it.printStackTrace()
+                                            logSafeError("ChatExport", "export", "export_conversation_image", it)
                                             toaster.show(
-                                                message = "Failed to export image: ${it.message}",
+                                                message = "Failed to export image (${it.javaClass.simpleName})",
                                                 type = ToastType.Error
                                             )
                                         }
@@ -398,7 +399,7 @@ private fun exportToMarkdown(
         shareFile(context, uri, "text/markdown")
 
     } catch (e: Exception) {
-        e.printStackTrace()
+        logSafeError("ChatExport", "export", "export_markdown", e)
     }
 }
 
@@ -467,9 +468,9 @@ private suspend fun exportToImage(
         )
         shareFile(context, uri, "image/png")
     } catch (e: Exception) {
-        e.printStackTrace()
+        logSafeError("ChatExport", "export", "export_image", e)
         withContext(Dispatchers.Main) {
-            Toast.makeText(context, "Failed to export image: ${e.message}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Failed to export image (${e.javaClass.simpleName})", Toast.LENGTH_SHORT).show()
         }
     } finally {
         bitmap.recycle()

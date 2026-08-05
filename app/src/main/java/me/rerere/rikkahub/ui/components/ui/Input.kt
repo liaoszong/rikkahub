@@ -14,6 +14,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
+import me.rerere.rikkahub.utils.logSafeError
 
 @Composable
 fun <T : Number> OutlinedNumberInput(
@@ -40,7 +41,7 @@ fun <T : Number> OutlinedNumberInput(
                     }
                     onValueChange(newVal)
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    logSafeError("NumberInput", "input", "parse_number", e, warning = true, persist = false)
                 }
             }
         },
@@ -76,7 +77,7 @@ fun <T : Number> NumberInput(
                     }
                     onValueChange(newVal)
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    logSafeError("NumberInput", "input", "parse_number", e, warning = true, persist = false)
                 }
             }
         },

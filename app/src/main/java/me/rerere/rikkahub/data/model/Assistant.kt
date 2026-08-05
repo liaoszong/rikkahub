@@ -9,6 +9,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.rikkahub.data.ai.tools.local.LocalToolOption
 import me.rerere.rikkahub.utils.SimpleCache
+import me.rerere.rikkahub.utils.logSafeError
 import java.util.concurrent.TimeUnit
 import kotlin.uuid.Uuid
 
@@ -84,13 +85,17 @@ data class AssistantRegex(
 
 // 流式输出时每个chunk都会调用replaceRegexes，正则必须缓存编译结果，
 // 否则长回复期间会重复编译上万次；编译失败也缓存，避免反复构造异常
+private const val TAG = "AssistantRegex"
+
 private val regexCache = SimpleCache.builder<String, Result<Regex>>()
     .expireAfterWrite(10, TimeUnit.MINUTES)
     .build()
 
 private fun compileRegexCached(pattern: String): Regex? {
     regexCache.getIfPresent(pattern)?.let { return it.getOrNull() }
-    val result = runCatching { Regex(pattern) }.onFailure { it.printStackTrace() }
+    val result = runCatching { Regex(pattern) }.onFailure {
+        logSafeError(TAG, "message_transform", "compile_regex", it, warning = true, persist = false)
+    }
     regexCache.put(pattern, result)
     return result.getOrNull()
 }
@@ -111,7 +116,7 @@ fun String.replaceRegexes(
                     replacement = regex.replaceString,
                 )
             } catch (e: Exception) {
-                e.printStackTrace()
+                logSafeError(TAG, "message_transform", "replace_regex", e, warning = true, persist = false)
                 // 替换字符串可能引用不存在的分组，失败时返回原字符串
                 acc
             }

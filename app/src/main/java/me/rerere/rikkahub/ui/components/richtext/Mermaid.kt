@@ -33,6 +33,7 @@ import me.rerere.rikkahub.ui.components.webview.WEB_VIEW_BASE_URL
 import me.rerere.rikkahub.ui.components.webview.WebView
 import me.rerere.rikkahub.ui.components.webview.WebViewContentCache
 import me.rerere.rikkahub.ui.components.webview.rememberWebViewState
+import me.rerere.rikkahub.utils.logSafeError
 import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.theme.LocalDarkMode
@@ -67,7 +68,7 @@ fun Mermaid(
                                 "mermaid_${System.currentTimeMillis()}.png"
                             )
                         } catch (e: Exception) {
-                            e.printStackTrace()
+                            logSafeError("Mermaid", "export", "save_mermaid_image", e, warning = true)
                         }
                     }
                     toaster.show(
@@ -75,7 +76,7 @@ fun Mermaid(
                         type = ToastType.Success
                     )
                 }.onFailure {
-                    it.printStackTrace()
+                    logSafeError("Mermaid", "rendering", "decode_mermaid_image", it, warning = true)
                     toaster.show(
                         context.getString(R.string.mermaid_export_failed),
                         type = ToastType.Error

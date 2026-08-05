@@ -93,7 +93,7 @@ object TinyfishSearchService : SearchService<SearchServiceOptions.TinyfishOption
                     )
                 )
             } else {
-                error("Tinyfish search failed with code ${response.code}: ${response.message}")
+                error("Tinyfish search failed with code ${response.code}")
             }
         }
     }
@@ -139,7 +139,7 @@ object TinyfishSearchService : SearchService<SearchServiceOptions.TinyfishOption
                     )
                 )
             } else {
-                error("Tinyfish fetch failed with code ${response.code}: ${response.message}")
+                error("Tinyfish fetch failed with code ${response.code}")
             }
         }
     }

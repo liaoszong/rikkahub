@@ -180,7 +180,7 @@ private fun createEditFileTool(
         val result = try {
             replaceText(original, oldText, newText, replaceAll)
         } catch (e: IllegalArgumentException) {
-            error("${e.message} (path: $path)")
+            throw IllegalArgumentException("Workspace edit request could not be applied", e)
         }
         val entry = workspaceRepository.writeTextInRootfs(workspaceId, path, result.updated, overwrite = true)
         val diff = generateUnifiedDiff(original, result.updated, entry.path)

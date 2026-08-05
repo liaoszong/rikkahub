@@ -23,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
+import me.rerere.rikkahub.utils.logSafeFailure
 
 private const val TAG = "WebView"
 
@@ -39,9 +40,12 @@ internal class MyWebChromeClient(private val state: WebViewState) : WebChromeCli
     override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
         state.pushConsoleMessage(consoleMessage)
         if (consoleMessage.messageLevel() == ConsoleMessage.MessageLevel.ERROR || consoleMessage.messageLevel() == ConsoleMessage.MessageLevel.WARNING) {
-            Log.e(
-                TAG,
-                "onConsoleMessage:  ${consoleMessage.message()}  ${consoleMessage.lineNumber()}  ${consoleMessage.sourceId()}"
+            logSafeFailure(
+                tag = TAG,
+                domain = "webview",
+                operation = "console_warning",
+                warning = true,
+                persist = false,
             )
         }
         return super.onConsoleMessage(consoleMessage);

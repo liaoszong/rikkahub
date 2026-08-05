@@ -30,6 +30,7 @@ import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.components.ui.StickyHeader
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.pages.backup.BackupVM
+import me.rerere.rikkahub.utils.logSafeError
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -76,9 +77,9 @@ fun ImportExportTab(
                         type = ToastType.Success
                     )
                 }.onFailure { e ->
-                    e.printStackTrace()
+                    logSafeError("ImportExportTab", "backup", "export_archive", e)
                     toaster.show(
-                        context.getString(R.string.backup_page_restore_failed, e.message ?: ""),
+                        context.getString(R.string.backup_page_restore_failed, e.javaClass.simpleName),
                         type = ToastType.Error
                     )
                 }
@@ -157,9 +158,9 @@ fun ImportExportTab(
                     )
                     onShowRestartDialog()
                 }.onFailure { e ->
-                    e.printStackTrace()
+                    logSafeError("ImportExportTab", "backup", "import_archive", e)
                     toaster.show(
-                        context.getString(R.string.backup_page_restore_failed, e.message ?: ""),
+                        context.getString(R.string.backup_page_restore_failed, e.javaClass.simpleName),
                         type = ToastType.Error
                     )
                 }

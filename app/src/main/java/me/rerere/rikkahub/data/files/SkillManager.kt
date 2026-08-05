@@ -1,11 +1,11 @@
 package me.rerere.rikkahub.data.files
 
 import android.content.Context
-import android.util.Log
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.utils.logSafeError
 
 class SkillManager(
     private val context: Context,
@@ -146,7 +146,7 @@ class SkillManager(
             backupDir?.deleteRecursively()
             return true
         } catch (e: Exception) {
-            Log.w(TAG, "saveSkillFilesAtomically: Failed to save $skillName", e)
+            logSafeError(TAG, "skills", "save_skill_files", e, warning = true)
             if (backupDir != null && !targetDir.exists()) {
                 backupDir.renameTo(targetDir)
             }
@@ -200,7 +200,7 @@ class SkillManager(
                 skillDir = skillDir,
             )
         }.getOrElse {
-            Log.w(TAG, "parseSkillFile: Failed to parse ${skillFile.absolutePath}", it)
+            logSafeError(TAG, "skills", "parse_skill_file", it, warning = true)
             null
         }
     }

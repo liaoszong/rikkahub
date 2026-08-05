@@ -33,6 +33,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import me.rerere.rikkahub.utils.logSafeError
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -138,7 +139,7 @@ fun MarkdownNew(
         snapshotFlow { updatedContent }
             .distinctUntilChanged()
             .mapLatest { generateMarkdownHtml(it) }
-            .catch { it.printStackTrace() }
+            .catch { logSafeError("MarkdownNew", "rendering", "render_markdown", it, warning = true, persist = false) }
             .flowOn(Dispatchers.Default)
             .collect { html = it }
     }

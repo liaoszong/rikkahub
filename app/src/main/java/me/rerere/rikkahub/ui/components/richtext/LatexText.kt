@@ -16,6 +16,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.TextUnit
 import ru.noties.jlatexmath.JLatexMathDrawable
 import ru.noties.jlatexmath.JLatexMathSplitter
+import me.rerere.rikkahub.utils.logSafeError
 
 fun assumeLatexSize(latex: String, fontSize: Float): Rect {
     return runCatching {
@@ -52,7 +53,7 @@ fun LatexText(
                 )
             }
         }.onFailure {
-            it.printStackTrace()
+            logSafeError("LatexText", "rendering", "render_latex", it, warning = true, persist = false)
         }.getOrNull()
     }
 
@@ -92,7 +93,7 @@ fun getLatexDrawable(
             .align(JLatexMathDrawable.ALIGN_LEFT)
             .build()
     }.onFailure {
-        it.printStackTrace()
+        logSafeError("LatexText", "rendering", "build_latex_drawable", it, warning = true, persist = false)
     }.getOrNull()
 }
 
@@ -110,7 +111,7 @@ fun splitLatex(
     return runCatching {
         JLatexMathSplitter.split(processLatex(latex), maxWidthPx, fontSize, color)
     }.onFailure {
-        it.printStackTrace()
+        logSafeError("LatexText", "rendering", "split_latex", it, warning = true, persist = false)
     }.getOrElse { emptyList() }
 }
 

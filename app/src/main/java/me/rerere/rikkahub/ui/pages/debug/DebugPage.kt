@@ -150,7 +150,6 @@ private fun MainPage(vm: DebugVM) {
         UIAvatar(
             value = avatar,
             onUpdate = {
-                println("Avatar updated: $it")
                 avatar = it
             },
             name = "A"

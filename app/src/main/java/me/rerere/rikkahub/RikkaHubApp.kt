@@ -47,6 +47,8 @@ import me.rerere.rikkahub.fork.pale.request.ImageTaskRecoveryCoordinator
 import me.rerere.rikkahub.service.WebServerService
 import me.rerere.rikkahub.utils.CrashHandler
 import me.rerere.rikkahub.utils.DatabaseUtil
+import me.rerere.rikkahub.utils.logSafeError
+import me.rerere.rikkahub.utils.logSafeFailure
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.rikkahub.data.sync.PendingRestoreManager
 import me.rerere.workspace.WorkspaceManager
@@ -103,7 +105,7 @@ class RikkaHubApp : Application() {
         runCatching {
             PendingRestoreManager.applyFilesBeforeDatabase(this)
         }.onFailure {
-            Log.e(TAG, "Pending restore file switch failed; continuing with the previous data", it)
+            logSafeError(TAG, "startup", "switch_pending_restore_files", it)
         }
         startKoin {
             androidLogger()
@@ -122,14 +124,14 @@ class RikkaHubApp : Application() {
                     json = get<Json>(),
                 )
             }.onFailure {
-                Log.e(TAG, "Pending restore settings commit failed; previous data was restored", it)
+                logSafeError(TAG, "startup", "commit_pending_restore_settings", it)
             }
             when (val readiness = get<SettingsStore>().migrateCredentialVault()) {
                 CredentialReadiness.Ready -> {
                     startWebServerIfEnabled()
                     incrementLaunchCount()
                 }
-                else -> Log.e(TAG, "Credential boundary unavailable; external requests remain disabled: $readiness")
+                else -> logSafeFailure(TAG, "credential", "initialize_boundary")
             }
         }
         this.createNotificationChannel()
@@ -175,7 +177,7 @@ class RikkaHubApp : Application() {
                 store.update(current.copy(launchCount = current.launchCount + 1))
                 Log.i(TAG, "incrementLaunchCount: ${store.settingsFlowRaw.first().launchCount}")
             }.onFailure {
-                Log.e(TAG, "incrementLaunchCount failed", it)
+                logSafeError(TAG, "startup", "increment_launch_count", it)
             }
         }
     }
@@ -185,7 +187,7 @@ class RikkaHubApp : Application() {
             runCatching {
                 get<WorkspaceManager>().cleanupAllTempDirs()
             }.onFailure {
-                Log.e(TAG, "cleanupWorkspaceTempDirs failed", it)
+                logSafeError(TAG, "workspace", "cleanup_temp_directories", it)
             }
         }
     }
@@ -195,7 +197,7 @@ class RikkaHubApp : Application() {
             runCatching {
                 get<WorkspaceRepository>().checkIntegrity()
             }.onFailure {
-                Log.e(TAG, "checkWorkspaceIntegrity failed", it)
+                logSafeError(TAG, "workspace", "check_integrity", it)
             }
         }
     }
@@ -225,7 +227,7 @@ class RikkaHubApp : Application() {
             runCatching {
                 get<FilesManager>().syncFolder()
             }.onFailure {
-                Log.e(TAG, "syncManagedFiles failed", it)
+                logSafeError(TAG, "files", "sync_managed_files", it)
             }
         }
     }
@@ -317,7 +319,7 @@ class RikkaHubApp : Application() {
                 onFailure = { domain, error ->
                     // Never serialize recovery payloads or exception messages into logs: a
                     // malformed legacy row may itself contain credentials.
-                    Log.e(TAG, "startup recovery domain=$domain failed type=${error::class.java.name}")
+                    logSafeError(TAG, "startup_recovery", domain, error)
                 },
             )
         }
@@ -380,7 +382,7 @@ class RikkaHubApp : Application() {
                     startForegroundService(intent)
                 }
             }.onFailure {
-                Log.e(TAG, "startWebServerIfEnabled failed", it)
+                logSafeError(TAG, "web", "start_server_if_enabled", it)
             }
         }
     }
@@ -439,6 +441,6 @@ class AppScope : CoroutineScope by CoroutineScope(
         + Dispatchers.Main
         + CoroutineName("AppScope")
         + CoroutineExceptionHandler { _, e ->
-        Log.e(TAG, "AppScope exception", e)
+        logSafeError(TAG, "coroutine", "app_scope", e)
     }
 )

@@ -3,7 +3,6 @@ package me.rerere.tts.provider.providers
 import android.content.Context
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
-import android.util.Log
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -12,6 +11,8 @@ import me.rerere.tts.model.AudioChunk
 import me.rerere.tts.model.TTSRequest
 import me.rerere.tts.provider.TTSProvider
 import me.rerere.tts.provider.TTSProviderSetting
+import me.rerere.speech.logSpeechFailure
+import me.rerere.speech.logSpeechStarted
 import java.io.File
 import java.util.Locale
 import java.util.UUID
@@ -39,7 +40,7 @@ class SystemTTSProvider : TTSProvider<TTSProviderSetting.SystemTTS> {
                 if (langResult == TextToSpeech.LANG_MISSING_DATA ||
                     langResult == TextToSpeech.LANG_NOT_SUPPORTED
                 ) {
-                    Log.w(TAG, "generateSpeech: Language $locale not supported")
+                    logSpeechFailure(TAG, "unsupported_language", warning = true)
                 }
 
                 // Set speech parameters
@@ -54,7 +55,7 @@ class SystemTTSProvider : TTSProvider<TTSProviderSetting.SystemTTS> {
 
                 ttsInstance.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {
-                        Log.i(TAG, "onStart: TTS engine started!")
+                        logSpeechStarted(TAG, "synthesize_speech")
                     }
 
                     override fun onDone(utteranceId: String?) {
@@ -77,7 +78,7 @@ class SystemTTSProvider : TTSProvider<TTSProviderSetting.SystemTTS> {
                     }
 
                     override fun onError(utteranceId: String?) {
-                        Log.e(TAG, "onError: TTS synthesis failed!")
+                        logSpeechFailure(TAG, "synthesize_speech")
                         audioFile.delete()
                         if (continuation.isActive) continuation.resumeWithException(
                             Exception("TTS synthesis failed")

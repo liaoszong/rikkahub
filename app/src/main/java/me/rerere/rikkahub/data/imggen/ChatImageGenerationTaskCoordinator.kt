@@ -1,7 +1,6 @@
 package me.rerere.rikkahub.data.imggen
 
 import android.content.Context
-import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -9,6 +8,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.util.concurrent.ConcurrentHashMap
+import me.rerere.rikkahub.utils.logSafeError
 
 @Serializable
 enum class ChatImageGenerationTaskPhase {
@@ -90,7 +90,7 @@ class SharedPreferencesChatImageGenerationTaskStore(
         return try {
             json.decodeFromString<List<ChatImageGenerationTaskRecord>>(value)
         } catch (error: Exception) {
-            Log.e(TAG, "Discarding unreadable chat image task state", error)
+            logSafeError(TAG, "image_generation", "load_task_state", error)
             preferences.edit().remove(KEY_TASKS).apply()
             emptyList()
         }
@@ -224,11 +224,13 @@ class ChatImageGenerationTaskCoordinator(
             fail(
                 taskId = task.taskId,
                 errorKind = ImageGenerationFailureKind.CONFIGURATION,
-                errorMessage = error.message ?: "Unable to start image generation in the foreground",
+                errorMessage = "Unable to start image generation in the foreground " +
+                    "(${error.javaClass.simpleName.ifBlank { "UnknownError" }})",
             )
             throw ImageGenerationException(
                 kind = ImageGenerationFailureKind.CONFIGURATION,
-                message = error.message ?: "Unable to start image generation in the foreground",
+                message = "Unable to start image generation in the foreground " +
+                    "(${error.javaClass.simpleName.ifBlank { "UnknownError" }})",
                 cause = error,
             )
         }
@@ -427,7 +429,7 @@ class ChatImageGenerationTaskCoordinator(
             .take(MAX_PERSISTED_TASKS)
         if (recovered != restored) {
             runCatching { store.save(recovered) }
-                .onFailure { Log.e(TAG, "Unable to persist interrupted chat image tasks", it) }
+                .onFailure { logSafeError(TAG, "image_generation", "persist_recovered_tasks", it) }
         }
         return recovered
     }

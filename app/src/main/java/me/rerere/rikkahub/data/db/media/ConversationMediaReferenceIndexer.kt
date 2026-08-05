@@ -163,7 +163,7 @@ class ConversationMediaReferenceIndexer(
             return ConversationMediaIndexResult(
                 status = ConversationMediaIndexStatus.INCOMPLETE,
                 desiredReferences = 0,
-                failure = error.message ?: error::class.java.simpleName,
+                failure = error::class.java.simpleName.ifBlank { "UnknownError" },
             )
         }
         if (prepared.resolved.unresolved > 0) {
@@ -232,7 +232,7 @@ class ConversationMediaReferenceIndexer(
                     throw cancelled
                 } catch (error: Exception) {
                     error.rethrowCancellationCause()
-                    failures += "$conversationId: ${error.message ?: error::class.java.simpleName}"
+                    failures += "$conversationId: ${error::class.java.simpleName.ifBlank { "UnknownError" }}"
                 }
             }
             afterConversationId = page.last()
@@ -258,7 +258,7 @@ class ConversationMediaReferenceIndexer(
             throw cancelled
         } catch (error: Exception) {
             error.rethrowCancellationCause()
-            failures += "finalization: ${error.message ?: error::class.java.simpleName}"
+            failures += "finalization: ${error::class.java.simpleName.ifBlank { "UnknownError" }}"
             ConversationMediaBackfillStatus.BLOCKED
         }
         return ConversationMediaBackfillResult(

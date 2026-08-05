@@ -17,6 +17,8 @@ import com.google.zxing.MultiFormatReader
 import com.google.zxing.RGBLuminanceSource
 import com.google.zxing.common.HybridBinarizer
 
+private const val TAG = "ImageUtils"
+
 /**
  * 图片处理工具类
  * 提供图片压缩、旋转修正、二维码解析等功能
@@ -66,7 +68,7 @@ object ImageUtils {
             // 第三步：处理图片旋转（如果需要）
             bitmap?.let { correctImageOrientation(context, uri, it) }
         }.onFailure {
-            it.printStackTrace()
+            logSafeError(TAG, "image", "load_optimized_bitmap", it, warning = true)
         }.getOrNull()
     }
 
@@ -136,7 +138,7 @@ object ImageUtils {
             }
             rotatedBitmap
         }.onFailure {
-            it.printStackTrace()
+            logSafeError(TAG, "image", "correct_orientation", it, warning = true)
         }.getOrDefault(bitmap)
     }
 
@@ -194,7 +196,7 @@ object ImageUtils {
             recycleBitmapSafely(oriented)
         }
     }.onFailure {
-        it.printStackTrace()
+        logSafeError(TAG, "image", "convert_heif_to_jpeg", it, warning = true)
     }.getOrDefault(false)
 
     private val HEIF_BRANDS = setOf(
@@ -224,7 +226,7 @@ object ImageUtils {
 
             result.text
         }.onFailure {
-            it.printStackTrace()
+            logSafeError(TAG, "image", "decode_qr_bitmap", it, warning = true)
         }.getOrNull()
     }
 
@@ -287,7 +289,7 @@ object ImageUtils {
                 )
             } else null
         }.onFailure {
-            it.printStackTrace()
+            logSafeError(TAG, "image", "read_image_info", it, warning = true)
         }.getOrNull()
     }
 

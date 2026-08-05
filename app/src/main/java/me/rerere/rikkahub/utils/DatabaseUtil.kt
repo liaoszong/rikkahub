@@ -14,7 +14,7 @@ object DatabaseUtil {
             field.set(null, size)
             Log.i(TAG, "setCursorWindowSize: set $oldValue to $size")
         } catch (e: Exception) {
-            e.printStackTrace()
+            logSafeError(TAG, "database", "set_cursor_window_size", e, warning = true)
         }
         // 已fork io.requery.android.database 修改了window size，避免无法反射修改final字段
 //        try {
@@ -23,9 +23,8 @@ object DatabaseUtil {
 //            field.isAccessible = true
 //            val oldValue = field.get(null) as Int
 //            field.set(null, size)
-//            Log.i(TAG, "setCursorWindowSize: set $oldValue to $size")
 //        } catch (e: Exception) {
-//            e.printStackTrace()
+//            logSafeError(TAG, "database", "set_requery_cursor_window_size", e, warning = true)
 //        }
     }
 }

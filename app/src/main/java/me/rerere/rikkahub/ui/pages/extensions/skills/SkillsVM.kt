@@ -18,6 +18,7 @@ import me.rerere.rikkahub.data.files.FileUtils
 import me.rerere.rikkahub.data.files.SkillFrontmatterParser
 import me.rerere.rikkahub.data.files.SkillManager
 import me.rerere.rikkahub.data.files.SkillMetadata
+import me.rerere.rikkahub.utils.logSafeError
 import org.json.JSONArray
 import kotlin.collections.iterator
 
@@ -135,8 +136,10 @@ class SkillsVM(
                 _skills.value = skillManager.listSkills()
                 withContext(Dispatchers.Main) { onResult(true, name) }
             } catch (e: Exception) {
-                e.printStackTrace()
-                withContext(Dispatchers.Main) { onResult(false, e.message ?: "未知错误") }
+                logSafeError("SkillsVM", "skills", "import_skill", e, warning = true)
+                withContext(Dispatchers.Main) {
+                    onResult(false, e.javaClass.simpleName.ifBlank { "未知错误" })
+                }
             }
         }
     }

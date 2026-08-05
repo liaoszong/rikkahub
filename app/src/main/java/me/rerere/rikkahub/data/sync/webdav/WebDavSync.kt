@@ -1,7 +1,6 @@
 package me.rerere.rikkahub.data.sync.webdav
 
 import android.content.Context
-import android.util.Log
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -12,7 +11,9 @@ import me.rerere.rikkahub.data.sync.BackupAppFile
 import me.rerere.rikkahub.data.sync.BackupRestoreCoordinator
 import me.rerere.rikkahub.data.sync.BackupSettingsSanitizer
 import me.rerere.rikkahub.data.sync.collectBackupAppFiles
-import me.rerere.rikkahub.utils.fileSizeToString
+import me.rerere.rikkahub.utils.logSafeError
+import me.rerere.rikkahub.utils.logSafeStarted
+import me.rerere.rikkahub.utils.logSafeSuccess
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -40,7 +41,7 @@ class WebDavSync(
         val client = getClient(config)
         // Test by listing the root directory
         client.propfind(depth = 0).getOrThrow()
-        Log.i(TAG, "testConnection: Connection successful")
+        logSafeSuccess(TAG, "backup", "test_webdav_connection")
     }
 
     suspend fun backup(config: WebDavConfig) = withContext(Dispatchers.IO) {
@@ -58,7 +59,7 @@ class WebDavSync(
             contentType = "application/zip"
         ).getOrThrow()
 
-        Log.i(TAG, "backup: Uploaded ${file.name} (${file.length().fileSizeToString()})")
+        logSafeSuccess(TAG, "backup", "upload_webdav_archive")
 
         // Clean up temp file
         file.delete()
@@ -93,10 +94,10 @@ class WebDavSync(
 
         try {
             // Download backup file directly to file to avoid OOM
-            Log.i(TAG, "restore: Downloading ${item.displayName}")
+            logSafeStarted(TAG, "backup", "download_webdav_archive")
             client.downloadToFile(item.displayName, backupFile).getOrThrow()
 
-            Log.i(TAG, "restore: Downloaded ${backupFile.length().fileSizeToString()}")
+            logSafeSuccess(TAG, "backup", "download_webdav_archive")
 
             // Restore from backup file
             backupRestoreCoordinator.stageRestore(
@@ -108,7 +109,7 @@ class WebDavSync(
             // Clean up temp file
             if (backupFile.exists()) {
                 backupFile.delete()
-                Log.i(TAG, "restore: Cleaned up temporary backup file")
+                logSafeSuccess(TAG, "backup", "cleanup_restore_archive")
             }
         }
     }
@@ -117,11 +118,11 @@ class WebDavSync(
         settingsStore.awaitCredentialReady()
         val client = getClient(config)
         client.delete(item.displayName).getOrThrow()
-        Log.i(TAG, "deleteBackupFile: Deleted ${item.displayName}")
+        logSafeSuccess(TAG, "backup", "delete_webdav_archive")
     }
 
     suspend fun restoreFromLocalFile(file: File, config: WebDavConfig) = withContext(Dispatchers.IO) {
-        Log.i(TAG, "restoreFromLocalFile: Starting restore from ${file.absolutePath}")
+        logSafeStarted(TAG, "backup", "restore_local_file")
 
         if (!file.exists()) {
             throw Exception("Backup file does not exist")
@@ -137,10 +138,10 @@ class WebDavSync(
                 restoreDatabase = config.items.contains(WebDavConfig.BackupItem.DATABASE),
                 restoreFiles = config.items.contains(WebDavConfig.BackupItem.FILES),
             )
-            Log.i(TAG, "restoreFromLocalFile: Restore completed successfully")
+            logSafeSuccess(TAG, "backup", "restore_local_file")
         } catch (e: Exception) {
-            Log.e(TAG, "restoreFromLocalFile: Failed to restore from local file", e)
-            throw Exception("Restore failed: ${e.message}")
+            logSafeError(TAG, "backup", "restore_local_file", e)
+            throw Exception("Restore failed (${e.javaClass.simpleName})", e)
         }
     }
 
@@ -173,17 +174,14 @@ class WebDavSync(
             // Backup app files
             if (config.items.contains(WebDavConfig.BackupItem.FILES)) {
                 val appFiles = webDavBackupAppFiles(context.filesDir)
-                Log.i(TAG, "prepareBackupFile: Backing up ${appFiles.size} app files")
+                logSafeStarted(TAG, "backup", "archive_app_files")
                 appFiles.forEach { appFile ->
                     addFileToZip(zipOut, appFile.source, appFile.archivePath)
                 }
             }
         }
 
-        Log.i(
-            TAG,
-            "prepareBackupFile: Created backup file ${backupFile.name} (${backupFile.length().fileSizeToString()})"
-        )
+        logSafeSuccess(TAG, "backup", "create_archive")
         backupFile
     }
 
@@ -193,7 +191,6 @@ class WebDavSync(
             zipOut.putNextEntry(zipEntry)
             fis.copyTo(zipOut)
             zipOut.closeEntry()
-            Log.d(TAG, "addFileToZip: Added $entryName (${file.length()} bytes) to zip")
         }
     }
 
@@ -202,7 +199,6 @@ class WebDavSync(
         zipOut.putNextEntry(zipEntry)
         zipOut.write(content.toByteArray())
         zipOut.closeEntry()
-        Log.i(TAG, "addVirtualFileToZip: $name (${content.length} bytes)")
     }
 }
 

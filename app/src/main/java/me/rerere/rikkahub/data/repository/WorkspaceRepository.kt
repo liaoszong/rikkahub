@@ -1,6 +1,5 @@
 package me.rerere.rikkahub.data.repository
 
-import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -11,6 +10,8 @@ import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.db.dao.WorkspaceDAO
 import me.rerere.rikkahub.data.db.entity.WorkspaceEntity
 import me.rerere.rikkahub.utils.JsonInstant
+import me.rerere.rikkahub.utils.logSafeError
+import me.rerere.rikkahub.utils.logSafeFailure
 import me.rerere.workspace.RootfsInstallProgress
 import me.rerere.workspace.RootfsInstaller
 import me.rerere.workspace.WorkspaceCommandResult
@@ -38,7 +39,13 @@ class WorkspaceRepository(
             if (!dir.exists()) {
                 // 目录缺失时不删除记录(例如恢复备份后工作区文件未随数据库一起恢复),
                 // 仅标记为 BROKEN 以保留记录与助手绑定, 避免误删用户工作区
-                Log.w(TAG, "Workspace directory missing, marking as broken: id=${workspace.id}, root=${workspace.root}")
+                logSafeFailure(
+                    tag = TAG,
+                    domain = "workspace",
+                    operation = "verify_workspace_directory",
+                    warning = true,
+                    requestId = workspace.id,
+                )
                 if (workspace.shellStatus != WorkspaceShellStatus.BROKEN.name) {
                     updateShellState(workspace.id, WorkspaceShellStatus.BROKEN.name)
                 }
@@ -48,7 +55,13 @@ class WorkspaceRepository(
             if ((statusName == WorkspaceShellStatus.READY.name || statusName == WorkspaceShellStatus.INSTALLING.name)
                 && !manager.hasRootfs(workspace.root)
             ) {
-                Log.w(TAG, "Rootfs missing, resetting shell status: id=${workspace.id}")
+                logSafeFailure(
+                    tag = TAG,
+                    domain = "workspace",
+                    operation = "verify_rootfs",
+                    warning = true,
+                    requestId = workspace.id,
+                )
                 updateShellState(workspace.id, WorkspaceShellStatus.DISABLED.name)
             }
         }
@@ -134,7 +147,13 @@ class WorkspaceRepository(
             }
             throw CancellationException("Rootfs install cancelled").also { it.initCause(e) }
         } catch (e: Throwable) {
-            Log.e(TAG, "installRootfs failed: workspace=${workspace.id}, root=${workspace.root}, url=$url", e)
+            logSafeError(
+                tag = TAG,
+                domain = "workspace",
+                operation = "install_rootfs",
+                error = e,
+                requestId = workspace.id,
+            )
             updateShellState(workspace, WorkspaceShellStatus.BROKEN.name)
             throw e
         }

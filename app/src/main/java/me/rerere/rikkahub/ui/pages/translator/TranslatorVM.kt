@@ -12,6 +12,7 @@ import kotlinx.coroutines.launch
 import me.rerere.rikkahub.data.ai.GenerationHandler
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.utils.logSafeError
 import java.util.Locale
 
 private const val TAG = "TranslatorVM"
@@ -81,7 +82,7 @@ class TranslatorVM(
                     _translatedText.value = translatedText
                 }.collect { /* Final translation already handled in onStreamUpdate */ }
             }.onFailure {
-                it.printStackTrace()
+                logSafeError(TAG, "translation", "translate_text", it, warning = true)
                 errorFlow.emit(it)
             }
 

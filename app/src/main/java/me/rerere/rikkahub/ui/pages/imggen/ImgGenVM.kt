@@ -1,6 +1,5 @@
 package me.rerere.rikkahub.ui.pages.imggen
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.paging.Pager
@@ -17,6 +16,7 @@ import kotlinx.coroutines.launch
 import me.rerere.rikkahub.data.db.entity.MediaAssetEntity
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.repository.GenMediaRepository
+import me.rerere.rikkahub.utils.logSafeError
 import java.io.File
 
 data class ImageLibraryItem(
@@ -88,7 +88,7 @@ class ImgGenVM(
                     _localError.value = "Image is no longer available in the library"
                 }
             } catch (error: Exception) {
-                Log.e(TAG, "Failed to hide image from library", error)
+                logSafeError(TAG, "image_library", "hide_asset", error, requestId = image.assetId)
                 _localError.value = "Failed to remove image from library"
             }
         }

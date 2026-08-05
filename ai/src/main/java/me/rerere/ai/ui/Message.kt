@@ -13,6 +13,9 @@ import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.TokenUsage
 import me.rerere.ai.provider.Model
 import me.rerere.ai.util.json
+import me.rerere.common.android.Logging
+import me.rerere.common.android.SafeLogLevel
+import me.rerere.common.android.SafeLogOutcome
 import kotlin.math.roundToInt
 import kotlin.time.Clock
 import kotlin.time.Instant
@@ -134,7 +137,14 @@ data class UIMessage(
                     }
 
                     else -> {
-                        println("delta part append not supported: $deltaPart")
+                        Logging.logOperationToLogcat(
+                            tag = "UIMessage",
+                            domain = "ai",
+                            operation = "merge_unsupported_delta_part",
+                            outcome = SafeLogOutcome.REJECTED,
+                            level = SafeLogLevel.WARN,
+                            persist = false,
+                        )
                         acc
                     }
                 }

@@ -15,6 +15,8 @@ import me.rerere.tts.model.AudioFormat
 import me.rerere.tts.model.TTSRequest
 import me.rerere.tts.provider.TTSProvider
 import me.rerere.tts.provider.TTSProviderSetting
+import me.rerere.speech.logSpeechError
+import me.rerere.speech.logSpeechStarted
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -64,7 +66,7 @@ class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
             })
         }
 
-        Log.i(TAG, "generateSpeech: $requestBody")
+        logSpeechStarted(TAG, "generate_speech")
 
         val httpRequest = Request.Builder()
             .url("${providerSetting.baseUrl}/t2a_v2")
@@ -102,7 +104,7 @@ class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
                         )
                         hasEmittedAudio = true
                     } catch (e: Exception) {
-                        Log.e(TAG, "Failed to process audio chunk", e)
+                        logSpeechError(TAG, "process_audio_chunk", e)
                     }
                 }
 
@@ -123,7 +125,9 @@ class MiniMaxTTSProvider : TTSProvider<TTSProviderSetting.MiniMax> {
                 }
 
                 is SseEvent.Failure -> {
-                    Log.e(TAG, "SSE connection failed", it.throwable)
+                    it.throwable?.let { error ->
+                        logSpeechError(TAG, "stream_speech", error)
+                    }
                     throw it.throwable ?: Exception("MiniMax TTS streaming failed")
                 }
             }

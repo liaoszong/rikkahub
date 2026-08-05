@@ -53,6 +53,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import me.rerere.rikkahub.utils.logSafeError
 import com.dokar.sonner.ToastType
 import kotlinx.coroutines.launch
 import me.rerere.rikkahub.R
@@ -277,11 +278,11 @@ fun S3Tab(
                                 type = ToastType.Success
                             )
                         } catch (e: Exception) {
-                            e.printStackTrace()
+                            logSafeError("S3Tab", "backup", "test_s3_connection", e)
                             toaster.show(
                                 context.getString(
                                     R.string.backup_page_connection_failed,
-                                    e.message ?: ""
+                                    e.javaClass.simpleName
                                 ),
                                 type = ToastType.Error
                             )
@@ -314,9 +315,11 @@ fun S3Tab(
                                 type = ToastType.Success
                             )
                         }.onFailure {
-                            it.printStackTrace()
+                            logSafeError("S3Tab", "backup", "upload_s3_archive", it)
                             toaster.show(
-                                it.message ?: context.getString(R.string.backup_page_unknown_error),
+                                it.javaClass.simpleName.ifBlank {
+                                    context.getString(R.string.backup_page_unknown_error)
+                                },
                                 type = ToastType.Error
                             )
                         }
@@ -383,11 +386,11 @@ fun S3Tab(
                                             )
                                             vm.loadS3BackupFileItems()
                                         }.onFailure { err ->
-                                            err.printStackTrace()
+                                            logSafeError("S3Tab", "backup", "delete_s3_archive", err)
                                             toaster.show(
                                                 context.getString(
                                                     R.string.backup_page_delete_failed,
-                                                    err.message ?: ""
+                                                    err.javaClass.simpleName
                                                 ),
                                                 type = ToastType.Error
                                             )
@@ -406,11 +409,11 @@ fun S3Tab(
                                             showBackupFiles = false
                                             onShowRestartDialog()
                                         }.onFailure { err ->
-                                            err.printStackTrace()
+                                            logSafeError("S3Tab", "backup", "restore_s3_archive", err)
                                             toaster.show(
                                                 context.getString(
                                                     R.string.backup_page_restore_failed,
-                                                    err.message ?: ""
+                                                    err.javaClass.simpleName
                                                 ),
                                                 type = ToastType.Error
                                             )

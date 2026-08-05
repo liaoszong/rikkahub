@@ -33,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import me.rerere.rikkahub.utils.logSafeError
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.ClipEntry
@@ -125,7 +126,7 @@ fun HighlightCodeBlock(
                         outputStream.write(code.toByteArray())
                     }
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    logSafeError("HighlightCodeBlock", "export", "save_code_block", e, warning = true)
                 }
             }
         }

@@ -140,7 +140,7 @@ class McpManager(
         } catch (e: CancellationException) {
             throw e
         } catch (e: McpClientUnavailableException) {
-            return listOf(UIMessagePart.Text("Failed to execute MCP tool: ${e.message ?: e.javaClass.name}"))
+            return listOf(UIMessagePart.Text("Failed to execute MCP tool (${e.javaClass.simpleName})"))
         }
         return result.content.map { content ->
             when (content) {

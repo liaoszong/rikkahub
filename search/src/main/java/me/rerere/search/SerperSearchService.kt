@@ -94,7 +94,7 @@ object SerperSearchService : SearchService<SearchServiceOptions.SerperOptions> {
                     )
                 )
             } else {
-                error("Serper search failed with code ${response.code}: ${response.message}")
+                error("Serper search failed with code ${response.code}")
             }
         }
     }

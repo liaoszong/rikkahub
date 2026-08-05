@@ -2,10 +2,13 @@ package me.rerere.rikkahub.web
 
 import android.content.Context
 import android.net.wifi.WifiManager
-import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.InetAddress
+import me.rerere.rikkahub.utils.logSafeError
+import me.rerere.rikkahub.utils.logSafeFailure
+import me.rerere.rikkahub.utils.logSafeStarted
+import me.rerere.rikkahub.utils.logSafeSuccess
 import javax.jmdns.JmDNS
 import javax.jmdns.ServiceInfo
 
@@ -47,11 +50,11 @@ class NsdServiceRegistrar(
 
             val address = getLocalIpAddress()
             if (address == null) {
-                Log.e(TAG, "Failed to get local IP address")
+                logSafeFailure(TAG, "web", "resolve_local_address")
                 return@withContext
             }
 
-            Log.i(TAG, "Creating JmDNS with hostname=$serviceName, address=$address")
+            logSafeStarted(TAG, "web", "register_nsd_service")
 
             // Create JmDNS instance with custom hostname
             // This will register hostname.local -> IP address
@@ -67,10 +70,7 @@ class NsdServiceRegistrar(
             )
             mdns.registerService(serviceInfo)
 
-            Log.i(
-                TAG,
-                "Service registered: $serviceName.$serviceType port=$port, hostname=$serviceName.local"
-            )
+            logSafeSuccess(TAG, "web", "register_nsd_service")
 
             onRegistered?.invoke(
                 RegisteredServiceInfo(
@@ -81,7 +81,7 @@ class NsdServiceRegistrar(
                 )
             )
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to register service", e)
+            logSafeError(TAG, "web", "register_nsd_service", e)
             cleanup()
         }
     }
@@ -95,7 +95,7 @@ class NsdServiceRegistrar(
             jmdns?.unregisterAllServices()
             jmdns?.close()
         }.onFailure {
-            Log.w(TAG, "Failed to close JmDNS", it)
+            logSafeError(TAG, "web", "close_jmdns", it, warning = true)
         }
         jmdns = null
 
@@ -104,11 +104,11 @@ class NsdServiceRegistrar(
                 multicastLock?.release()
             }
         }.onFailure {
-            Log.w(TAG, "Failed to release multicast lock", it)
+            logSafeError(TAG, "web", "release_multicast_lock", it, warning = true)
         }
         multicastLock = null
 
-        Log.i(TAG, "Service unregistered")
+        logSafeSuccess(TAG, "web", "unregister_nsd_service")
     }
 
     private fun getLocalIpAddress(): InetAddress? {
@@ -128,7 +128,7 @@ class NsdServiceRegistrar(
             )
             InetAddress.getByAddress(ipBytes)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to get local IP address", e)
+            logSafeError(TAG, "web", "resolve_local_address", e)
             null
         }
     }

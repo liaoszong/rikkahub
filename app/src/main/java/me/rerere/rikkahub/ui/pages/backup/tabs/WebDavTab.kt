@@ -53,6 +53,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dokar.sonner.ToastType
+import me.rerere.rikkahub.utils.logSafeError
 import kotlinx.coroutines.launch
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.WebDavConfig
@@ -259,11 +260,11 @@ fun WebDavTab(
                                 type = ToastType.Success
                             )
                         } catch (e: Exception) {
-                            e.printStackTrace()
+                            logSafeError("WebDavTab", "backup", "test_webdav_connection", e)
                             toaster.show(
                                 context.getString(
                                     R.string.backup_page_connection_failed,
-                                    e.message ?: ""
+                                    e.javaClass.simpleName
                                 ),
                                 type = ToastType.Error
                             )
@@ -295,9 +296,11 @@ fun WebDavTab(
                                 type = ToastType.Success
                             )
                         }.onFailure {
-                            it.printStackTrace()
+                            logSafeError("WebDavTab", "backup", "upload_webdav_archive", it)
                             toaster.show(
-                                it.message ?: context.getString(R.string.backup_page_unknown_error),
+                                it.javaClass.simpleName.ifBlank {
+                                    context.getString(R.string.backup_page_unknown_error)
+                                },
                                 type = ToastType.Error
                             )
                         }
@@ -364,11 +367,11 @@ fun WebDavTab(
                                             )
                                             vm.loadBackupFileItems()
                                         }.onFailure { err ->
-                                            err.printStackTrace()
+                                            logSafeError("WebDavTab", "backup", "delete_webdav_archive", err)
                                             toaster.show(
                                                 context.getString(
                                                     R.string.backup_page_delete_failed,
-                                                    err.message ?: ""
+                                                    err.javaClass.simpleName
                                                 ),
                                                 type = ToastType.Error
                                             )
@@ -387,11 +390,11 @@ fun WebDavTab(
                                             showBackupFiles = false
                                             onShowRestartDialog()
                                         }.onFailure { err ->
-                                            err.printStackTrace()
+                                            logSafeError("WebDavTab", "backup", "restore_webdav_archive", err)
                                             toaster.show(
                                                 context.getString(
                                                     R.string.backup_page_restore_failed,
-                                                    err.message ?: ""
+                                                    err.javaClass.simpleName
                                                 ),
                                                 type = ToastType.Error
                                             )

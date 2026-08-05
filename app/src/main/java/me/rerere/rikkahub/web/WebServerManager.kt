@@ -13,6 +13,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.utils.logSafeError
+import me.rerere.rikkahub.utils.logSafeStarted
+import me.rerere.rikkahub.utils.logSafeSuccess
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.FolderRepository
@@ -63,7 +66,7 @@ class WebServerManager(
         appScope.launch {
             val credentialReady = runCatching { settingsStore.awaitCredentialReady() }
                 .onFailure {
-                    Log.e(TAG, "Web server start rejected by credential boundary", it)
+                    logSafeError(TAG, "web", "start_server_credential_boundary", it)
                     _state.value = _state.value.copy(error = "Credentials are unavailable")
                 }
                 .isSuccess
@@ -87,7 +90,7 @@ class WebServerManager(
             )
             try {
                 _state.value = _state.value.copy(isLoading = true)
-                Log.i(TAG, "Starting web server on $host:$port")
+                logSafeStarted(TAG, "web", "start_server")
                 if (!isPortAvailable(port)) {
                     Log.w(TAG, "Port $port is already in use")
                     _state.value = baseState.copy(error = "Port $port is already in use")
@@ -113,13 +116,13 @@ class WebServerManager(
                             }
                         )
                     }.onFailure {
-                        Log.w(TAG, "NSD register failed", it)
+                        logSafeError(TAG, "web", "register_nsd", it, warning = true)
                     }
                 }
-                Log.i(TAG, "Web server started successfully on $host:$port")
+                logSafeSuccess(TAG, "web", "start_server")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to start web server", e)
-                _state.value = baseState.copy(error = e.message)
+                logSafeError(TAG, "web", "start_server", e)
+                _state.value = baseState.copy(error = e.javaClass.simpleName)
             }
         }
     }
@@ -133,19 +136,19 @@ class WebServerManager(
             _state.value.copy(isRunning = false, isLoading = true, hostname = null, address = null, error = null)
         appScope.launch {
             try {
-                Log.i(TAG, "Stopping web server")
+                logSafeStarted(TAG, "web", "stop_server")
                 server?.stop(1000, 2000)
                 server = null
                 runCatching {
                     nsdRegistrar.unregister()
                 }.onFailure {
-                    Log.w(TAG, "NSD unregister failed", it)
+                    logSafeError(TAG, "web", "unregister_nsd", it, warning = true)
                 }
                 _state.value = _state.value.copy(isLoading = false)
-                Log.i(TAG, "Web server stopped")
+                logSafeSuccess(TAG, "web", "stop_server")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to stop web server", e)
-                _state.value = _state.value.copy(isLoading = false, error = e.message)
+                logSafeError(TAG, "web", "stop_server", e)
+                _state.value = _state.value.copy(isLoading = false, error = e.javaClass.simpleName)
             }
         }
     }

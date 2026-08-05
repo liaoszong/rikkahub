@@ -35,6 +35,7 @@ import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.ToolExecutionState
 import me.rerere.ai.ui.handleMessageChunk
 import me.rerere.ai.ui.limitContext
+import me.rerere.common.android.Logging
 import me.rerere.rikkahub.data.ai.transformers.InputMessageTransformer
 import me.rerere.rikkahub.data.ai.transformers.MessageTransformer
 import me.rerere.rikkahub.data.ai.transformers.OutputMessageTransformer
@@ -59,6 +60,8 @@ import me.rerere.rikkahub.fork.pale.request.ChatProviderStepSession
 import me.rerere.rikkahub.fork.pale.request.ToolExecutionLedgerCoordinator
 import me.rerere.rikkahub.fork.pale.request.ToolExecutionLedgerSession
 import me.rerere.rikkahub.utils.applyPlaceholders
+import me.rerere.rikkahub.utils.logSafeError
+import me.rerere.rikkahub.utils.logSafeStarted
 import java.util.Locale
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
@@ -108,7 +111,7 @@ class GenerationHandler(
         var messages: List<UIMessage> = messages
 
         for (stepIndex in 0 until maxSteps) {
-            Log.i(TAG, "streamText: start step #$stepIndex (${model.id})")
+            logSafeStarted(TAG, "chat_generation", "provider_step")
 
             val toolsInternal = buildList {
                 Log.i(TAG, "generateInternal: build tools")
@@ -379,7 +382,7 @@ class GenerationHandler(
                             val failure = argsResult.exceptionOrNull()!!
                             executedTools += runningTool.asFailedToolResult(
                                 IllegalArgumentException(
-                                    "Invalid tool arguments JSON for ${runningTool.toolName}: ${failure.message}",
+                                    "Invalid tool arguments JSON",
                                     failure,
                                 ),
                             )
@@ -401,7 +404,7 @@ class GenerationHandler(
                                 }
                             }
                             try {
-                            Log.i(TAG, "generateText: executing tool ${toolDef.name} requestId=${runningTool.requestId}")
+                            logSafeStarted(TAG, "tool_execution", "execute_tool")
                             val executeTool: suspend () -> List<UIMessagePart> = {
                                 toolDef.executeWithContext?.invoke(
                                     args,
@@ -442,9 +445,12 @@ class GenerationHandler(
                                 )
                                 throw failure
                             }
-                            Log.e(
-                                TAG,
-                                "generateText: tool ${runningTool.toolName} failed (${failure.javaClass.simpleName})",
+                            logSafeError(
+                                tag = TAG,
+                                domain = "tool_execution",
+                                operation = "execute_tool",
+                                error = failure,
+                                requestId = runningTool.requestId,
                             )
                             executedTools += runningTool.asFailedToolResult(failure)
                             }
@@ -728,7 +734,7 @@ class GenerationHandler(
 
         if (totalChars <= MAX_TOOL_OUTPUT_CHARS || !hasShellAccess) return output
 
-        Log.i(TAG, "maybeTruncateToolOutput: truncating tool $toolCallId output ($totalChars chars)")
+        logSafeStarted(TAG, "tool_execution", "persist_truncated_output")
 
         val fullText = textParts.joinToString("\n") { it.text }
         val preview = fullText.take(TOOL_OUTPUT_PREVIEW_CHARS)
@@ -758,10 +764,13 @@ class GenerationHandler(
                     buildJsonObject {
                         put(
                             "error",
-                            JsonPrimitive(buildString {
-                                append("[${failure.javaClass.name}] ${failure.message}")
-                                append("\n${failure.stackTraceToString()}")
-                            }),
+                            JsonPrimitive(
+                                Logging.safeErrorMessage(
+                                    domain = "tool_execution",
+                                    operation = "execute_tool",
+                                    error = failure,
+                                )
+                            ),
                         )
                     },
                 ),

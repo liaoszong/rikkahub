@@ -10,6 +10,8 @@ import me.rerere.hugeicons.stroke.Tools
 import me.rerere.hugeicons.stroke.Share01
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.Cancel01
+import me.rerere.rikkahub.utils.logSafeError
+import me.rerere.rikkahub.utils.logSafeStarted
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -419,13 +421,13 @@ private fun ModelList(
     val modelList by produceState(emptyList(), providerSetting) {
         runCatching {
             settingsStore.awaitCredentialReady()
-            println("loading models...")
+            logSafeStarted("ProviderDetail", "provider", "list_models")
             value = providerManager.getProviderByType(providerSetting)
                 .listModels(providerSetting)
                 .sortedBy { it.modelId }
                 .toList()
         }.onFailure {
-            it.printStackTrace()
+            logSafeError("ProviderDetail", "provider", "list_models", it, warning = true)
         }
     }
     var expanded by rememberSaveable { mutableStateOf(true) }

@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
+import me.rerere.common.android.Logging
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import me.rerere.ai.core.Tool
@@ -286,7 +287,7 @@ private fun TestResultItem(
                 }
             }
             is UiState.Error -> Text(
-                text = state.error.message ?: "Error",
+                text = "Provider test failed (${state.error.javaClass.simpleName})",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.extendColors.red6,
                 maxLines = 2,
@@ -300,8 +301,12 @@ private fun TestResultItem(
 
     if (showErrorSheet && state is UiState.Error) {
         val sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden, enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
-        val stackTrace = remember(state.error) {
-            state.error.stackTraceToString()
+        val safeDetail = remember(state.error) {
+            Logging.safeErrorMessage(
+                domain = "provider",
+                operation = "test_connection",
+                error = state.error,
+            )
         }
         ModalBottomSheet(
             onDismissRequest = { showErrorSheet = false },
@@ -320,12 +325,12 @@ private fun TestResultItem(
                     style = MaterialTheme.typography.titleMedium
                 )
                 Text(
-                    text = state.error.message ?: "Error",
+                    text = "Provider test failed (${state.error.javaClass.simpleName})",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.extendColors.red6
                 )
                 Text(
-                    text = stackTrace,
+                    text = safeDetail,
                     style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

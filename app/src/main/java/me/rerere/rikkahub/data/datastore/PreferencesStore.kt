@@ -73,6 +73,8 @@ import me.rerere.rikkahub.data.sync.s3.S3Config
 import me.rerere.rikkahub.ui.theme.CustomTheme
 import me.rerere.rikkahub.ui.theme.PresetThemes
 import me.rerere.rikkahub.utils.JsonInstant
+import me.rerere.rikkahub.utils.logSafeError
+import me.rerere.rikkahub.utils.logSafeFailure
 import me.rerere.rikkahub.utils.toMutableStateFlow
 import me.rerere.search.SearchCommonOptions
 import me.rerere.search.SearchServiceOptions
@@ -665,7 +667,7 @@ class SettingsStore internal constructor(
             recordCredentialFailure(failure.issue)
             credentialReadiness.value
         } catch (failure: Throwable) {
-            Log.e(TAG, "Credential vault migration failed closed", failure)
+            logSafeError(TAG, "credential", "migrate_vault", failure)
             CredentialReadiness.Unavailable(
                 reason = CredentialUnavailableReason.MIGRATION_FAILED,
                 retryable = true,
@@ -700,7 +702,7 @@ class SettingsStore internal constructor(
             )
         }
         credentialReadinessController.unavailable(unavailable.reason, unavailable.retryable)
-        Log.e(TAG, "Credential settings unavailable: ${unavailable.reason}")
+        logSafeFailure(TAG, "credential", "load_settings")
     }
 
     suspend fun update(fn: (Settings) -> Settings) {

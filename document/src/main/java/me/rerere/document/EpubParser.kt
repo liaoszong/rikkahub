@@ -41,7 +41,7 @@ object EpubParser {
                 result.toString().trim().ifEmpty { "No readable content found in EPUB file" }
             }
         } catch (e: Exception) {
-            "Error parsing EPUB file: ${e.message}"
+            "Error parsing EPUB file (${e.javaClass.simpleName})"
         }
     }
 

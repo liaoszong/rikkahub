@@ -114,7 +114,12 @@ class AudioPlayer(context: Context) {
             override fun onPlayerError(error: PlaybackException) {
                 player.removeListener(this)
                 stopPositionUpdates()
-                _playbackState.update { it.copy(status = PlaybackStatus.Error, errorMessage = error.message) }
+                _playbackState.update {
+                    it.copy(
+                        status = PlaybackStatus.Error,
+                        errorMessage = "Playback failed (${error.javaClass.simpleName})",
+                    )
+                }
                 if (cont.isActive) cont.resumeWithException(error)
             }
 

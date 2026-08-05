@@ -57,6 +57,7 @@ import me.rerere.rikkahub.data.sync.webdav.WebDavSync
 import me.rerere.rikkahub.data.sync.BackupRestoreCoordinator
 import me.rerere.search.SearchService
 import me.rerere.rikkahub.data.sync.S3Sync
+import me.rerere.rikkahub.utils.logSafeFailure
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import org.koin.dsl.module
@@ -101,9 +102,10 @@ val dataSourceModule = module {
                             val result = it.getString(0)
                             val success = result?.trimEnd('/') == dictDir.absolutePath.trimEnd('/')
                             if (!success) {
-                                android.util.Log.e(
-                                    "DataSourceModule",
-                                    "jieba_dict failed: $result, path=${dictDir.absolutePath}"
+                                logSafeFailure(
+                                    tag = "DataSourceModule",
+                                    domain = "database",
+                                    operation = "configure_fts_dictionary",
                                 )
                             }
                         }

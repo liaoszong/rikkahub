@@ -33,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import me.rerere.rikkahub.utils.logSafeError
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -98,8 +99,10 @@ fun TextArea(
                     state.setTextAndPlaceCursorAtEnd(content)
                     toaster.show(context.getString(R.string.text_area_import_success), type = ToastType.Success)
                 } catch (e: Exception) {
-                    e.printStackTrace()
-                    val errorMessage = e.message ?: context.getString(R.string.text_area_import_failed)
+                    logSafeError("TextArea", "files", "import_text", e, warning = true)
+                    val errorMessage = e.javaClass.simpleName.ifBlank {
+                        context.getString(R.string.text_area_import_failed)
+                    }
                     onImportError?.invoke(errorMessage) ?: toaster.show(
                         message = errorMessage,
                         type = ToastType.Error

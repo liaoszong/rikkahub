@@ -9,7 +9,6 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.SystemClock
 import android.util.Base64
-import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +28,7 @@ import me.rerere.asr.ASRState
 import me.rerere.asr.ASRStatus
 import me.rerere.asr.appendAmplitude
 import me.rerere.asr.calculateRmsAmplitude
+import me.rerere.speech.logSpeechError
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -118,8 +118,8 @@ class MiMoASRController(
                 flushJob?.join()
                 flushSegment()
             } catch (e: Exception) {
-                Log.e(TAG, "Final flush failed", e)
-                setError(e.message ?: "MiMo ASR final flush failed")
+                logSpeechError(TAG, "final_flush", e)
+                setError("MiMo ASR final flush failed (${e.javaClass.simpleName})")
             } finally {
                 _state.update { it.copy(status = ASRStatus.Idle) }
             }
@@ -185,8 +185,8 @@ class MiMoASRController(
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Audio recording failed", e)
-                setError(e.message ?: "Audio recording failed")
+                logSpeechError(TAG, "record_audio", e)
+                setError("Audio recording failed (${e.javaClass.simpleName})")
             } finally {
                 releaseRecorder()
             }
@@ -198,7 +198,7 @@ class MiMoASRController(
         if (flushJob?.isActive == true) return
         flushJob = scope.launch(Dispatchers.IO) {
             runCatching { flushSegment() }
-                .onFailure { Log.e(TAG, "Segment flush failed", it) }
+                .onFailure { logSpeechError(TAG, "segment_flush", it) }
         }
     }
 
@@ -255,10 +255,10 @@ class MiMoASRController(
             httpClient.newCall(request).execute().use { resp ->
                 val respBody = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
-                    throw IOException("MiMo ASR HTTP ${resp.code}: $respBody")
+                    throw IOException("MiMo ASR HTTP ${resp.code}")
                 }
                 val json = runCatching { JSONObject(respBody) }.getOrElse {
-                    throw IOException("MiMo ASR response is not valid JSON: $respBody")
+                    throw IOException("MiMo ASR response is not valid JSON", it)
                 }
                 json.optJSONArray("choices")
                     ?.optJSONObject(0)

@@ -33,7 +33,7 @@ object DocxParser {
                 }
             }
         } catch (e: Exception) {
-            "Error parsing DOCX file: ${e.message}"
+            "Error parsing DOCX file (${e.javaClass.simpleName})"
         }
     }
 
@@ -65,7 +65,7 @@ object DocxParser {
 
             result.toString().trim()
         } catch (e: Exception) {
-            "Error parsing document XML: ${e.message}"
+            "Error parsing document XML (${e.javaClass.simpleName})"
         }
     }
 

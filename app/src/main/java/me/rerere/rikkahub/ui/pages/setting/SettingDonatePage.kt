@@ -38,6 +38,7 @@ import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.UiState
+import me.rerere.rikkahub.utils.logSafeSuccess
 import me.rerere.rikkahub.utils.onError
 import me.rerere.rikkahub.utils.onLoading
 import me.rerere.rikkahub.utils.onSuccess
@@ -128,7 +129,7 @@ private fun Sponsors(modifier: Modifier = Modifier) {
         value = UiState.Loading
         runCatching {
             val sponsors = sponsorAPI.getSponsors()
-            println(sponsors)
+            logSafeSuccess("SettingDonatePage", "sponsor", "load_sponsors", itemCount = sponsors.size)
             value = UiState.Success(sponsors)
         }.onFailure {
             value = UiState.Error(it)

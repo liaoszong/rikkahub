@@ -1,6 +1,5 @@
 package me.rerere.search
 
-import android.util.Log
 import androidx.compose.runtime.Composable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -61,7 +60,7 @@ object RikkaHubSearchService : SearchService<SearchServiceOptions.RikkaHubOption
                 .addHeader("Content-Type", "application/json")
                 .build()
 
-            Log.i(TAG, "search: $query")
+            logSearchStarted(TAG)
 
             val response = httpClient.newCall(request).await()
             if (response.isSuccessful) {
@@ -82,7 +81,7 @@ object RikkaHubSearchService : SearchService<SearchServiceOptions.RikkaHubOption
                     )
                 )
             } else {
-                error("response failed #${response.code}: ${response.body?.string()}")
+                error("response failed #${response.code}")
             }
         }
     }

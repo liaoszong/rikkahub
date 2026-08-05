@@ -129,7 +129,7 @@ object JinaSearchService : SearchService<SearchServiceOptions.JinaOptions> {
 
             val response = httpClient.newCall(request).await()
             if (!response.isSuccessful) {
-                error("response failed for url $url #${response.code}")
+                error("response failed #${response.code}")
             }
             val responseData = response.body.string().let {
                 json.decodeFromString<JinaScrapeResponse>(it)

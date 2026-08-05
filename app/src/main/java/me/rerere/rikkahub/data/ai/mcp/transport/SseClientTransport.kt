@@ -114,7 +114,6 @@
 //                error("Error POSTing to endpoint (HTTP ${response.status}): $bodyText")
 //            }
 //
-//            Log.d(TAG, "Client successfully sent message via SSE $endpoint")
 //        } catch (e: Throwable) {
 //            _onError(e)
 //            throw e
@@ -167,7 +166,6 @@
 //                Url("$baseUrl/$eventData")
 //            }
 //            endpoint.complete(endpointUrl.toString())
-//            Log.d(TAG, "Client connected to endpoint: $endpointUrl")
 //        } catch (e: Throwable) {
 //            _onError(e)
 //            endpoint.completeExceptionally(e)

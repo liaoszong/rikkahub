@@ -1,7 +1,6 @@
 package me.rerere.tts.provider.providers
 
 import android.content.Context
-import android.util.Log
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import me.rerere.tts.model.AudioChunk
@@ -9,6 +8,8 @@ import me.rerere.tts.model.AudioFormat
 import me.rerere.tts.model.TTSRequest
 import me.rerere.tts.provider.TTSProvider
 import me.rerere.tts.provider.TTSProviderSetting
+import me.rerere.speech.logSpeechFailure
+import me.rerere.speech.logSpeechStarted
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -34,7 +35,7 @@ class XAITTSProvider : TTSProvider<TTSProviderSetting.XAI> {
             put("language", providerSetting.language)
         }
 
-        Log.i(TAG, "generateSpeech: $requestBody")
+        logSpeechStarted(TAG, "generate_speech")
 
         val httpRequest = Request.Builder()
             .url("${providerSetting.baseUrl}/tts")
@@ -46,10 +47,8 @@ class XAITTSProvider : TTSProvider<TTSProviderSetting.XAI> {
         val response = httpClient.newCall(httpRequest).execute()
 
         if (!response.isSuccessful) {
-            val errorBody = response.body?.string()
-            Log.e(TAG, "generateSpeech: ${response.code} ${response.message}")
-            Log.e(TAG, "generateSpeech: $errorBody")
-            throw Exception("xAI TTS request failed: ${response.code} ${response.message}")
+            logSpeechFailure(TAG, "generate_speech", httpStatus = response.code)
+            throw Exception("xAI TTS request failed: ${response.code}")
         }
 
         val audioData = response.body.bytes()

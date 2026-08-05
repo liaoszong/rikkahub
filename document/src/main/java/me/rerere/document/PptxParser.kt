@@ -52,7 +52,7 @@ object PptxParser {
                 formatOutput(slides)
             }
         } catch (e: Exception) {
-            "Error parsing PPTX file: ${e.message}"
+            "Error parsing PPTX file (${e.javaClass.simpleName})"
         }
     }
 
@@ -97,7 +97,7 @@ object PptxParser {
 
             result.toString()
         } catch (e: Exception) {
-            "Error parsing slide XML: ${e.message}\n"
+            "Error parsing slide XML (${e.javaClass.simpleName})\n"
         }
     }
 

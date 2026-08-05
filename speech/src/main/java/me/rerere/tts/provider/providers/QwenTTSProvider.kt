@@ -2,7 +2,6 @@ package me.rerere.tts.provider.providers
 
 import android.content.Context
 import android.util.Base64
-import android.util.Log
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import me.rerere.tts.model.AudioChunk
@@ -10,6 +9,9 @@ import me.rerere.tts.model.AudioFormat
 import me.rerere.tts.model.TTSRequest
 import me.rerere.tts.provider.TTSProvider
 import me.rerere.tts.provider.TTSProviderSetting
+import me.rerere.speech.logSpeechError
+import me.rerere.speech.logSpeechFailure
+import me.rerere.speech.logSpeechStarted
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -38,7 +40,7 @@ class QwenTTSProvider : TTSProvider<TTSProviderSetting.Qwen> {
             })
         }
 
-        Log.i(TAG, "generateSpeech: $requestBody")
+        logSpeechStarted(TAG, "generate_speech")
 
         val httpRequest = Request.Builder()
             .url("${providerSetting.baseUrl}/services/aigc/multimodal-generation/generation")
@@ -51,9 +53,8 @@ class QwenTTSProvider : TTSProvider<TTSProviderSetting.Qwen> {
         val response = httpClient.newCall(httpRequest).execute()
 
         if (!response.isSuccessful) {
-            val errorBody = response.body.string()
-            Log.e(TAG, "Qwen TTS request failed: ${response.code} ${response.message}, body: $errorBody")
-            throw Exception("Qwen TTS request failed: ${response.code} ${response.message}")
+            logSpeechFailure(TAG, "generate_speech", httpStatus = response.code)
+            throw Exception("Qwen TTS request failed: ${response.code}")
         }
 
         val reader = response.body.byteStream().bufferedReader()
@@ -113,7 +114,7 @@ class QwenTTSProvider : TTSProvider<TTSProviderSetting.Qwen> {
                 null
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to parse SSE data: $data", e)
+            logSpeechError(TAG, "parse_sse_event", e, warning = true)
             null
         }
     }

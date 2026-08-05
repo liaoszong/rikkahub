@@ -1,6 +1,5 @@
 package me.rerere.rikkahub.ui.pages.history
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.Flow
@@ -16,6 +15,7 @@ import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.service.ChatService
 import me.rerere.rikkahub.service.ReversibleConversationDeletion
+import me.rerere.rikkahub.utils.logSafeError
 import kotlin.uuid.Uuid
 
 private const val TAG = "HistoryVM"
@@ -32,7 +32,7 @@ class HistoryVM(
     val conversations = assistant.flatMapLatest { assistant ->
         conversationRepo.getConversationsOfAssistant(assistant?.id ?: Uuid.random())
     }.catch {
-        Log.e(TAG, "Error: ${it.message}")
+        logSafeError(TAG, "conversation", "observe_history", it)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     suspend fun deleteConversation(conversationId: Uuid): ReversibleConversationDeletion? =

@@ -28,6 +28,8 @@ import me.rerere.asr.ASRState
 import me.rerere.asr.ASRStatus
 import me.rerere.asr.appendAmplitude
 import me.rerere.asr.calculateRmsAmplitude
+import me.rerere.speech.logSpeechError
+import me.rerere.speech.logSpeechFailure
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -95,9 +97,9 @@ class OpenAIRealtimeASRController(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "Realtime ASR websocket failed", t)
+                logSpeechError(TAG, "websocket", t)
                 releaseRecorder()
-                setError(t.message ?: "ASR websocket failed")
+                setError("ASR websocket failed (${t.javaClass.simpleName})")
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
@@ -183,8 +185,8 @@ class OpenAIRealtimeASRController(
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Audio recording failed", e)
-                setError(e.message ?: "Audio recording failed")
+                logSpeechError(TAG, "record_audio", e)
+                setError("Audio recording failed (${e.javaClass.simpleName})")
             } finally {
                 releaseRecorder()
             }
@@ -193,7 +195,7 @@ class OpenAIRealtimeASRController(
 
     private fun handleServerEvent(text: String) {
         val event = runCatching { JSONObject(text) }.getOrElse {
-            Log.w(TAG, "Invalid realtime event: $text", it)
+            logSpeechError(TAG, "parse_realtime_event", it, warning = true)
             return
         }
 
@@ -218,12 +220,11 @@ class OpenAIRealtimeASRController(
             }
 
             "error" -> {
-                val error = event.optJSONObject("error")
-                setError(error?.optString("message") ?: "ASR realtime error")
+                setError("ASR realtime error")
             }
 
             else -> {
-                Log.v(TAG, "Ignored realtime event: $type")
+                logSpeechFailure(TAG, "ignore_realtime_event", warning = true)
             }
         }
     }

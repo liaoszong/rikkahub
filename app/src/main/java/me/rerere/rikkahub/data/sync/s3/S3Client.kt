@@ -1,6 +1,5 @@
 package me.rerere.rikkahub.data.sync.s3
 
-import android.util.Log
 import android.util.Xml
 import io.ktor.client.HttpClient
 import io.ktor.client.request.headers
@@ -18,6 +17,9 @@ import io.ktor.utils.io.readAvailable
 import io.ktor.util.cio.readChannel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import me.rerere.rikkahub.utils.logSafeFailure
+import me.rerere.rikkahub.utils.logSafeStarted
+import me.rerere.rikkahub.utils.logSafeSuccess
 import org.xmlpull.v1.XmlPullParser
 import java.io.File
 import java.io.InputStream
@@ -99,11 +101,11 @@ class S3Client(
 
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "putObject failed: ${response.status} - $errorBody")
+                logSafeFailure(TAG, "sync", "s3_put_object", httpStatus = response.status.value)
                 throw S3Exception("Failed to put object: ${response.status}", errorBody)
             }
 
-            Log.d(TAG, "putObject success: $key")
+            logSafeSuccess(TAG, "sync", "s3_put_object")
             Unit
         }
     }
@@ -136,11 +138,16 @@ class S3Client(
 
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "putObject(file) failed: ${response.status} - $errorBody")
+                logSafeFailure(TAG, "sync", "s3_put_object_file", httpStatus = response.status.value)
                 throw S3Exception("Failed to put object: ${response.status}", errorBody)
             }
 
-            Log.d(TAG, "putObject(file) success: $key (${file.length()} bytes)")
+            logSafeSuccess(
+                TAG,
+                "sync",
+                "s3_put_object_file",
+                itemCount = file.length().coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+            )
             Unit
         }
     }
@@ -163,7 +170,7 @@ class S3Client(
 
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "getObject failed: ${response.status} - $errorBody")
+                logSafeFailure(TAG, "sync", "s3_get_object", httpStatus = response.status.value)
                 throw S3Exception("Failed to get object: ${response.status}", errorBody)
             }
 
@@ -190,7 +197,7 @@ class S3Client(
 
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "getObjectStream failed: ${response.status} - $errorBody")
+                logSafeFailure(TAG, "sync", "s3_get_object_stream", httpStatus = response.status.value)
                 throw S3Exception("Failed to get object stream: ${response.status}", errorBody)
             }
 
@@ -207,7 +214,7 @@ class S3Client(
                 path = path,
             )
 
-            Log.d(TAG, "GET (download to file): $key")
+            logSafeStarted(TAG, "sync", "s3_download_object")
 
             httpClient.prepareRequest(signed.url) {
                 method = HttpMethod.Get
@@ -217,7 +224,7 @@ class S3Client(
             }.execute { response ->
                 if (!response.status.isSuccess()) {
                     val errorBody = response.bodyAsText()
-                    Log.e(TAG, "downloadObjectToFile failed: ${response.status} - $errorBody")
+                    logSafeFailure(TAG, "sync", "s3_download_object", httpStatus = response.status.value)
                     throw S3Exception("Failed to download object: ${response.status}", errorBody)
                 }
 
@@ -226,7 +233,12 @@ class S3Client(
                         input.copyTo(output)
                     }
                 }
-                Log.d(TAG, "downloadObjectToFile success: downloaded ${targetFile.length()} bytes")
+                logSafeSuccess(
+                    TAG,
+                    "sync",
+                    "s3_download_object",
+                    itemCount = targetFile.length().coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                )
             }
             Unit
         }
@@ -250,11 +262,11 @@ class S3Client(
 
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "deleteObject failed: ${response.status} - $errorBody")
+                logSafeFailure(TAG, "sync", "s3_delete_object", httpStatus = response.status.value)
                 throw S3Exception("Failed to delete object: ${response.status}", errorBody)
             }
 
-            Log.d(TAG, "deleteObject success: $key")
+            logSafeSuccess(TAG, "sync", "s3_delete_object")
             Unit
         }
     }
@@ -320,7 +332,7 @@ class S3Client(
 
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "listObjects failed: ${response.status} - $errorBody")
+                logSafeFailure(TAG, "sync", "s3_list_objects", httpStatus = response.status.value)
                 throw S3Exception("Failed to list objects: ${response.status}", errorBody)
             }
 

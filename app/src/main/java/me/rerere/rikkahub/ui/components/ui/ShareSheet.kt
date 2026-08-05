@@ -29,6 +29,7 @@ import me.rerere.ai.provider.asUserOwnedCopy
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Share03
 import me.rerere.rikkahub.utils.JsonInstant
+import me.rerere.rikkahub.utils.logSafeError
 import kotlin.io.encoding.Base64
 
 @Composable
@@ -67,7 +68,7 @@ fun ShareSheet(
                             try {
                                 context.startActivity(Intent.createChooser(intent, null))
                             } catch (e: Exception) {
-                                e.printStackTrace()
+                                logSafeError("ShareSheet", "sharing", "launch_share_sheet", e, warning = true)
                             }
                         }
                     ) {

@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import me.rerere.rikkahub.utils.JsonInstant
+import me.rerere.rikkahub.utils.logSafeError
 
 private const val TAG = "SettingsJsonMigrator"
 
@@ -63,7 +64,7 @@ object SettingsJsonMigrator {
 
             JsonInstant.encodeToString(JsonObject(root))
         }.onFailure {
-            Log.e(TAG, "migrate: Failed to migrate settings JSON, using original", it)
+            logSafeError(TAG, "settings", "migrate_json", it)
         }.getOrDefault(settingsJson)
     }
 }

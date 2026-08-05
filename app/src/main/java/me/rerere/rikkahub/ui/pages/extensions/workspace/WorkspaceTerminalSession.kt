@@ -5,7 +5,6 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
-import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.inputmethod.InputMethodManager
@@ -16,6 +15,9 @@ import com.termux.terminal.TerminalSessionClient
 import com.termux.view.TerminalView
 import com.termux.view.TerminalViewClient
 import me.rerere.rikkahub.data.files.FileFolders
+import me.rerere.common.android.Logging
+import me.rerere.common.android.SafeLogLevel
+import me.rerere.common.android.SafeLogOutcome
 import me.rerere.workspace.RootfsPatchOptions
 import me.rerere.workspace.RootfsPatcher
 import java.io.File
@@ -151,31 +153,31 @@ internal class WorkspaceTerminalSessionClient(
         TerminalEmulator.DEFAULT_TERMINAL_CURSOR_STYLE
 
     override fun logError(tag: String, message: String) {
-        Log.e(tag, message)
+        logTerminalEvent("terminal_error", SafeLogOutcome.FAILED, SafeLogLevel.ERROR)
     }
 
     override fun logWarn(tag: String, message: String) {
-        Log.w(tag, message)
+        logTerminalEvent("terminal_warning", SafeLogOutcome.FAILED, SafeLogLevel.WARN)
     }
 
     override fun logInfo(tag: String, message: String) {
-        Log.i(tag, message)
+        logTerminalEvent("terminal_info", SafeLogOutcome.SUCCEEDED, SafeLogLevel.INFO)
     }
 
     override fun logDebug(tag: String, message: String) {
-        Log.d(tag, message)
+        logTerminalEvent("terminal_debug", SafeLogOutcome.SUCCEEDED, SafeLogLevel.DEBUG)
     }
 
     override fun logVerbose(tag: String, message: String) {
-        Log.v(tag, message)
+        logTerminalEvent("terminal_verbose", SafeLogOutcome.SUCCEEDED, SafeLogLevel.DEBUG)
     }
 
     override fun logStackTraceWithMessage(tag: String, message: String, e: Exception) {
-        Log.e(tag, message, e)
+        logTerminalError("terminal_error", e)
     }
 
     override fun logStackTrace(tag: String, e: Exception) {
-        Log.e(tag, "Terminal error", e)
+        logTerminalError("terminal_error", e)
     }
 }
 
@@ -242,7 +244,7 @@ internal class WorkspaceTerminalViewClient(
             context.startActivity(intent)
             true
         }.getOrElse {
-            Log.w("WorkspaceTerminal", "Failed to open url: $url", it)
+            logTerminalError("open_terminal_url", it, warning = true)
             false
         }
     }
@@ -285,36 +287,63 @@ internal class WorkspaceTerminalViewClient(
     override fun onEmulatorSet() = Unit
 
     override fun logError(tag: String, message: String) {
-        Log.e(tag, message)
+        logTerminalEvent("terminal_view_error", SafeLogOutcome.FAILED, SafeLogLevel.ERROR)
     }
 
     override fun logWarn(tag: String, message: String) {
-        Log.w(tag, message)
+        logTerminalEvent("terminal_view_warning", SafeLogOutcome.FAILED, SafeLogLevel.WARN)
     }
 
     override fun logInfo(tag: String, message: String) {
-        Log.i(tag, message)
+        logTerminalEvent("terminal_view_info", SafeLogOutcome.SUCCEEDED, SafeLogLevel.INFO)
     }
 
     override fun logDebug(tag: String, message: String) {
-        Log.d(tag, message)
+        logTerminalEvent("terminal_view_debug", SafeLogOutcome.SUCCEEDED, SafeLogLevel.DEBUG)
     }
 
     override fun logVerbose(tag: String, message: String) {
-        Log.v(tag, message)
+        logTerminalEvent("terminal_view_verbose", SafeLogOutcome.SUCCEEDED, SafeLogLevel.DEBUG)
     }
 
     override fun logStackTraceWithMessage(tag: String, message: String, e: Exception) {
-        Log.e(tag, message, e)
+        logTerminalError("terminal_view_error", e)
     }
 
     override fun logStackTrace(tag: String, e: Exception) {
-        Log.e(tag, "Terminal view error", e)
+        logTerminalError("terminal_view_error", e)
     }
 }
 
 private const val WORKSPACE_DIR = "/workspace"
 private const val SKILLS_DIR = "/skills"
+private const val TERMINAL_LOG_TAG = "WorkspaceTerminal"
+
+private fun logTerminalEvent(
+    operation: String,
+    outcome: SafeLogOutcome,
+    level: SafeLogLevel,
+) {
+    Logging.logOperationToLogcat(
+        tag = TERMINAL_LOG_TAG,
+        domain = "workspace_terminal",
+        operation = operation,
+        outcome = outcome,
+        level = level,
+        persist = false,
+    )
+}
+
+private fun logTerminalError(operation: String, error: Throwable, warning: Boolean = false) {
+    Logging.logErrorToLogcat(
+        tag = TERMINAL_LOG_TAG,
+        domain = "workspace_terminal",
+        operation = operation,
+        error = error,
+        level = if (warning) SafeLogLevel.WARN else SafeLogLevel.ERROR,
+        persist = false,
+    )
+}
 
 // 一个 URL 最多还原跨越的软换行行数(向上/向下各算), 足够覆盖任意真实 URL
 private const val URL_MAX_WRAP_ROWS = 50

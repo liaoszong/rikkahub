@@ -1,7 +1,6 @@
 package me.rerere.rikkahub.data.sync
 
 import android.content.Context
-import android.util.Log
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -9,7 +8,8 @@ import kotlinx.serialization.json.Json
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.sync.s3.S3Client
 import me.rerere.rikkahub.data.sync.s3.S3Config
-import me.rerere.rikkahub.utils.fileSizeToString
+import me.rerere.rikkahub.utils.logSafeStarted
+import me.rerere.rikkahub.utils.logSafeSuccess
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -37,7 +37,7 @@ class S3Sync(
         val client = getS3Client(config)
         // Test by listing objects with max 1 result
         client.listObjects(maxKeys = 1).getOrThrow()
-        Log.i(TAG, "testS3: Connection successful")
+        logSafeSuccess(TAG, "backup", "test_s3_connection")
     }
 
     suspend fun backupToS3(config: S3Config) = withContext(Dispatchers.IO) {
@@ -52,7 +52,7 @@ class S3Sync(
             contentType = "application/zip"
         ).getOrThrow()
 
-        Log.i(TAG, "backupToS3: Uploaded ${file.name} (${file.length().fileSizeToString()})")
+        logSafeSuccess(TAG, "backup", "upload_s3_archive")
 
         // Clean up temp file
         file.delete()
@@ -86,10 +86,10 @@ class S3Sync(
 
         try {
             // Download backup file directly to file to avoid OOM
-            Log.i(TAG, "restoreFromS3: Downloading ${item.displayName}")
+            logSafeStarted(TAG, "backup", "download_s3_archive")
             client.downloadObjectToFile(item.key, backupFile).getOrThrow()
 
-            Log.i(TAG, "restoreFromS3: Downloaded ${backupFile.length().fileSizeToString()}")
+            logSafeSuccess(TAG, "backup", "download_s3_archive")
 
             // Restore from backup file
             backupRestoreCoordinator.stageRestore(
@@ -101,7 +101,7 @@ class S3Sync(
             // Clean up temp file
             if (backupFile.exists()) {
                 backupFile.delete()
-                Log.i(TAG, "restoreFromS3: Cleaned up temporary backup file")
+                logSafeSuccess(TAG, "backup", "cleanup_restore_archive")
             }
         }
     }
@@ -110,7 +110,7 @@ class S3Sync(
         settingsStore.awaitCredentialReady()
         val client = getS3Client(config)
         client.deleteObject(item.key).getOrThrow()
-        Log.i(TAG, "deleteS3BackupFile: Deleted ${item.key}")
+        logSafeSuccess(TAG, "backup", "delete_s3_archive")
     }
 
     suspend fun prepareBackupFile(config: S3Config): File = withContext(Dispatchers.IO) {
@@ -142,17 +142,14 @@ class S3Sync(
             // Backup app files
             if (config.items.contains(S3Config.BackupItem.FILES)) {
                 val appFiles = s3BackupAppFiles(context.filesDir)
-                Log.i(TAG, "prepareBackupFile: Backing up ${appFiles.size} app files")
+                logSafeStarted(TAG, "backup", "archive_app_files")
                 appFiles.forEach { appFile ->
                     addFileToZip(zipOut, appFile.source, appFile.archivePath)
                 }
             }
         }
 
-        Log.i(
-            TAG,
-            "prepareBackupFile: Created backup file ${backupFile.name} (${backupFile.length().fileSizeToString()})"
-        )
+        logSafeSuccess(TAG, "backup", "create_archive")
         backupFile
     }
 
@@ -162,7 +159,6 @@ class S3Sync(
             zipOut.putNextEntry(zipEntry)
             fis.copyTo(zipOut)
             zipOut.closeEntry()
-            Log.d(TAG, "addFileToZip: Added $entryName (${file.length()} bytes) to zip")
         }
     }
 
@@ -171,7 +167,6 @@ class S3Sync(
         zipOut.putNextEntry(zipEntry)
         zipOut.write(content.toByteArray())
         zipOut.closeEntry()
-        Log.i(TAG, "addVirtualFileToZip: $name (${content.length} bytes)")
     }
 }
 

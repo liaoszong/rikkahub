@@ -1,7 +1,6 @@
 package me.rerere.rikkahub.ui.pages.chat
 
 import android.net.Uri
-import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -88,6 +87,8 @@ import me.rerere.rikkahub.ui.hooks.EditStateContent
 import me.rerere.rikkahub.ui.hooks.useEditState
 import me.rerere.rikkahub.utils.ImageUtils
 import me.rerere.rikkahub.utils.base64Decode
+import me.rerere.rikkahub.utils.logSafeError
+import me.rerere.rikkahub.utils.logSafeSuccess
 import me.rerere.rikkahub.utils.isAllowedFileType
 import me.rerere.rikkahub.utils.navigateToChatPage
 import org.koin.androidx.compose.koinViewModel
@@ -576,7 +577,7 @@ private fun ChatFilesPickerSheet(
     val imagePickerLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { selectedUris ->
             if (selectedUris.isNotEmpty()) {
-                Log.d("ImagePickButton", "Selected URIs: $selectedUris")
+                logSafeSuccess("ImagePickButton", "files", "select_images", itemCount = selectedUris.size)
                 if (setting.displaySetting.skipCropImage) {
                     inputState.addImages(filesManager.createChatFilesByContents(selectedUris))
                     dismissAll()
@@ -595,7 +596,7 @@ private fun ChatFilesPickerSheet(
                         preCropTempFile = tempFile
                         launchImageCrop(tempFile.toUri())
                     }.onFailure {
-                        Log.e("ImagePickButton", "Failed to copy image to temp, falling back", it)
+                        logSafeError("ImagePickButton", "files", "prepare_image_crop", it, warning = true)
                         launchImageCrop(selectedUris.first())
                     }
                 } else {
@@ -603,7 +604,7 @@ private fun ChatFilesPickerSheet(
                     dismissAll()
                 }
             } else {
-                Log.d("ImagePickButton", "No images selected")
+                logSafeSuccess("ImagePickButton", "files", "cancel_image_selection")
             }
         }
 

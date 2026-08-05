@@ -108,7 +108,7 @@ fun Context.openUsageAccessSettings() {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         })
     }.onFailure {
-        Log.e(TAG, "openUsageAccessSettings failed", it)
+        logSafeError(TAG, "system", "open_usage_access_settings", it)
     }
 }
 
@@ -124,7 +124,7 @@ fun Context.openUrl(url: String) {
         intent.launchUrl(this, url.toUri())
     }.onFailure {
         Log.e(TAG, "openUrl: failed (${it.javaClass.simpleName})")
-        Toast.makeText(this, "Failed to open URL: $url", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Failed to open URL", Toast.LENGTH_SHORT).show()
     }
 }
 
@@ -196,9 +196,9 @@ fun Context.exportImage(
             mediaScanIntent.data = Uri.fromFile(image)
             sendBroadcast(mediaScanIntent)
         }
-        Log.i(TAG, "Image saved successfully: $fileName")
+        Log.i(TAG, "event=operation domain=files operation=save_image outcome=succeeded")
     } catch (e: Exception) {
-        Log.e(TAG, "Failed to save image", e)
+        logSafeError(TAG, "image", "save_image", e)
     } finally {
         outputStream?.close()
     }
@@ -249,9 +249,9 @@ fun Context.exportImageFile(
             mediaScanIntent.data = Uri.fromFile(image)
             sendBroadcast(mediaScanIntent)
         }
-        Log.i(TAG, "Image file saved successfully: $fileName")
+        Log.i(TAG, "event=operation domain=files operation=save_image_file outcome=succeeded")
     } catch (e: Exception) {
-        Log.e(TAG, "Failed to save image file", e)
+        logSafeError(TAG, "image", "save_image_file", e)
     } finally {
         outputStream?.close()
     }

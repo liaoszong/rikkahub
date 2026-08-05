@@ -23,6 +23,8 @@ import kotlinx.coroutines.withContext
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.common.android.Logging
+import me.rerere.common.android.SafeLogLevel
+import me.rerere.common.android.SafeLogOutcome
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.db.entity.ManagedFileEntity
 import me.rerere.rikkahub.data.repository.FilesRepository
@@ -41,6 +43,15 @@ class FilesManager(
         private const val TAG = "FilesManager"
     }
 
+    private fun logFileError(operation: String, error: Throwable) {
+        Logging.logErrorToLogcat(
+            tag = TAG,
+            domain = "files",
+            operation = operation,
+            error = error,
+        )
+    }
+
     suspend fun saveManagedFromUri(
         folder: String,
         uri: Uri,
@@ -52,7 +63,7 @@ class FilesManager(
         val target = createTargetFile(folder, resolvedName, resolvedMime)
         try {
             val inputStream = context.contentResolver.openInputStream(uri)
-                ?: error("Failed to open input stream for $uri")
+                ?: error("Failed to open managed input stream")
             inputStream.use { input ->
                 target.outputStream().use { output ->
                     input.copyTo(output)
@@ -151,7 +162,7 @@ class FilesManager(
                     file.createNewFile()
                 }
                 val inputStream = context.contentResolver.openInputStream(uri)
-                    ?: error("Failed to open input stream for $uri")
+                    ?: error("Failed to open managed input stream")
                 inputStream.use { input ->
                     file.outputStream().use { output ->
                         input.copyTo(output)
@@ -166,12 +177,7 @@ class FilesManager(
                 )
                 newUris.add(file.toUri())
             }.onFailure {
-                it.printStackTrace()
-                Log.e(TAG, "createChatFilesByContents: Failed to save file from $uri", it)
-                Logging.log(
-                    TAG,
-                    "createChatFilesByContents: Failed to save file from $uri ${it.message} | ${it.stackTraceToString()}"
-                )
+                logFileError(operation = "copy_chat_attachment", error = it)
             }
         }
         return newUris
@@ -218,7 +224,8 @@ class FilesManager(
                                 val urls = createChatFilesByByteArrays(listOf(byteArray))
                                 Log.i(
                                     TAG,
-                                    "convertBase64ImagePartToLocalFile: convert base64 img to ${urls.joinToString(", ")}"
+                                    "event=operation domain=files operation=materialize_base64_image " +
+                                        "outcome=succeeded itemCount=${urls.size}",
                                 )
                                 part.copy(
                                     url = urls.first().toString(),
@@ -256,7 +263,10 @@ class FilesManager(
                 ) {
                     repository.deleteById(managedFile.id)
                 } else {
-                    Log.w(TAG, "Refused or failed to delete managed chat file ${candidate.relativePath}")
+                    Log.w(
+                        TAG,
+                        "event=operation domain=files operation=delete_managed_chat_file outcome=rejected",
+                    )
                 }
             }
         }
@@ -464,9 +474,13 @@ class FilesManager(
                         val bitmap = BitmapFactory.decodeStream(connection.inputStream)
                         activityContext.exportImage(activity, bitmap)
                     } else {
-                        Log.e(
-                            TAG,
-                            "saveMessageImage: Failed to download image from $image, response code: ${connection.responseCode}"
+                        Logging.logOperationToLogcat(
+                            tag = TAG,
+                            domain = "files",
+                            operation = "download_message_image",
+                            outcome = SafeLogOutcome.FAILED,
+                            level = SafeLogLevel.ERROR,
+                            httpStatus = connection.responseCode,
                         )
                     }
                 }.getOrNull()
@@ -612,11 +626,7 @@ class FilesManager(
                     )
                 )
             }.onFailure {
-                Log.e(TAG, "trackManagedFile: Failed to track file ${file.absolutePath}", it)
-                Logging.log(
-                    TAG,
-                    "trackManagedFile: Failed to track file ${file.absolutePath} ${it.message} | ${it.stackTraceToString()}"
-                )
+                logFileError(operation = "track_managed_file", error = it)
             }
         }
     }

@@ -1,7 +1,6 @@
 package me.rerere.tts.controller
 
 import android.content.Context
-import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -17,6 +16,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import me.rerere.speech.logSpeechError
 import me.rerere.tts.model.PlaybackState
 import me.rerere.tts.model.PlaybackStatus
 import me.rerere.tts.model.TTSResponse
@@ -254,8 +254,8 @@ class TtsController(
                         awaitOrCreate(chunk, provider)
                     } catch (e: Exception) {
                         if (e is CancellationException) throw e
-                        Log.e(TAG, "Synthesis error", e)
-                        _error.update { e.message ?: "TTS synthesis error" }
+                        logSpeechError(TAG, "synthesize_speech", e)
+                        _error.update { "TTS synthesis error (${e.javaClass.simpleName})" }
                         processedCount++
                         continue
                     }
@@ -265,8 +265,8 @@ class TtsController(
                         audio.play(response)
                     } catch (e: Exception) {
                         if (e is CancellationException) throw e
-                        Log.e(TAG, "Playback error", e)
-                        _error.update { e.message ?: "Audio playback error" }
+                        logSpeechError(TAG, "play_audio", e)
+                        _error.update { "Audio playback error (${e.javaClass.simpleName})" }
                     }
 
                     if (queue.isNotEmpty()) delay(chunkDelayMs)

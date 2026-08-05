@@ -100,9 +100,7 @@ object ExaSearchService : SearchService<SearchServiceOptions.ExaOptions> {
                 val response = runCatching {
                     json.decodeFromString<ExaData>(bodyRaw)
                 }.onFailure {
-                    it.printStackTrace()
-                    println(bodyRaw)
-                    error("Failed to decode response: $bodyRaw")
+                    logSearchError("ExaSearchService", "decode_search_response", it)
                 }.getOrThrow()
 
                 return@withContext Result.success(
@@ -118,7 +116,7 @@ object ExaSearchService : SearchService<SearchServiceOptions.ExaOptions> {
                         images = response.results.mapNotNull { it.image?.takeIf { url -> url.isNotBlank() } },
                     ))
             } else {
-                println(response.body.string())
+                logSearchHttpFailure("ExaSearchService", "search_request", response.code)
                 error("response failed #${response.code}")
             }
         }
@@ -151,9 +149,7 @@ object ExaSearchService : SearchService<SearchServiceOptions.ExaOptions> {
                 val data = runCatching {
                     json.decodeFromString<ExaData>(bodyRaw)
                 }.onFailure {
-                    it.printStackTrace()
-                    println(bodyRaw)
-                    error("Failed to decode response: $bodyRaw")
+                    logSearchError("ExaSearchService", "decode_scrape_response", it)
                 }.getOrThrow()
 
                 return@withContext Result.success(
@@ -170,7 +166,7 @@ object ExaSearchService : SearchService<SearchServiceOptions.ExaOptions> {
                     )
                 )
             } else {
-                println(response.body.string())
+                logSearchHttpFailure("ExaSearchService", "scrape_request", response.code)
                 error("response failed #${response.code}")
             }
         }

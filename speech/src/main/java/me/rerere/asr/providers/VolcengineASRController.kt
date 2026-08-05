@@ -27,6 +27,8 @@ import me.rerere.asr.ASRState
 import me.rerere.asr.ASRStatus
 import me.rerere.asr.appendAmplitude
 import me.rerere.asr.calculateRmsAmplitude
+import me.rerere.speech.logSpeechError
+import me.rerere.speech.logSpeechFailure
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -110,9 +112,9 @@ class VolcengineASRController(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "Volcengine ASR websocket failed", t)
+                logSpeechError(TAG, "websocket", t)
                 releaseRecorder()
-                setError(t.message ?: "ASR websocket failed")
+                setError("ASR websocket failed (${t.javaClass.simpleName})")
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
@@ -204,7 +206,7 @@ class VolcengineASRController(
                 var payload = data.copyOfRange(offset, offset + payloadSize)
                 if (compression == COMP_GZIP) {
                     payload = runCatching { gzipDecompress(payload) }.getOrElse {
-                        Log.w(TAG, "Gzip decompression failed", it)
+                        logSpeechError(TAG, "decompress_response", it, warning = true)
                         return
                     }
                 }
@@ -212,7 +214,7 @@ class VolcengineASRController(
                 val json = runCatching {
                     JSONObject(String(payload, Charsets.UTF_8))
                 }.getOrElse {
-                    Log.w(TAG, "Failed to parse response JSON", it)
+                    logSpeechError(TAG, "parse_response", it, warning = true)
                     return
                 }
 
@@ -228,21 +230,11 @@ class VolcengineASRController(
                 if (offset + 4 > data.size) return
                 offset += 4 // skip error code
 
-                if (offset + 4 > data.size) return
-                val msgSize = ByteBuffer.wrap(data, offset, 4)
-                    .order(ByteOrder.BIG_ENDIAN).int
-                offset += 4
-
-                val errorMsg = if (msgSize > 0 && offset + msgSize <= data.size) {
-                    String(data, offset, msgSize, Charsets.UTF_8)
-                } else {
-                    "Volcengine ASR error"
-                }
-                Log.e(TAG, "Volcengine ASR error: $errorMsg")
-                setError(errorMsg)
+                logSpeechFailure(TAG, "server_response")
+                setError("Volcengine ASR error")
             }
 
-            else -> Log.v(TAG, "Ignored message type: $messageType")
+            else -> logSpeechFailure(TAG, "ignore_websocket_message", warning = true)
         }
     }
 
@@ -291,8 +283,8 @@ class VolcengineASRController(
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Audio recording failed", e)
-                setError(e.message ?: "Audio recording failed")
+                logSpeechError(TAG, "record_audio", e)
+                setError("Audio recording failed (${e.javaClass.simpleName})")
             } finally {
                 releaseRecorder()
             }

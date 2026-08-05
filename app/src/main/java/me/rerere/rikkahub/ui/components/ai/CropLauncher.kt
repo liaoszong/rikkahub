@@ -16,9 +16,9 @@ import androidx.core.net.toFile
 import com.dokar.sonner.ToastType
 import com.yalantis.ucrop.UCrop
 import com.yalantis.ucrop.UCropActivity
-import me.rerere.common.android.Logging
 import me.rerere.common.android.appTempFolder
 import me.rerere.rikkahub.ui.context.LocalToaster
+import me.rerere.rikkahub.utils.logSafeError
 import java.io.File
 
 @Composable
@@ -44,12 +44,9 @@ internal fun useCropLauncher(
 
             UCrop.RESULT_ERROR -> {
                 val error = result.data?.let { UCrop.getError(it) }
-                Logging.log(
-                    "CropLauncher",
-                    "crop failed: ${error?.message} | ${error?.stackTraceToString()}"
-                )
+                error?.let { logSafeError("CropLauncher", "image_edit", "crop_image", it) }
                 toaster.show(
-                    "Failed to crop image: ${error?.message ?: "unknown error"}",
+                    "Failed to crop image (${error?.javaClass?.simpleName ?: "UnknownError"})",
                     type = ToastType.Error
                 )
             }

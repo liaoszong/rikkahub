@@ -29,6 +29,7 @@ import me.rerere.asr.ASRState
 import me.rerere.asr.ASRStatus
 import me.rerere.asr.appendAmplitude
 import me.rerere.asr.calculateRmsAmplitude
+import me.rerere.speech.logSpeechError
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -125,8 +126,8 @@ class StepASRController(
                 flushJob?.join()
                 flushSegment()
             } catch (e: Exception) {
-                Log.e(TAG, "Final flush failed", e)
-                setError(e.message ?: "Step ASR final flush failed")
+                logSpeechError(TAG, "final_flush", e)
+                setError("Step ASR final flush failed (${e.javaClass.simpleName})")
             } finally {
                 _state.update { it.copy(status = ASRStatus.Idle) }
             }
@@ -192,8 +193,8 @@ class StepASRController(
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Audio recording failed", e)
-                setError(e.message ?: "Audio recording failed")
+                logSpeechError(TAG, "record_audio", e)
+                setError("Audio recording failed (${e.javaClass.simpleName})")
             } finally {
                 releaseRecorder()
             }
@@ -205,7 +206,7 @@ class StepASRController(
         if (flushJob?.isActive == true) return
         flushJob = scope.launch(Dispatchers.IO) {
             runCatching { flushSegment() }
-                .onFailure { Log.e(TAG, "Segment flush failed", it) }
+                .onFailure { logSpeechError(TAG, "segment_flush", it) }
         }
     }
 
@@ -286,14 +287,14 @@ class StepASRController(
                 return withContext(Dispatchers.IO) {
                     httpClient.newCall(request).execute().use { resp ->
                         if (!resp.isSuccessful) {
-                            throw IOException("Step ASR HTTP ${resp.code}: ${resp.body.string()}")
+                            throw IOException("Step ASR HTTP ${resp.code}")
                         }
                         parseSseTranscript(resp.body.source())
                     }
                 }
             } catch (e: IOException) {
                 lastError = e
-                Log.w(TAG, "flushSegment attempt $attempt/$MAX_RETRY failed: ${e.message}")
+                logSpeechError(TAG, "segment_flush_attempt", e, warning = true)
                 if (attempt < MAX_RETRY) {
                     kotlinx.coroutines.delay(300L * attempt) // 指数退避: 300ms, 600ms
                 }

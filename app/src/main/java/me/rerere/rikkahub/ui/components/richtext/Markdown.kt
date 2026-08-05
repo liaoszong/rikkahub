@@ -33,6 +33,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
+import me.rerere.rikkahub.utils.logSafeError
 import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -246,7 +247,9 @@ fun MarkdownBlock(
         snapshotFlow { updatedContent }
             .distinctUntilChanged()
             .mapLatest { parseMarkdown(it) }
-            .catch { exception -> exception.printStackTrace() }
+            .catch { exception ->
+                logSafeError("Markdown", "rendering", "parse_markdown", exception, warning = true, persist = false)
+            }
             .flowOn(Dispatchers.Default)
             .collect { setData(it) }
     }
@@ -270,14 +273,6 @@ fun MarkdownBlock(
                 }
             }
         }
-    }
-}
-
-// for debug
-private fun dumpAst(node: ASTNode, text: String, indent: String = "") {
-    println("$indent${node.type} ${if (node.children.isEmpty()) node.getTextInNode(text) else ""} | ${node.javaClass.simpleName}")
-    node.children.fastForEach {
-        dumpAst(it, text, "$indent  ")
     }
 }
 
@@ -767,7 +762,6 @@ private fun Paragraph(
     onClickCitation: (String) -> Unit = {},
     modifier: Modifier,
 ) {
-    // dumpAst(node, content)
     if (node.findChildOfTypeRecursive(MarkdownElementTypes.IMAGE, GFMElementTypes.BLOCK_MATH) != null) {
         FlowRow(modifier = modifier) {
             node.children.fastForEach { child ->
@@ -888,7 +882,7 @@ private fun TableNode(node: ASTNode, content: String, modifier: Modifier = Modif
                         outputStream.write(tableCsv.toByteArray())
                     }
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    logSafeError("Markdown", "export", "save_table_csv", e, warning = true)
                 }
             }
         }

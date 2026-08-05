@@ -24,6 +24,7 @@ import me.rerere.rikkahub.data.db.entity.ConversationV2Values
 import me.rerere.rikkahub.data.db.entity.MessageBranchGroupEntity
 import me.rerere.rikkahub.data.db.entity.MessageFtsOutboxEntity
 import me.rerere.rikkahub.data.db.entity.MessagePartEntity
+import me.rerere.rikkahub.utils.logSafeError
 import java.util.UUID
 import kotlin.uuid.Uuid
 
@@ -156,7 +157,13 @@ class ConversationV2BackfillCoordinator(
             now = now,
             retryAt = now + RETRY_DELAY_MS,
         )
-        Log.e(TAG, "Conversation $conversationId shadow backfill failed", error)
+        logSafeError(
+            tag = TAG,
+            domain = "conversation_migration",
+            operation = "backfill_shadow_graph",
+            error = error,
+            requestId = conversationId,
+        )
         BackfillOutcome.FAILED
     }
 
@@ -943,10 +950,4 @@ data class ConversationV2BackfillSummary(
 private fun UIMessagePart.toolInvocationIdOrNull(): String? =
     (this as? UIMessagePart.Tool)?.toolCallId?.takeIf(String::isNotBlank)
 
-private fun Throwable.safeDetail(): String = buildString {
-    append(this@safeDetail::class.java.simpleName)
-    message?.takeIf(String::isNotBlank)?.let {
-        append(": ")
-        append(it.take(1_000))
-    }
-}
+private fun Throwable.safeDetail(): String = this::class.java.simpleName.ifBlank { "UnknownError" }

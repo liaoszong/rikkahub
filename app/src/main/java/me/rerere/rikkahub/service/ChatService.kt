@@ -106,6 +106,16 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.uuid.Uuid
 
 private const val TAG = "ChatService"
+
+private fun logChatError(operation: String, error: Throwable) {
+    Logging.logErrorToLogcat(
+        tag = TAG,
+        domain = "chat",
+        operation = operation,
+        error = error,
+    )
+}
+
 internal fun backgroundTextGenerationParams(
     model: Model,
     reasoningLevel: ReasoningLevel = ReasoningLevel.AUTO,
@@ -563,7 +573,7 @@ class ChatService(
             } catch (error: CancellationException) {
                 throw error
             } catch (e: Exception) {
-                e.printStackTrace()
+                logChatError(operation = "send_message", error = e)
                 addError(e, conversationId, title = context.getString(R.string.error_title_send_message))
             }
         }
@@ -899,10 +909,8 @@ class ChatService(
             // coordinator. Preserve structured cancellation instead of reporting normal success.
             if (it is CancellationException) throw it
 
-            it.printStackTrace()
+            logChatError(operation = "complete_generation", error = it)
             addError(it, conversationId, title = context.getString(R.string.error_title_generation))
-            Logging.log(TAG, "handleMessageComplete: $it")
-            Logging.log(TAG, it.stackTraceToString())
         }.onSuccess {
             val finalConversation = getConversationFlow(conversationId).value
             persistCurrentConversation(conversationId)
@@ -1130,7 +1138,8 @@ class ChatService(
                 )
             }
         }.onFailure {
-            it.printStackTrace()
+            if (it is CancellationException) throw it
+            logChatError(operation = "generate_title", error = it)
             addError(
                 error = it,
                 conversationId = conversationId,
@@ -1193,7 +1202,8 @@ class ChatService(
                 )
             }
         }.onFailure {
-            it.printStackTrace()
+            if (it is CancellationException) throw it
+            logChatError(operation = "generate_suggestions", error = it)
         }
     }
 
@@ -1648,7 +1658,11 @@ class ChatService(
         }
         if (deletedFiles.isNotEmpty()) {
             filesManager.deleteChatFiles(deletedFiles)
-            Log.w(TAG, "checkFilesDelete: $deletedFiles")
+            Log.i(
+                TAG,
+                "event=operation domain=chat operation=delete_detached_files " +
+                    "outcome=succeeded itemCount=${deletedFiles.size}",
+            )
         }
     }
 

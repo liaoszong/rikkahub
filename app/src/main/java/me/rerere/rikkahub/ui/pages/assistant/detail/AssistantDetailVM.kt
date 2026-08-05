@@ -1,6 +1,5 @@
 package me.rerere.rikkahub.ui.pages.assistant.detail
 
-import android.util.Log
 import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -25,6 +24,8 @@ import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.model.Tag
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
+import me.rerere.rikkahub.utils.logSafeError
+import me.rerere.rikkahub.utils.logSafeSuccess
 import kotlin.uuid.Uuid
 
 private const val TAG = "AssistantDetailVM"
@@ -115,7 +116,7 @@ class AssistantDetailVM(
                     tags = tagIds.toList()
                 )
             )
-            Log.d(TAG, "updateTags: ${tagIds.joinToString(",")}")
+            logSafeSuccess(TAG, "assistant", "update_tags", itemCount = tagIds.size)
             cleanupUnusedTags()
         }
     }
@@ -221,7 +222,7 @@ class AssistantDetailVM(
                     filesManager.deleteChatFiles(listOf(oldUri))
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to delete background file: $oldBackground", e)
+                logSafeError(TAG, "assistant", "delete_background_file", e, warning = true)
             }
         }
     }

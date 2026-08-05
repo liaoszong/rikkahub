@@ -27,6 +27,7 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Download01
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.ui.context.LocalToaster
+import me.rerere.rikkahub.utils.logSafeError
 import org.koin.compose.koinInject
 
 @Composable
@@ -72,9 +73,9 @@ fun ImagePreviewDialog(
                                 filesManager.saveMessageImage(context, imgUrl)
                                 toaster.show(message = "已保存图片", type = ToastType.Success)
                             }.onFailure {
-                                it.printStackTrace()
+                                logSafeError("ImagePreviewDialog", "files", "save_preview_image", it)
                                 toaster.show(
-                                    message = it.toString(),
+                                    message = it.javaClass.simpleName.ifBlank { "UnknownError" },
                                     type = ToastType.Error
                                 )
                             }

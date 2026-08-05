@@ -198,18 +198,18 @@ class ImageGenerationTaskExecutor(
         if (error is ImageGenerationException) {
             return ImageGenerationExecutionFailure(
                 kind = error.kind,
-                message = error.message ?: "Image generation failed",
+                message = "Image generation failed (${error.javaClass.simpleName})",
             )
         }
         val (kind, message) = when (error) {
             is IOException -> ImageGenerationFailureKind.NETWORK to
-                "The network connection was interrupted: ${error.message ?: "unknown I/O error"}"
+                "The network connection was interrupted (${error.javaClass.simpleName})"
             is SerializationException -> ImageGenerationFailureKind.RESPONSE_PARSE to
                 "The image response could not be parsed"
             is IllegalStateException -> ImageGenerationFailureKind.SERVER to
-                (error.message ?: "The image provider returned an error")
+                "The image provider returned an error (${error.javaClass.simpleName})"
             else -> ImageGenerationFailureKind.UNKNOWN to
-                (error.message ?: "Image generation failed")
+                "Image generation failed (${error.javaClass.simpleName})"
         }
         return ImageGenerationExecutionFailure(kind, message)
     }

@@ -17,6 +17,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.utils.logSafeError
 import me.rerere.rikkahub.WEB_SERVER_NOTIFICATION_CHANNEL_ID
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.web.WebServerManager
@@ -107,8 +108,10 @@ class WebServerService : Service() {
         } catch (e: Exception) {
             // 部分 OEM ROM (如 realme UI/ColorOS) 会在系统侧拒绝 FGS 类型权限，
             // 即使 Manifest 已声明 FOREGROUND_SERVICE_SPECIAL_USE 也会抛 SecurityException
-            Log.e(TAG, "Failed to start foreground service", e)
-            webServerManager.reportError("Failed to start foreground service: ${e.message}")
+            logSafeError(TAG, "web", "start_foreground_service", e)
+            webServerManager.reportError(
+                "Failed to start foreground service (${e.javaClass.simpleName})",
+            )
             false
         }
     }

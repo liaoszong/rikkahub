@@ -1,7 +1,6 @@
 package me.rerere.tts.provider.providers
 
 import android.content.Context
-import android.util.Log
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.buildJsonObject
@@ -11,6 +10,8 @@ import me.rerere.tts.model.AudioFormat
 import me.rerere.tts.model.TTSRequest
 import me.rerere.tts.provider.TTSProvider
 import me.rerere.tts.provider.TTSProviderSetting
+import me.rerere.speech.logSpeechFailure
+import me.rerere.speech.logSpeechStarted
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -62,7 +63,7 @@ class StepTTSProvider : TTSProvider<TTSProviderSetting.Step> {
             }
         }
 
-        Log.i(TAG, "generateSpeech: model=${providerSetting.model} voice=${providerSetting.voice} format=${providerSetting.responseFormat}")
+        logSpeechStarted(TAG, "generate_speech")
 
         val httpRequest = Request.Builder()
             .url("${providerSetting.baseUrl.trimEnd('/')}/v1/audio/speech")
@@ -74,11 +75,8 @@ class StepTTSProvider : TTSProvider<TTSProviderSetting.Step> {
 
         val response = httpClient.newCall(httpRequest).execute()
         if (!response.isSuccessful) {
-            // 把错误响应体读出来方便排查 (4xx 通常返回 JSON 错误信息)
-            val errorBody = runCatching { response.body?.string() }.getOrNull().orEmpty()
-            throw Exception(
-                "Step TTS request failed: HTTP ${response.code} ${response.message}. body=$errorBody"
-            )
+            logSpeechFailure(TAG, "generate_speech", httpStatus = response.code)
+            throw Exception("Step TTS request failed: HTTP ${response.code}")
         }
 
         val audioBytes = response.body?.bytes()

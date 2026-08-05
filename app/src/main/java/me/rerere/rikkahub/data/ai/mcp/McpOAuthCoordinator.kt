@@ -1,7 +1,6 @@
 package me.rerere.rikkahub.data.ai.mcp
 
 import android.content.Context
-import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +19,7 @@ import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.event.AppEvent
 import me.rerere.rikkahub.data.event.AppEventBus
+import me.rerere.rikkahub.utils.logSafeError
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.minutes
 import kotlin.uuid.Uuid
@@ -52,7 +52,13 @@ internal class McpOAuthCoordinator(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.e(TAG, "OAuth authorization failed for ${config.commonOptions.name}", e)
+                logSafeError(
+                    tag = TAG,
+                    domain = "mcp_oauth",
+                    operation = "authorize",
+                    error = e,
+                    requestId = config.id.toString(),
+                )
                 updateStatus(config.id, McpStatus.Error.from(e, fallbackMessage = "OAuth authorization failed"))
             }
         }
@@ -111,7 +117,7 @@ internal class McpOAuthCoordinator(
                 persistOAuthState(config.id, updated)
                 config.clone(commonOptions = config.commonOptions.copy(oauth = updated))
             }.getOrElse {
-                Log.w(TAG, "Token refresh failed for ${config.commonOptions.name}: ${it.message}")
+                logSafeError(TAG, "mcp_oauth", "refresh_oauth_credential", it, warning = true)
                 config
             }
         }
@@ -125,7 +131,7 @@ internal class McpOAuthCoordinator(
         }
         return runCatching { oauthClient.discoverProtectedResource(config.serverUrl) }
             .onFailure {
-                Log.i(TAG, "OAuth probe failed for ${config.commonOptions.name}: ${it.message}")
+                logSafeError(TAG, "mcp_oauth", "probe_protected_resource", it, warning = true)
             }
             .isSuccess
     }

@@ -1,7 +1,6 @@
 package me.rerere.rikkahub.data.ai.transformers
 
 import android.content.Context
-import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.serializer
@@ -19,6 +18,8 @@ import me.rerere.common.cache.SingleFileCacheStore
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.datastore.findProvider
+import me.rerere.rikkahub.utils.logSafeError
+import me.rerere.rikkahub.utils.logSafeSuccess
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.get
 import java.io.File
@@ -83,7 +84,7 @@ object OcrTransformer : InputMessageTransformer, KoinComponent {
     suspend fun performOcr(part: UIMessagePart.Image): String = runCatching {
         // Check cache first
         cache.get(part.url)?.let { cachedResult ->
-            Log.i(TAG, "performOcr: Using cached result for ${part.url}")
+            logSafeSuccess(TAG, "ocr", "read_cached_result")
             return cachedResult
         }
 
@@ -107,7 +108,7 @@ object OcrTransformer : InputMessageTransformer, KoinComponent {
             ),
         )
         val content = result.choices[0].message?.toText() ?: "[ERROR, OCR failed]"
-        Log.i(TAG, "performOcr: $content")
+        logSafeSuccess(TAG, "ocr", "recognize_image", itemCount = content.length)
         val ocrResult = """
             <image_file_ocr>
                $content
@@ -118,7 +119,8 @@ object OcrTransformer : InputMessageTransformer, KoinComponent {
         // Cache the result
         cache.put(part.url, ocrResult)
         return ocrResult
-    }.getOrElse {
-        "[ERROR, OCR failed: $it]"
+    }.getOrElse { error ->
+        logSafeError(TAG, "ocr", "recognize_image", error, warning = true)
+        "[ERROR, OCR failed: ${error.javaClass.simpleName}]"
     }
 }

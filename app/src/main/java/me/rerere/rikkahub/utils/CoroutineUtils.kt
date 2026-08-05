@@ -1,6 +1,5 @@
 package me.rerere.rikkahub.utils
 
-import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,8 +18,7 @@ fun <T> Flow<T>.toMutableStateFlow(
                 stateFlow.value = value
             }
         }.onFailure {
-            it.printStackTrace()
-            Log.e(TAG, "Error while collecting flow: ${it.message}", it)
+            logSafeError(TAG, "coroutine", "collect_flow", it)
 
             Runtime.getRuntime().halt(1)
         }

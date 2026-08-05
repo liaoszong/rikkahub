@@ -10,6 +10,7 @@ import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.rikkahub.data.db.DatabaseMigrationTracker
 import me.rerere.rikkahub.utils.JsonInstant
+import me.rerere.rikkahub.utils.logSafeError
 import kotlin.uuid.Uuid
 
 private const val TAG = "Migration_11_12"
@@ -85,7 +86,7 @@ val Migration_11_12 = object : Migration(11, 12) {
                     }
                 } catch (e: SQLiteBlobTooBigException) {
                     skippedCount++
-                    Log.w(TAG, "migrate: skip conversation $conversationId due to large nodes blob", e)
+                    logSafeError(TAG, "database_migration", "migrate_large_message_blob", e, warning = true)
                     continue
                 }
             }

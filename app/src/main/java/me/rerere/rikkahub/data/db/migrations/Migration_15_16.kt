@@ -7,6 +7,7 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.migrateToolNodes
 import me.rerere.rikkahub.utils.JsonInstant
 import me.rerere.rikkahub.data.db.DatabaseMigrationTracker
+import me.rerere.rikkahub.utils.logSafeError
 
 private const val TAG = "Migration_15_16"
 
@@ -44,7 +45,7 @@ val Migration_15_16 = object : Migration(15, 16) {
                         val messages = JsonInstant.decodeFromString<List<UIMessage>>(messagesJson)
                         rows.add(NodeRow(id, messages, selectIndex))
                     }.onFailure {
-                        Log.w(TAG, "migrate: failed to parse messages for node $id", it)
+                        logSafeError(TAG, "database_migration", "parse_legacy_tool_message", it, warning = true)
                     }
                 }
                 nodeCursor.close()
