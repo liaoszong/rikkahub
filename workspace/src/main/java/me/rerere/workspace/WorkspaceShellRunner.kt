@@ -45,6 +45,15 @@ fun Process.readResult(timeoutMillis: Long, stdin: ByteArray? = null): Workspace
     val stdout = StreamCollector(inputStream)
     val stderr = StreamCollector(errorStream)
     val stdinWriter = stdin?.let { bytes -> StreamWriter(outputStream, bytes) }
+    if (stdinWriter == null) {
+        // A non-interactive command with no stdin must observe EOF immediately. Leaving the
+        // ProcessBuilder pipe open makes cat/gh/kubectl wait forever for input that will not come.
+        try {
+            outputStream.close()
+        } catch (_: IOException) {
+            // The child may have exited and closed the pipe before this thread reaches it.
+        }
+    }
     try {
         val finished = waitFor(timeoutMillis, TimeUnit.MILLISECONDS)
         if (!finished) {

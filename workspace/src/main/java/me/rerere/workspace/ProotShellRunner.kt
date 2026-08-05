@@ -95,6 +95,10 @@ class ProotShellRunner(
             "TERM=xterm-256color",
             "LANG=C.UTF-8",
             "LC_ALL=C.UTF-8",
+            // Non-interactive execution contract: suppress prompts, pagers, and colour escapes.
+            "CI=true",
+            "NO_COLOR=1",
+            "PAGER=cat",
             "/bin/bash",
             "-l",
             "-c",

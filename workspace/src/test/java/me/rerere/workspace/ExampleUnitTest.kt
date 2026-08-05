@@ -118,6 +118,24 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun commandWithoutStdinGetsImmediateEof() {
+        val baseDir = Files.createTempDirectory("workspace-stdin-eof-test").toFile()
+        val manager = WorkspaceManager(baseDir)
+        val root = "test-workspace"
+        manager.ensureWorkspace(root)
+
+        val result = manager.executeCommand(
+            root = root,
+            command = "cat",
+            timeoutMillis = 10_000,
+        )
+
+        assertFalse(result.timedOut)
+        assertEquals(0, result.exitCode)
+        assertEquals("", result.stdout)
+    }
+
+    @Test
     fun prootRunnerRequiresRootfs() {
         val baseDir = Files.createTempDirectory("workspace-proot-test").toFile()
         val manager = WorkspaceManager(
