@@ -15,6 +15,9 @@ import me.rerere.rikkahub.data.event.AppEventBus
 import me.rerere.rikkahub.service.ChatNotificationManager
 import me.rerere.rikkahub.service.ChatService
 import me.rerere.rikkahub.service.AndroidChatImageGenerationForegroundController
+import me.rerere.rikkahub.service.AndroidChatGenerationForegroundController
+import me.rerere.rikkahub.service.ChatGenerationForegroundController
+import me.rerere.rikkahub.service.ChatGenerationForegroundRegistry
 import me.rerere.rikkahub.service.ChatImageGenerationForegroundReadiness
 import me.rerere.rikkahub.utils.EmojiData
 import me.rerere.rikkahub.utils.EmojiUtils
@@ -66,6 +69,14 @@ val appModule = module {
         ChatImageGenerationForegroundReadiness()
     }
 
+    single {
+        ChatGenerationForegroundRegistry()
+    }
+
+    single<ChatGenerationForegroundController> {
+        AndroidChatGenerationForegroundController(context = get(), registry = get())
+    }
+
     single<ChatImageGenerationForegroundController> {
         AndroidChatImageGenerationForegroundController(context = get(), readiness = get())
     }
@@ -111,6 +122,7 @@ val appModule = module {
             appScope = get(),
             eventBus = get(),
             settingsStore = get(),
+            foregroundRegistry = get(),
         )
     }
 
@@ -130,7 +142,8 @@ val appModule = module {
             filesManager = get(),
             skillManager = get(),
             workspaceRepository = get(),
-            folderRepository = get()
+            folderRepository = get(),
+            generationForegroundController = get(),
         )
     }
 

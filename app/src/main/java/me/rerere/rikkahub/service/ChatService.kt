@@ -116,6 +116,15 @@ internal fun backgroundTextGenerationParams(
     customBody = model.customBodies,
 )
 
+internal object ChatGenerationForegroundPolicy {
+    fun requiresForSend(answer: Boolean): Boolean = answer
+
+    fun requiresForRegeneration(
+        messageRole: MessageRole,
+        regenerateAssistantMessage: Boolean,
+    ): Boolean = messageRole == MessageRole.USER || regenerateAssistantMessage
+}
+
 data class ChatError(
     val id: Uuid = Uuid.random(),
     val title: String? = null,
@@ -214,6 +223,7 @@ class ChatService(
     private val skillManager: SkillManager,
     private val workspaceRepository: WorkspaceRepository,
     private val folderRepository: FolderRepository,
+    private val generationForegroundController: ChatGenerationForegroundController,
 ) {
     // workspace 系统提示注入 (依赖 workspaceRepository, 故在类内构造)
     private val workspaceReminderTransformer = WorkspaceReminderTransformer(workspaceRepository)
@@ -352,21 +362,52 @@ class ChatService(
     fun acquireConversationReference(conversationId: Uuid): ConversationSessionLease =
         ConversationSessionLease(acquireSession(conversationId))
 
-    private fun launchWithConversationReference(
+    private fun launchForegroundMetadataGeneration(
         conversationId: Uuid,
+        senderName: String,
         block: suspend () -> Unit
-    ): Job = appScope.launch {
-        val lease = acquireConversationReference(conversationId)
-        try {
-            block()
-        } finally {
-            lease.close()
+    ): Job {
+        val foregroundLeaseReady = CompletableDeferred<ChatGenerationForegroundLease>()
+        val job = appScope.launch(start = CoroutineStart.LAZY) {
+            val conversationLease = acquireConversationReference(conversationId)
+            val foregroundLease = foregroundLeaseReady.await()
+            try {
+                foregroundLease.awaitReady()
+                block()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                addError(error, conversationId, title = context.getString(R.string.error_title_generation))
+            } finally {
+                conversationLease.close()
+            }
         }
+        val foregroundLease = try {
+            generationForegroundController.start(
+                conversationId = conversationId,
+                senderName = senderName,
+                cancelExecution = {
+                    job.cancel(CancellationException("Cancelled metadata generation from the notification"))
+                },
+            )
+        } catch (error: Throwable) {
+            job.cancel()
+            addError(error, conversationId, title = context.getString(R.string.error_title_generation))
+            return job
+        }
+        job.invokeOnCompletion { foregroundLease.close() }
+        foregroundLeaseReady.complete(foregroundLease)
+        job.start()
+        return job
     }
 
     private fun launchReplacingGenerationJob(
         conversationId: Uuid,
-        block: suspend (previousJob: Job?) -> Unit,
+        requiresForeground: Boolean = true,
+        block: suspend (
+            previousJob: Job?,
+            foregroundLease: ChatGenerationForegroundLease?,
+        ) -> Unit,
     ): Job {
         val generationLease = try {
             acquireGenerationSession(conversationId)
@@ -374,7 +415,32 @@ class ChatService(
             return Job().also { it.cancel() }
         }
         val replacedJob = CompletableDeferred<Job?>()
-        val job = appScope.launch(start = CoroutineStart.LAZY) { block(replacedJob.await()) }
+        val foregroundLeaseReady = CompletableDeferred<ChatGenerationForegroundLease?>()
+        val job = appScope.launch(start = CoroutineStart.LAZY) {
+            block(replacedJob.await(), foregroundLeaseReady.await())
+        }
+        val foregroundLease = if (requiresForeground) {
+            try {
+                generationForegroundController.start(
+                    conversationId = conversationId,
+                    senderName = resolveGenerationSenderName(conversationId),
+                    cancelExecution = {
+                        job.cancel(CancellationException("Cancelled from the chat generation notification"))
+                    },
+                )
+            } catch (error: Throwable) {
+                job.cancel()
+                generationLease.close()
+                addError(error, conversationId, title = context.getString(R.string.error_title_generation))
+                return job
+            }
+        } else {
+            null
+        }
+        foregroundLease?.let { lease ->
+            job.invokeOnCompletion { lease.close() }
+        }
+        foregroundLeaseReady.complete(foregroundLease)
         try {
             replacedJob.complete(generationLease.attach(job))
             job.start()
@@ -388,6 +454,18 @@ class ChatService(
         } finally {
             generationLease.close()
         }
+    }
+
+    private fun resolveGenerationSenderName(conversationId: Uuid): String {
+        val settings = settingsStore.settingsFlow.value
+        val conversation = getConversationFlow(conversationId).value
+        val assistant = settings.getAssistantById(conversation.assistantId)
+            ?: settings.getCurrentAssistant()
+        if (assistant.useAssistantAvatar) {
+            return assistant.name.ifEmpty { context.getString(R.string.assistant_page_default_assistant) }
+        }
+        return settings.findModelById(assistant.chatModelId ?: settings.chatModelId)?.displayName
+            ?: assistant.name.ifEmpty { context.getString(R.string.notification_live_update_title) }
     }
 
     // ---- 对话状态访问 ----
@@ -454,8 +532,12 @@ class ChatService(
     fun sendMessage(conversationId: Uuid, content: List<UIMessagePart>, answer: Boolean = true) {
         if (content.isEmptyInputMessage()) return
 
-        launchReplacingGenerationJob(conversationId) { previousJob ->
+        launchReplacingGenerationJob(
+            conversationId = conversationId,
+            requiresForeground = ChatGenerationForegroundPolicy.requiresForSend(answer),
+        ) { previousJob, foregroundLease ->
             try {
+                if (answer) checkNotNull(foregroundLease).awaitReady()
                 runCatching { previousJob?.join() }
                 finishInterruptedPendingTools(conversationId)
 
@@ -478,6 +560,8 @@ class ChatService(
                 }
 
                 _generationDoneFlow.emit(conversationId)
+            } catch (error: CancellationException) {
+                throw error
             } catch (e: Exception) {
                 e.printStackTrace()
                 addError(e, conversationId, title = context.getString(R.string.error_title_send_message))
@@ -510,8 +594,16 @@ class ChatService(
         message: UIMessage,
         regenerateAssistantMsg: Boolean = true
     ) {
-        launchReplacingGenerationJob(conversationId) { previousJob ->
+        val requiresForeground = ChatGenerationForegroundPolicy.requiresForRegeneration(
+            messageRole = message.role,
+            regenerateAssistantMessage = regenerateAssistantMsg,
+        )
+        launchReplacingGenerationJob(
+            conversationId = conversationId,
+            requiresForeground = requiresForeground,
+        ) { previousJob, foregroundLease ->
             try {
+                if (requiresForeground) checkNotNull(foregroundLease).awaitReady()
                 runCatching { previousJob?.join() }
                 if (message.role == MessageRole.USER) {
                     mutateAndSaveConversation(conversationId) { current ->
@@ -534,6 +626,8 @@ class ChatService(
                 }
 
                 _generationDoneFlow.emit(conversationId)
+            } catch (error: CancellationException) {
+                throw error
             } catch (e: Exception) {
                 addError(e, conversationId, title = context.getString(R.string.error_title_regenerate_message))
             }
@@ -550,8 +644,9 @@ class ChatService(
         reason: String = "",
         answer: String? = null,
     ) {
-        launchReplacingGenerationJob(conversationId) { previousJob ->
+        launchReplacingGenerationJob(conversationId) { previousJob, foregroundLease ->
             try {
+                checkNotNull(foregroundLease).awaitReady()
                 runCatching { previousJob?.join() }
                 val newApprovalState = when {
                     answer != null -> {
@@ -587,6 +682,8 @@ class ChatService(
                 }
 
                 _generationDoneFlow.emit(conversationId)
+            } catch (error: CancellationException) {
+                throw error
             } catch (e: Exception) {
                 addError(e, conversationId, title = context.getString(R.string.error_title_tool_approval))
             }
@@ -810,11 +907,11 @@ class ChatService(
             val finalConversation = getConversationFlow(conversationId).value
             persistCurrentConversation(conversationId)
 
-            launchWithConversationReference(conversationId) {
-                generateTitle(conversationId, finalConversation)
-            }
-            launchWithConversationReference(conversationId) {
-                generateSuggestion(conversationId, finalConversation)
+            launchForegroundMetadataGeneration(conversationId, senderName) {
+                coroutineScope {
+                    launch { generateTitle(conversationId, finalConversation) }
+                    launch { generateSuggestion(conversationId, finalConversation) }
+                }
             }
         }
     }

@@ -12,11 +12,9 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
-import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.CHAT_COMPLETED_NOTIFICATION_CHANNEL_ID
-import me.rerere.rikkahub.CHAT_LIVE_UPDATE_NOTIFICATION_CHANNEL_ID
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.RouteActivity
 import me.rerere.rikkahub.data.datastore.SettingsStore
@@ -40,6 +38,7 @@ class ChatNotificationManager(
     appScope: AppScope,
     eventBus: AppEventBus,
     private val settingsStore: SettingsStore,
+    private val foregroundRegistry: ChatGenerationForegroundRegistry,
 ) {
     private val isForeground = MutableStateFlow(false)
     private val liveUpdateLastSentAt = ConcurrentHashMap<Uuid, Long>()
@@ -79,7 +78,12 @@ class ChatNotificationManager(
         if (lastSentAt != null && now - lastSentAt < LIVE_UPDATE_NOTIFICATION_THROTTLE_MS) return
         liveUpdateLastSentAt[event.conversationId] = now
 
-        sendLiveUpdateNotification(event.conversationId, event.lastMessage, event.senderName)
+        val (_, statusText, contentText) = determineNotificationContent(event.lastMessage.parts)
+        foregroundRegistry.updateConversationNotification(
+            conversationId = event.conversationId,
+            statusText = statusText,
+            contentText = contentText,
+        )
     }
 
     private fun handleGenerationEnded(event: AppEvent.ChatGenerationEnded) {
@@ -111,31 +115,6 @@ class ChatNotificationManager(
 
     private fun getLiveUpdateNotificationId(conversationId: Uuid): Int {
         return conversationId.hashCode() + 10000
-    }
-
-    private fun sendLiveUpdateNotification(
-        conversationId: Uuid,
-        lastMessage: UIMessage,
-        senderName: String
-    ) {
-        // 确定当前状态
-        val (chipText, statusText, contentText) = determineNotificationContent(lastMessage.parts)
-
-        context.sendNotification(
-            channelId = CHAT_LIVE_UPDATE_NOTIFICATION_CHANNEL_ID,
-            notificationId = getLiveUpdateNotificationId(conversationId)
-        ) {
-            title = senderName
-            content = contentText
-            subText = statusText
-            ongoing = true
-            onlyAlertOnce = true
-            category = NotificationCompat.CATEGORY_PROGRESS
-            useBigTextStyle = true
-            contentIntent = getPendingIntent(context, conversationId)
-            requestPromotedOngoing = true
-            shortCriticalText = chipText
-        }
     }
 
     private fun determineNotificationContent(parts: List<UIMessagePart>): Triple<String, String, String> {
