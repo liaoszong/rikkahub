@@ -1,9 +1,5 @@
 package me.rerere.rikkahub.ui.components.message
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -104,8 +100,7 @@ fun ChatImageGenerationGallery(
 
     Column(
         modifier = modifier
-            .fillMaxWidth()
-            .animateContentSize(),
+            .fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(
@@ -139,39 +134,34 @@ fun ChatImageGenerationGallery(
                     it.status == ChatImageSlotStatus.SUCCEEDED && it.imageUrl !in failedImageUrls
                 }
                 ?: availableSucceeded.firstOrNull()
-            AnimatedContent(
-                targetState = selected?.imageUrl,
-                transitionSpec = { androidx.compose.animation.fadeIn(tween(280)) togetherWith androidx.compose.animation.fadeOut(tween(180)) },
-                label = "generated-image-main",
-            ) { imageUrl ->
-                if (imageUrl.isNullOrBlank()) {
-                    PendingMainImage(
-                        elapsedMillis = elapsedMillis,
-                        aspectRatio = resolvedState.imageAspectRatio(),
-                        state = resolvedState,
-                        active = resolvedActive,
-                        missingFile = succeeded.isNotEmpty() && availableSucceeded.isEmpty(),
-                    )
-                } else {
-                    val previewImages = availableSucceeded.mapNotNull { it.imageUrl }
-                    ZoomableAsyncImage(
-                        model = imageUrl,
-                        contentDescription = stringResource(R.string.chat_image_generation_main_description),
-                        previewImages = previewImages,
-                        previewIndex = previewImages.indexOf(imageUrl).coerceAtLeast(0),
-                        onLoadSuccess = {
-                            failedImageUrls = failedImageUrls - imageUrl
-                        },
-                        onLoadError = {
-                            failedImageUrls = failedImageUrls + imageUrl
-                        },
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(resolvedState.imageAspectRatio())
-                            .clip(RoundedCornerShape(18.dp)),
-                    )
-                }
+            val imageUrl = selected?.imageUrl
+            if (imageUrl.isNullOrBlank()) {
+                PendingMainImage(
+                    elapsedMillis = elapsedMillis,
+                    aspectRatio = resolvedState.imageAspectRatio(),
+                    state = resolvedState,
+                    active = resolvedActive,
+                    missingFile = succeeded.isNotEmpty() && availableSucceeded.isEmpty(),
+                )
+            } else {
+                val previewImages = availableSucceeded.mapNotNull { it.imageUrl }
+                ZoomableAsyncImage(
+                    model = imageUrl,
+                    contentDescription = stringResource(R.string.chat_image_generation_main_description),
+                    previewImages = previewImages,
+                    previewIndex = previewImages.indexOf(imageUrl).coerceAtLeast(0),
+                    onLoadSuccess = {
+                        failedImageUrls = failedImageUrls - imageUrl
+                    },
+                    onLoadError = {
+                        failedImageUrls = failedImageUrls + imageUrl
+                    },
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(resolvedState.imageAspectRatio())
+                        .clip(RoundedCornerShape(18.dp)),
+                )
             }
 
             val slots = resolvedState?.slots.orEmpty()

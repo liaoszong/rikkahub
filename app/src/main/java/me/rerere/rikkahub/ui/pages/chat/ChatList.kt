@@ -60,6 +60,7 @@ import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -116,7 +117,6 @@ private const val LoadingIndicatorKey = "LoadingIndicator"
 private const val ScrollBottomKey = "ScrollBottomKey"
 private const val FastScrollEnterDpPerSecond = 2_200f
 private const val FastScrollExitDpPerSecond = 1_300f
-private const val FastScrollHoldNanos = 140_000_000L
 
 @Composable
 fun ChatList(
@@ -749,18 +749,11 @@ private fun BoxScope.MessageJumper(
     scope: CoroutineScope,
     state: LazyListState
 ) {
-    AnimatedVisibility(
-        visible = show.value && enabled,
-        modifier = Modifier.align(if (onLeft) Alignment.CenterStart else Alignment.CenterEnd),
-        enter = slideInHorizontally(
-            initialOffsetX = { if (onLeft) -it * 2 else it * 2 },
-        ),
-        exit = slideOutHorizontally(
-            targetOffsetX = { if (onLeft) -it * 2 else it * 2 },
-        )
-    ) {
+    if (show.value && enabled) {
         Column(
-            modifier = Modifier.padding(8.dp),
+            modifier = Modifier
+                .align(if (onLeft) Alignment.CenterStart else Alignment.CenterEnd)
+                .padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Surface(
@@ -853,43 +846,43 @@ private data class FastScrollDetector(
 @Composable
 private fun rememberFastScrollDetector(state: LazyListState): FastScrollDetector {
     val density = LocalDensity.current.density
-    val visible = remember { mutableStateOf(false) }
+    val fast = remember { mutableStateOf(false) }
+    val visible = remember(state, fast) {
+        derivedStateOf { state.isScrollInProgress && fast.value }
+    }
     val tracker = remember(density) {
         FastScrollVelocityTracker(
             enterThresholdPxPerSecond = FastScrollEnterDpPerSecond * density,
             exitThresholdPxPerSecond = FastScrollExitDpPerSecond * density,
-            holdDurationNanos = FastScrollHoldNanos,
         )
     }
-    val connection = remember(tracker, visible) {
+    val connection = remember(tracker, fast) {
         object : NestedScrollConnection {
             override fun onPostScroll(
                 consumed: Offset,
                 available: Offset,
                 source: NestedScrollSource,
             ): Offset {
-                visible.updateIfChanged(
+                fast.updateIfChanged(
                     tracker.onScroll(
                         deltaPx = consumed.y,
                         eventNanos = System.nanoTime(),
+                        isUserInput = source == NestedScrollSource.UserInput,
                     ),
                 )
                 return Offset.Zero
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
-                visible.updateIfChanged(
-                    tracker.onFling(
-                        velocityPxPerSecond = available.y,
-                        eventNanos = System.nanoTime(),
-                    ),
-                )
+                // The offered velocity is only an input prediction. Visibility is driven by
+                // actual consumed deltas from the ensuing fling, so a boundary/no-op fling
+                // cannot make the jumper appear after motion has already stopped.
                 return Velocity.Zero
             }
 
             override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
                 tracker.reset()
-                visible.updateIfChanged(false)
+                fast.updateIfChanged(false)
                 return Velocity.Zero
             }
         }
@@ -899,7 +892,7 @@ private fun rememberFastScrollDetector(state: LazyListState): FastScrollDetector
         snapshotFlow { state.isScrollInProgress }.collect { isScrolling ->
             if (!isScrolling) {
                 tracker.reset()
-                visible.updateIfChanged(false)
+                fast.updateIfChanged(false)
             }
         }
     }
@@ -916,51 +909,49 @@ private fun androidx.compose.runtime.MutableState<Boolean>.updateIfChanged(value
 internal class FastScrollVelocityTracker(
     private val enterThresholdPxPerSecond: Float,
     private val exitThresholdPxPerSecond: Float,
-    private val holdDurationNanos: Long,
 ) {
     init {
         require(enterThresholdPxPerSecond > exitThresholdPxPerSecond)
         require(exitThresholdPxPerSecond > 0f)
-        require(holdDurationNanos >= 0L)
     }
 
     private var lastSampleNanos: Long? = null
-    private var keepVisibleUntilNanos: Long = Long.MIN_VALUE
+    private var userScrollSession = false
     var isFast: Boolean = false
         private set
 
-    fun onScroll(deltaPx: Float, eventNanos: Long): Boolean {
+    fun onScroll(deltaPx: Float, eventNanos: Long, isUserInput: Boolean = true): Boolean {
+        if (isUserInput) userScrollSession = true
+        if (!userScrollSession) {
+            isFast = false
+            lastSampleNanos = null
+            return false
+        }
+
         val previousSample = lastSampleNanos
         lastSampleNanos = eventNanos
         if (previousSample == null || eventNanos <= previousSample) return isFast
 
-        val elapsedNanos = (eventNanos - previousSample).coerceIn(
-            MinimumSampleNanos,
-            MaximumSampleNanos,
-        )
+        val rawElapsedNanos = eventNanos - previousSample
+        if (rawElapsedNanos > MaximumSampleNanos) {
+            // A stalled frame is not evidence of high velocity. Clamping a 200 ms gap to
+            // 80 ms overstates speed and makes the controls flash after a large image jank.
+            isFast = false
+            return false
+        }
+        val elapsedNanos = rawElapsedNanos.coerceAtLeast(MinimumSampleNanos)
         val velocity = abs(deltaPx) * NanosPerSecond / elapsedNanos
-        isFast = when {
-            velocity >= enterThresholdPxPerSecond -> true
-            isFast && velocity >= exitThresholdPxPerSecond -> true
-            isFast && eventNanos <= keepVisibleUntilNanos -> true
-            else -> false
+        isFast = if (isFast) {
+            velocity >= exitThresholdPxPerSecond
+        } else {
+            velocity >= enterThresholdPxPerSecond
         }
-        if (isFast && velocity >= exitThresholdPxPerSecond) {
-            keepVisibleUntilNanos = eventNanos + holdDurationNanos
-        }
-        return isFast
-    }
-
-    fun onFling(velocityPxPerSecond: Float, eventNanos: Long): Boolean {
-        lastSampleNanos = eventNanos
-        isFast = abs(velocityPxPerSecond) >= enterThresholdPxPerSecond
-        keepVisibleUntilNanos = if (isFast) eventNanos + holdDurationNanos else Long.MIN_VALUE
         return isFast
     }
 
     fun reset() {
         lastSampleNanos = null
-        keepVisibleUntilNanos = Long.MIN_VALUE
+        userScrollSession = false
         isFast = false
     }
 
