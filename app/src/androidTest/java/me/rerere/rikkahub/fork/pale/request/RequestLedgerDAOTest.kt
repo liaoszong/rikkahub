@@ -179,6 +179,36 @@ class RequestLedgerDAOTest {
     }
 
     @Test
+    fun orphanRecoveryCannotRewriteTerminalUncertainStates() = runTest {
+        listOf("interrupted", "unknown_outcome").forEachIndexed { index, state ->
+            val requestId = "orphan-terminal-$index"
+            dao.insertRequest(
+                request(
+                    requestId = requestId,
+                    intentKey = "orphan-terminal-intent-$index",
+                    state = state,
+                    boundary = "unknown",
+                ),
+            )
+            assertEquals(1, dao.claimRequest(requestId, "worker-$index", now = 100, leaseUntil = 200))
+
+            assertEquals(
+                0,
+                dao.failOrphanedRequestWithoutAttempt(
+                    requestId = requestId,
+                    expectedState = state,
+                    expectedBoundary = "unknown",
+                    expectedStateRevision = 0,
+                    owner = "worker-$index",
+                    fencingEpoch = 1,
+                    now = 110,
+                ),
+            )
+            assertEquals(state, dao.getRequest(requestId)?.requestState)
+        }
+    }
+
+    @Test
     fun billableFailedRetryRequiresIdempotencyOrChargeAcceptance() = runTest {
         dao.insertRequest(request("request-1", "intent-1", state = "failed", boundary = "sent"))
         dao.claimRequest("request-1", "worker-1", now = 100, leaseUntil = 200)
@@ -199,6 +229,97 @@ class RequestLedgerDAOTest {
                 providerGuaranteesIdempotency = true,
             ),
         )
+    }
+
+    @Test
+    fun recoveryFiltersKindAndLeaseBeforeApplyingLimit() = runTest {
+        repeat(501) { index ->
+            val blockerKind = when (index % 3) {
+                0 -> "future_lease"
+                1 -> "wrong_kind"
+                else -> "wrong_state"
+            }
+            dao.insertRequest(
+                request(
+                    requestId = "blocking-$index",
+                    intentKey = "blocking-intent-$index",
+                    state = if (blockerKind == "wrong_state") "queued" else "running",
+                ).copy(
+                    requestKind = if (blockerKind == "wrong_kind") "tool_call" else "chat_generation",
+                    leaseOwner = if (blockerKind == "future_lease") "live-worker" else null,
+                    leaseUntil = if (blockerKind == "future_lease") 10_000 else null,
+                    updatedAt = index.toLong(),
+                ),
+            )
+        }
+        dao.insertRequest(
+            request("recoverable-chat", "recoverable-intent", state = "running").copy(
+                leaseOwner = "dead-worker",
+                leaseUntil = 100,
+                updatedAt = 10_000,
+            ),
+        )
+
+        val snapshotEnd = checkNotNull(dao.getRecoverableRequestSnapshotEnd(
+            kinds = listOf("chat_generation"),
+            states = listOf("running"),
+            recoveryBefore = 100,
+        ))
+        val candidates = dao.getRecoverableRequestPage(
+            kinds = listOf("chat_generation"),
+            states = listOf("running"),
+            recoveryBefore = 100,
+            afterUpdatedAt = Long.MIN_VALUE,
+            afterRequestId = "",
+            snapshotUpdatedAt = snapshotEnd.updatedAt,
+            snapshotRequestId = snapshotEnd.requestId,
+            limit = 500,
+        )
+
+        assertEquals(listOf("recoverable-chat"), candidates.map(RequestLedgerEntity::requestId))
+    }
+
+    @Test
+    fun recoveryKeysetReachesRowsBeyondProductionPageBoundary() = runTest {
+        repeat(501) { index ->
+            dao.insertRequest(
+                request(
+                    requestId = "eligible-${index.toString().padStart(3, '0')}",
+                    intentKey = "eligible-intent-$index",
+                    state = "running",
+                ).copy(updatedAt = index.toLong()),
+            )
+        }
+
+        val snapshotEnd = checkNotNull(dao.getRecoverableRequestSnapshotEnd(
+            kinds = listOf("chat_generation"),
+            states = listOf("running"),
+            recoveryBefore = 1_000,
+        ))
+        val firstPage = dao.getRecoverableRequestPage(
+            kinds = listOf("chat_generation"),
+            states = listOf("running"),
+            recoveryBefore = 1_000,
+            afterUpdatedAt = Long.MIN_VALUE,
+            afterRequestId = "",
+            snapshotUpdatedAt = snapshotEnd.updatedAt,
+            snapshotRequestId = snapshotEnd.requestId,
+            limit = 500,
+        )
+        val firstCursor = firstPage.last()
+        val secondPage = dao.getRecoverableRequestPage(
+            kinds = listOf("chat_generation"),
+            states = listOf("running"),
+            recoveryBefore = 1_000,
+            afterUpdatedAt = firstCursor.updatedAt,
+            afterRequestId = firstCursor.requestId,
+            snapshotUpdatedAt = snapshotEnd.updatedAt,
+            snapshotRequestId = snapshotEnd.requestId,
+            limit = 500,
+        )
+
+        assertEquals(500, firstPage.size)
+        assertEquals(listOf("eligible-500"), secondPage.map(RequestLedgerEntity::requestId))
     }
 
     @Test

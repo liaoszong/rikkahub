@@ -35,25 +35,33 @@ class ToolRequestReconciler(
     private val ownerId: String = UUID.randomUUID().toString().lowercase(Locale.ROOT),
 ) {
     suspend fun reconcilePending(limit: Int = 500): ToolRequestReconcileReport {
-        val candidates = repository.getRequestsByKindAndState(
-            kinds = listOf(RequestKind.TOOL_CALL, RequestKind.MCP_TOOL_CALL, RequestKind.WORKSPACE_TOOL),
-            states = listOf(RequestState.DISPATCHING, RequestState.RUNNING, RequestState.COMMITTING),
-            limit = limit,
-        ).filter { request -> request.leaseUntil == null || request.leaseUntil <= nowMillis() }
         var committed = 0
         var unknown = 0
         var cancelled = 0
         var failed = 0
         var deferred = 0
         val failures = mutableListOf<String>()
-        candidates.forEach { request ->
+        val inspected = repository.forEachRecoverableRequestByKindAndState(
+            kinds = listOf(RequestKind.TOOL_CALL, RequestKind.MCP_TOOL_CALL, RequestKind.WORKSPACE_TOOL),
+            states = listOf(RequestState.DISPATCHING, RequestState.RUNNING, RequestState.COMMITTING),
+            recoveryBefore = nowMillis(),
+            pageSize = limit,
+        ) { request ->
             runCatching {
                 val attemptId = request.activeAttemptId?.let(::RequestAttemptId)
-                    ?: throw RequestLedgerMissing(request.requestId)
+                if (attemptId == null) {
+                    settleMissingAttempt(request)
+                    failed++
+                    return@runCatching
+                }
                 val attempt = repository.getAttempt(attemptId)
                     ?: throw RequestLedgerMissing(attemptId.value)
                 val invocation = repository.getInvocations(RequestId(request.requestId)).singleOrNull()
-                    ?: throw RequestLedgerConflict("Tool request must own exactly one invocation")
+                if (invocation == null) {
+                    failAttemptWithoutInvocation(request, attempt)
+                    failed++
+                    return@runCatching
+                }
                 val durableTool = durableTool(request, invocation)
                 if (durableTool == null && invocation.toolName == "generate_image" &&
                     repository.getImageRequestsByParent(RequestId(request.requestId)).isNotEmpty()
@@ -158,7 +166,7 @@ class ToolRequestReconciler(
             }
         }
         return ToolRequestReconcileReport(
-            inspected = candidates.size,
+            inspected = inspected,
             committed = committed,
             unknown = unknown,
             cancelled = cancelled,
@@ -166,6 +174,43 @@ class ToolRequestReconciler(
             failures = failures,
             deferred = deferred,
         )
+    }
+
+    private suspend fun settleMissingAttempt(request: RequestLedgerEntity) {
+        val requestId = RequestId(request.requestId)
+        val recoveryOwner = owner(requestId)
+        val lease = repository.claimRequest(requestId, recoveryOwner, LEASE_MILLIS)
+        try {
+            repository.settleOrphanedRequestWithoutAttempt(
+                lease = lease,
+                actor = AuditActor.system(recoveryOwner),
+                reason = "missing_active_attempt",
+            )
+        } finally {
+            runCatching { repository.releaseRequest(lease) }
+        }
+    }
+
+    private suspend fun failAttemptWithoutInvocation(
+        request: RequestLedgerEntity,
+        attempt: RequestAttemptEntity,
+    ) {
+        val requestId = RequestId(request.requestId)
+        val recoveryOwner = owner(requestId)
+        val lease = repository.claimRequest(requestId, recoveryOwner, LEASE_MILLIS)
+        try {
+            repository.advanceAttempt(
+                AdvanceAttemptCommand(
+                    lease = lease,
+                    attemptId = RequestAttemptId(attempt.attemptId),
+                    nextState = RequestAttemptState.FAILED,
+                    nextBoundary = attempt.billableBoundary(),
+                    actor = AuditActor.system(recoveryOwner),
+                ),
+            )
+        } finally {
+            runCatching { repository.releaseRequest(lease) }
+        }
     }
 
     private suspend fun durableTool(

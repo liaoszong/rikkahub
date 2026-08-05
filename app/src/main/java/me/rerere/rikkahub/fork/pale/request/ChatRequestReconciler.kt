@@ -7,6 +7,7 @@ import me.rerere.pale.id.RequestAttemptId
 import me.rerere.pale.id.RequestId
 import me.rerere.pale.request.BillableBoundary
 import me.rerere.pale.request.RequestAttemptState
+import me.rerere.pale.request.RequestKind
 import me.rerere.pale.request.RequestState
 
 data class ChatRequestReconcileReport(
@@ -31,27 +32,43 @@ class ChatRequestReconciler(
     private val ownerId: String = UUID.randomUUID().toString().lowercase(Locale.ROOT),
 ) {
     suspend fun reconcilePending(limit: Int = 500): ChatRequestReconcileReport {
-        val candidates = requestRepository.getRequestsByState(
-            listOf(RequestState.DISPATCHING, RequestState.RUNNING, RequestState.COMMITTING),
-            limit,
-        ).filter { request ->
-            request.requestKind == "chat_generation" &&
-                (request.leaseUntil == null || request.leaseUntil <= nowMillis())
-        }
         var committed = 0
         var unknown = 0
         var interrupted = 0
         var failed = 0
         val failures = mutableListOf<String>()
 
-        candidates.forEach { request ->
+        val inspected = requestRepository.forEachRecoverableRequestByKindAndState(
+            kinds = listOf(RequestKind.CHAT_GENERATION),
+            states = listOf(RequestState.DISPATCHING, RequestState.RUNNING, RequestState.COMMITTING),
+            recoveryBefore = nowMillis(),
+            pageSize = limit,
+        ) { request ->
             runCatching {
                 val attemptId = request.activeAttemptId?.let(::RequestAttemptId)
-                    ?: return@runCatching
+                if (attemptId == null) {
+                    settleMissingAttempt(request)
+                    failed++
+                    return@runCatching
+                }
                 val attempt = requestRepository.getAttempt(attemptId)
                     ?: throw RequestLedgerMissing(attemptId.value)
                 when (attempt.billableBoundary()) {
-                    BillableBoundary.NOT_SENT -> Unit
+                    BillableBoundary.NOT_SENT -> {
+                        val terminalState = if (attempt.attemptState() == RequestAttemptState.COMMITTING) {
+                            RequestAttemptState.FAILED
+                        } else {
+                            RequestAttemptState.INTERRUPTED
+                        }
+                        finishOrphan(
+                            requestId = RequestId(request.requestId),
+                            attemptId = attemptId,
+                            state = terminalState,
+                            boundary = BillableBoundary.NOT_SENT,
+                        )
+                        if (terminalState == RequestAttemptState.FAILED) failed++ else interrupted++
+                    }
+
                     BillableBoundary.SENT -> {
                         finishOrphan(
                             requestId = RequestId(request.requestId),
@@ -92,20 +109,32 @@ class ChatRequestReconciler(
                         if (repairCommittedResult(request, attemptId, attempt.checkpointDigest)) {
                             committed++
                         } else {
-                            throw RequestLedgerConflict(
-                                "Committed chat request ${request.requestId} has no valid durable checkpoint",
+                            finishOrphan(
+                                requestId = RequestId(request.requestId),
+                                attemptId = attemptId,
+                                state = RequestAttemptState.FAILED,
+                                boundary = BillableBoundary.RESULT_COMMITTED,
                             )
+                            failed++
                         }
                     }
 
-                    BillableBoundary.UNKNOWN -> Unit
+                    BillableBoundary.UNKNOWN -> {
+                        finishOrphan(
+                            requestId = RequestId(request.requestId),
+                            attemptId = attemptId,
+                            state = RequestAttemptState.FAILED,
+                            boundary = BillableBoundary.UNKNOWN,
+                        )
+                        failed++
+                    }
                 }
             }.onFailure { failure ->
                 failures += "${request.requestId}:${failure.javaClass.simpleName}"
             }
         }
         return ChatRequestReconcileReport(
-            inspected = candidates.size,
+            inspected = inspected,
             committed = committed,
             unknown = unknown,
             interrupted = interrupted,
@@ -181,10 +210,28 @@ class ChatRequestReconciler(
         }
     }
 
+    private suspend fun settleMissingAttempt(request: RequestLedgerEntity) {
+        val requestId = RequestId(request.requestId)
+        val recoveryOwner = owner(requestId)
+        val lease = requestRepository.claimRequest(requestId, recoveryOwner, LEASE_MILLIS)
+        try {
+            requestRepository.settleOrphanedRequestWithoutAttempt(
+                lease = lease,
+                actor = AuditActor.system(recoveryOwner),
+                reason = "missing_active_attempt",
+            )
+        } finally {
+            runCatching { requestRepository.releaseRequest(lease) }
+        }
+    }
+
     private fun owner(requestId: RequestId) = "chat-reconcile:$ownerId:${requestId.value}"
 
     private fun RequestAttemptEntity.billableBoundary(): BillableBoundary =
         BillableBoundary.valueOf(billableBoundary.uppercase(Locale.ROOT))
+
+    private fun RequestAttemptEntity.attemptState(): RequestAttemptState =
+        RequestAttemptState.valueOf(attemptState.uppercase(Locale.ROOT))
 
     private companion object {
         const val LEASE_MILLIS = 30_000L

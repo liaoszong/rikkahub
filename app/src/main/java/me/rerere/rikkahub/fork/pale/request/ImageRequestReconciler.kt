@@ -58,7 +58,14 @@ class ImageRequestReconciler(
     private val leaseDurationMillis: Long = 30_000L,
 ) {
     suspend fun reconcilePending(limit: Int = 500): ImageRequestReconcileReport {
-        val candidates = repository.getRequestsByKindAndState(
+        var committed = 0
+        var cancelled = 0
+        var unknown = 0
+        var interrupted = 0
+        var failed = 0
+        val failures = mutableListOf<String>()
+
+        val inspected = repository.forEachRecoverableRequestByKindAndState(
             kinds = listOf(RequestKind.IMAGE_GENERATION),
             states = listOf(
                 RequestState.CREATED,
@@ -68,21 +75,26 @@ class ImageRequestReconciler(
                 RequestState.RUNNING,
                 RequestState.COMMITTING,
             ),
-            limit = limit,
-        ).filter { it.leaseUntil == null || it.leaseUntil <= nowMillis() }
-        var committed = 0
-        var cancelled = 0
-        var unknown = 0
-        var interrupted = 0
-        var failed = 0
-        val failures = mutableListOf<String>()
-
-        candidates.forEach { request ->
+            recoveryBefore = nowMillis(),
+            pageSize = limit,
+        ) { request ->
             runCatching {
                 val attempt = request.activeAttemptId
                     ?.let(::RequestAttemptId)
                     ?.let { repository.getAttempt(it) ?: throw RequestLedgerMissing(it.value) }
                 val boundary = attempt?.billableBoundary() ?: request.billableBoundary()
+                val requestState = request.requestState()
+                val canCreateUndispatchedAttempt = boundary == BillableBoundary.NOT_SENT &&
+                    requestState in setOf(
+                        RequestState.CREATED,
+                        RequestState.QUEUED,
+                        RequestState.WAITING_RUNTIME,
+                    )
+                if (attempt == null && !canCreateUndispatchedAttempt) {
+                    settleMissingAttempt(request)
+                    failed++
+                    return@runCatching
+                }
                 when (boundary) {
                     BillableBoundary.NOT_SENT -> {
                         cancelUndispatched(request, attempt)
@@ -136,20 +148,33 @@ class ImageRequestReconciler(
                             )
                             failed++
                         } else {
-                            throw RequestLedgerConflict(
-                                "Committed image request ${request.requestId} has no matching durable file",
+                            finishOrphan(
+                                requestId = RequestId(request.requestId),
+                                attemptId = RequestAttemptId(exactAttempt.attemptId),
+                                state = RequestAttemptState.FAILED,
+                                boundary = BillableBoundary.RESULT_COMMITTED,
                             )
+                            failed++
                         }
                     }
 
-                    BillableBoundary.UNKNOWN -> Unit
+                    BillableBoundary.UNKNOWN -> {
+                        val exactAttempt = checkNotNull(attempt)
+                        finishOrphan(
+                            requestId = RequestId(request.requestId),
+                            attemptId = RequestAttemptId(exactAttempt.attemptId),
+                            state = RequestAttemptState.FAILED,
+                            boundary = BillableBoundary.UNKNOWN,
+                        )
+                        failed++
+                    }
                 }
             }.onFailure { failure ->
                 failures += "${request.requestId}:${failure.javaClass.simpleName}"
             }
         }
         return ImageRequestReconcileReport(
-            inspected = candidates.size,
+            inspected = inspected,
             committed = committed,
             cancelled = cancelled,
             unknown = unknown,
@@ -157,6 +182,21 @@ class ImageRequestReconciler(
             failed = failed,
             failures = failures,
         )
+    }
+
+    private suspend fun settleMissingAttempt(request: RequestLedgerEntity) {
+        val requestId = RequestId(request.requestId)
+        val recoveryOwner = owner(requestId)
+        val lease = repository.claimRequest(requestId, recoveryOwner, leaseDurationMillis)
+        try {
+            repository.settleOrphanedRequestWithoutAttempt(
+                lease = lease,
+                actor = AuditActor.system(recoveryOwner),
+                reason = "missing_active_attempt",
+            )
+        } finally {
+            runCatching { repository.releaseRequest(lease) }
+        }
     }
 
     private suspend fun cancelUndispatched(
@@ -380,6 +420,9 @@ private const val IMAGE_SLOT_OUTPUT_KIND_VALUE = "image_generation_slot"
 
 private fun RequestLedgerEntity.billableBoundary() =
     BillableBoundary.valueOf(billableBoundary.uppercase(Locale.ROOT))
+
+private fun RequestLedgerEntity.requestState() =
+    RequestState.valueOf(requestState.uppercase(Locale.ROOT))
 
 private fun RequestAttemptEntity.billableBoundary() =
     BillableBoundary.valueOf(billableBoundary.uppercase(Locale.ROOT))

@@ -421,6 +421,70 @@ class ToolExecutionLedgerCoordinatorTest {
     }
 
     @Test
+    fun startupRecoveryPagesPastDeferredImageToolPrefix() = runTest {
+        createParent()
+        val deferredRequests = listOf(
+            "77777777-7777-7777-7777-777777777701",
+            "77777777-7777-7777-7777-777777777702",
+        )
+        deferredRequests.forEachIndexed { index, requestId ->
+            val imageTool = tool(
+                approval = ToolApprovalState.Auto,
+                name = "generate_image",
+                requestId = requestId,
+                toolCallId = "image-provider-call-$index",
+            )
+            val definition = definition(needsApproval = false, name = "generate_image")
+            coordinator.prepare(PARENT_REQUEST_ID, ledgerContext(), imageTool, definition)
+            val session = coordinator.openExecution(ledgerContext(), imageTool, definition)
+            session.startLocal()
+            session.releaseForLocalRepair(IllegalStateException("image recovery pending"))
+            repository.createRequest(
+                NewRequestSpec(
+                    requestId = RequestId.random(),
+                    intentKey = "paging-image-child-$index",
+                    kind = RequestKind.IMAGE_GENERATION,
+                    inputDigest = "paging-image-input-$index",
+                    capabilitySnapshotJson = "{}",
+                    resolverVersion = 1,
+                    actor = AuditActor.system("test"),
+                    parentRequestId = RequestId(requestId),
+                    conversationId = CONVERSATION_ID,
+                    messageId = MESSAGE_ID,
+                    partId = "paging-image-asset-$index",
+                ),
+            )
+        }
+
+        val recoverableRequestId = "77777777-7777-7777-7777-777777777703"
+        val recoverableTool = tool(
+            approval = ToolApprovalState.Auto,
+            requestId = recoverableRequestId,
+            toolCallId = "recoverable-provider-call",
+        )
+        val recoverableDefinition = definition(needsApproval = false)
+        coordinator.prepare(PARENT_REQUEST_ID, ledgerContext(), recoverableTool, recoverableDefinition)
+        val recoverableSession = coordinator.openExecution(
+            ledgerContext(),
+            recoverableTool,
+            recoverableDefinition,
+        )
+        recoverableSession.startLocal()
+        recoverableSession.releaseForLocalRepair(IllegalStateException("local execution interrupted"))
+
+        val report = reconciler().reconcilePending(limit = 2)
+
+        assertEquals(3, report.inspected)
+        assertEquals(2, report.deferred)
+        assertEquals(1, report.cancelled)
+        assertTrue(report.failures.isEmpty())
+        assertEquals(
+            "cancelled",
+            repository.getRequest(RequestId(recoverableRequestId))!!.requestState,
+        )
+    }
+
+    @Test
     fun startupRejectsDurableResultThatChangedAfterInvocationSuccess() = runTest {
         createParent()
         val definition = definition(needsApproval = false)
@@ -516,12 +580,17 @@ class ToolExecutionLedgerCoordinatorTest {
         parts = listOf(tool),
     )
 
-    private fun tool(approval: ToolApprovalState, name: String = "test_tool") = UIMessagePart.Tool(
-        toolCallId = "provider-call-1",
+    private fun tool(
+        approval: ToolApprovalState,
+        name: String = "test_tool",
+        requestId: String = TOOL_REQUEST_ID,
+        toolCallId: String = "provider-call-1",
+    ) = UIMessagePart.Tool(
+        toolCallId = toolCallId,
         toolName = name,
         input = "{}",
         approvalState = approval,
-        requestId = TOOL_REQUEST_ID,
+        requestId = requestId,
     )
 
     private fun definition(

@@ -287,6 +287,78 @@ class ImageGenerationLedgerCoordinatorTest {
     }
 
     @Test
+    fun executingImageRequestWithoutAttemptFailsClosedWithoutCreatingOne() = runTest {
+        val requestId = "44444444-4444-4444-4444-444444444401"
+        database.requestLedgerDao().insertRequest(
+            RequestLedgerEntity(
+                requestId = requestId,
+                intentKey = "image-slot:v1:parent:missing-attempt:0",
+                requestKind = "image_generation",
+                conversationId = "conversation-1",
+                messageId = "message-1",
+                partId = "asset-missing-attempt",
+                inputDigest = "missing-attempt-input",
+                capabilitySnapshotJson = "{}",
+                resolverVersion = 1,
+                approvalState = "not_required",
+                requestState = "dispatching",
+                billableBoundary = "not_sent",
+                createdAt = now,
+                updatedAt = now,
+            ),
+        )
+
+        val report = ImageRequestReconciler(
+            repository = repository,
+            nowMillis = { now },
+            ownerId = "missing-attempt-test",
+        ).reconcilePending()
+
+        assertEquals(1, report.inspected)
+        assertEquals(1, report.failed)
+        assertTrue(report.failures.isEmpty())
+        assertEquals("failed", repository.getRequest(RequestId(requestId))!!.requestState)
+        assertTrue(database.requestLedgerDao().getAttempts(requestId).isEmpty())
+    }
+
+    @Test
+    fun corruptCreatedImageRequestWithSentBoundaryFailsClosedWithoutCreatingAttempt() = runTest {
+        val requestId = "44444444-4444-4444-4444-444444444402"
+        database.requestLedgerDao().insertRequest(
+            RequestLedgerEntity(
+                requestId = requestId,
+                intentKey = "image-slot:v1:parent:created-sent-without-attempt:0",
+                requestKind = "image_generation",
+                conversationId = "conversation-1",
+                messageId = "message-1",
+                partId = "asset-created-sent-without-attempt",
+                inputDigest = "created-sent-without-attempt-input",
+                capabilitySnapshotJson = "{}",
+                resolverVersion = 1,
+                approvalState = "not_required",
+                requestState = "created",
+                billableBoundary = "sent",
+                createdAt = now,
+                updatedAt = now,
+            ),
+        )
+
+        val report = ImageRequestReconciler(
+            repository = repository,
+            nowMillis = { now },
+            ownerId = "created-sent-without-attempt-test",
+        ).reconcilePending()
+
+        assertEquals(1, report.inspected)
+        assertEquals(1, report.failed)
+        assertTrue(report.failures.isEmpty())
+        val settled = repository.getRequest(RequestId(requestId))!!
+        assertEquals("failed", settled.requestState)
+        assertEquals("sent", settled.billableBoundary)
+        assertTrue(database.requestLedgerDao().getAttempts(requestId).isEmpty())
+    }
+
+    @Test
     fun existingOutputRowCannotHideADeletedOrCorruptFile() = runTest {
         val plan = coordinator.prepareSlots(descriptor(createParentRequest(), "task-output-only", 1)).single()
         coordinator.openSlot(plan).requireDispatch().run {

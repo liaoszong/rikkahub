@@ -58,18 +58,35 @@ interface RequestLedgerDAO {
     ): List<RequestLedgerEntity>
 
     @Query(
-        "SELECT * FROM request_ledger WHERE request_state IN (:states) " +
-            "ORDER BY updated_at, request_id LIMIT :limit",
+        "SELECT * FROM request_ledger WHERE request_kind IN (:kinds) " +
+            "AND request_state IN (:states) " +
+            "AND (lease_until IS NULL OR lease_until <= :recoveryBefore) " +
+            "ORDER BY updated_at DESC, request_id DESC LIMIT 1",
     )
-    suspend fun getRequestsByState(states: List<String>, limit: Int): List<RequestLedgerEntity>
+    suspend fun getRecoverableRequestSnapshotEnd(
+        kinds: List<String>,
+        states: List<String>,
+        recoveryBefore: Long,
+    ): RequestLedgerEntity?
 
     @Query(
         "SELECT * FROM request_ledger WHERE request_kind IN (:kinds) " +
-            "AND request_state IN (:states) ORDER BY updated_at, request_id LIMIT :limit",
+            "AND request_state IN (:states) " +
+            "AND (lease_until IS NULL OR lease_until <= :recoveryBefore) " +
+            "AND (updated_at > :afterUpdatedAt OR " +
+            "(updated_at = :afterUpdatedAt AND request_id > :afterRequestId)) " +
+            "AND (updated_at < :snapshotUpdatedAt OR " +
+            "(updated_at = :snapshotUpdatedAt AND request_id <= :snapshotRequestId)) " +
+            "ORDER BY updated_at, request_id LIMIT :limit",
     )
-    suspend fun getRequestsByKindAndState(
+    suspend fun getRecoverableRequestPage(
         kinds: List<String>,
         states: List<String>,
+        recoveryBefore: Long,
+        afterUpdatedAt: Long,
+        afterRequestId: String,
+        snapshotUpdatedAt: Long,
+        snapshotRequestId: String,
         limit: Int,
     ): List<RequestLedgerEntity>
 
@@ -243,6 +260,36 @@ interface RequestLedgerDAO {
         explicitRetry: Boolean = false,
         providerGuaranteesIdempotency: Boolean = false,
         acceptsPossibleCharge: Boolean = false,
+    ): Int
+
+    /**
+     * Recovery-only escape hatch for a corrupt request that has no attempt authority.
+     *
+     * This intentionally bypasses the normal lifecycle transition matrix while retaining the
+     * same lease/fencing/revision CAS. It cannot touch a request that has gained an active attempt,
+     * cannot change billing evidence, and cannot rewrite an already-terminal row.
+     */
+    @Query(
+        "UPDATE request_ledger SET request_state = 'failed', " +
+            "terminal_at = COALESCE(terminal_at, :now), " +
+            "state_revision = state_revision + 1, updated_at = :now " +
+            "WHERE request_id = :requestId AND request_state = :expectedState " +
+            "AND billable_boundary = :expectedBoundary " +
+            "AND state_revision = :expectedStateRevision " +
+            "AND active_attempt_id IS NULL " +
+            "AND request_state NOT IN " +
+            "('succeeded', 'failed', 'cancelled', 'interrupted', 'unknown_outcome') " +
+            "AND lease_owner = :owner AND fencing_epoch = :fencingEpoch " +
+            "AND lease_until > :now",
+    )
+    suspend fun failOrphanedRequestWithoutAttempt(
+        requestId: String,
+        expectedState: String,
+        expectedBoundary: String,
+        expectedStateRevision: Long,
+        owner: String,
+        fencingEpoch: Long,
+        now: Long,
     ): Int
 
     @Query(

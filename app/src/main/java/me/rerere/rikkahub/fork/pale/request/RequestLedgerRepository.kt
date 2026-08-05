@@ -194,23 +194,96 @@ class RequestLedgerRepository(
         messageId: String,
     ): List<RequestLedgerEntity> = dao.getChatRequestsForMessage(conversationId, messageId)
 
-    suspend fun getRequestsByState(
-        states: List<RequestState>,
-        limit: Int = 500,
-    ): List<RequestLedgerEntity> = dao.getRequestsByState(
-        states.map { it.name.lowercase(Locale.ROOT) },
-        limit,
-    )
-
-    suspend fun getRequestsByKindAndState(
+    /**
+     * Walks one fixed recovery snapshot with a bounded keyset page. Rows may be claimed,
+     * terminalized, deferred, or fail validation while [onRequest] runs; none of those outcomes
+     * can keep a later paid orphan hidden behind the first page on the next query.
+     */
+    suspend fun forEachRecoverableRequestByKindAndState(
         kinds: List<RequestKind>,
         states: List<RequestState>,
-        limit: Int = 500,
-    ): List<RequestLedgerEntity> = dao.getRequestsByKindAndState(
-        kinds = kinds.map { it.name.lowercase(Locale.ROOT) },
-        states = states.map { it.name.lowercase(Locale.ROOT) },
-        limit = limit,
-    )
+        recoveryBefore: Long,
+        pageSize: Int = 500,
+        onRequest: suspend (RequestLedgerEntity) -> Unit,
+    ): Int {
+        require(kinds.isNotEmpty()) { "recovery kinds must not be empty" }
+        require(states.isNotEmpty()) { "recovery states must not be empty" }
+        require(pageSize > 0) { "recovery page size must be positive" }
+        val databaseKinds = kinds.map { it.name.lowercase(Locale.ROOT) }
+        val databaseStates = states.map { it.name.lowercase(Locale.ROOT) }
+        val snapshotEnd = dao.getRecoverableRequestSnapshotEnd(
+            kinds = databaseKinds,
+            states = databaseStates,
+            recoveryBefore = recoveryBefore,
+        ) ?: return 0
+        var afterUpdatedAt = Long.MIN_VALUE
+        var afterRequestId = ""
+        var inspected = 0
+        while (true) {
+            val page = dao.getRecoverableRequestPage(
+                kinds = databaseKinds,
+                states = databaseStates,
+                recoveryBefore = recoveryBefore,
+                afterUpdatedAt = afterUpdatedAt,
+                afterRequestId = afterRequestId,
+                snapshotUpdatedAt = snapshotEnd.updatedAt,
+                snapshotRequestId = snapshotEnd.requestId,
+                limit = pageSize,
+            )
+            if (page.isEmpty()) break
+            page.forEach { request ->
+                inspected++
+                onRequest(request)
+            }
+            val cursor = page.last()
+            afterUpdatedAt = cursor.updatedAt
+            afterRequestId = cursor.requestId
+            if (page.size < pageSize) break
+        }
+        return inspected
+    }
+
+    /** Fails a corrupt non-terminal request that has no attempt authority to resume. */
+    suspend fun settleOrphanedRequestWithoutAttempt(
+        lease: RequestLease,
+        actor: AuditActor,
+        reason: String,
+    ): RequestLedgerEntity = database.withTransaction {
+        val now = nowMillis()
+        val request = requireLease(lease, now)
+        check(request.activeAttemptId == null) {
+            "Request gained an active attempt while orphan recovery held its lease"
+        }
+        val currentState = request.requestState.asRequestState()
+        if (currentState.isTerminal) return@withTransaction request
+        if (dao.failOrphanedRequestWithoutAttempt(
+                requestId = request.requestId,
+                expectedState = request.requestState,
+                expectedBoundary = request.billableBoundary,
+                expectedStateRevision = request.stateRevision,
+                owner = lease.owner,
+                fencingEpoch = lease.fencingEpoch,
+                now = now,
+            ) != 1
+        ) {
+            throw RequestLedgerConflict("Orphaned request changed concurrently")
+        }
+        faultInjector.checkpoint(RequestLedgerCheckpoint.AFTER_REQUEST_STATE_CAS)
+        appendRequestAudit(
+            requestId = request.requestId,
+            eventKind = "startup_orphan_settled",
+            actor = actor,
+            payload = buildJsonObject {
+                put("previous_state", request.requestState)
+                put("request_state", RequestState.FAILED.dbValue())
+                put("billable_boundary", request.billableBoundary)
+                put("reason", reason)
+                put("recovery_lifecycle_override", true)
+            },
+            now = now,
+        )
+        dao.getRequest(request.requestId) ?: throw RequestLedgerMissing(request.requestId)
+    }
 
     suspend fun createRequest(spec: NewRequestSpec): RequestLedgerEntity = database.withTransaction {
         require(spec.intentKey.isNotBlank()) { "intentKey must not be blank" }

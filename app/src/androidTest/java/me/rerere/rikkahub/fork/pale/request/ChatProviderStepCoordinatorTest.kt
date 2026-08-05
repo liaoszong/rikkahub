@@ -278,6 +278,78 @@ class ChatProviderStepCoordinatorTest {
     }
 
     @Test
+    fun startupRecoveryPagesPastUndispatchedChatPrefix() = runTest {
+        val first = coordinator.openTextStep(
+            ledgerContext(responseMessageId = "10000000-0000-0000-0000-000000000011"),
+            listOf(userMessage("not-sent-1")),
+            params(),
+            provider(),
+            emptyList(),
+        ).requireDispatch()
+        first.prepareDispatch()
+        first.releaseForLocalRepair(IllegalStateException("process stopped before handoff"))
+
+        val second = coordinator.openTextStep(
+            ledgerContext(responseMessageId = "10000000-0000-0000-0000-000000000012"),
+            listOf(userMessage("not-sent-2")),
+            params(),
+            provider(),
+            emptyList(),
+        ).requireDispatch()
+        second.prepareDispatch()
+        second.releaseForLocalRepair(IllegalStateException("process stopped before handoff"))
+
+        val paid = coordinator.openTextStep(
+            ledgerContext(responseMessageId = "10000000-0000-0000-0000-000000000013"),
+            listOf(userMessage("sent")),
+            params(),
+            provider(),
+            emptyList(),
+        ).requireDispatch()
+        paid.prepareDispatch()
+        paid.dispatchObserver.onDispatch()
+        paid.releaseForLocalRepair(IllegalStateException("process stopped after handoff"))
+
+        val report = reconciler().reconcilePending(limit = 2)
+
+        assertEquals(3, report.inspected)
+        assertEquals(2, report.interrupted)
+        assertEquals(1, report.unknown)
+        assertTrue(report.failures.isEmpty())
+        assertEquals("unknown_outcome", repository.getRequest(paid.requestId)!!.requestState)
+    }
+
+    @Test
+    fun startupRecoveryFailsNonTerminalChatWithoutAttemptAuthority() = runTest {
+        val requestId = "10000000-0000-0000-0000-000000000014"
+        database.requestLedgerDao().insertRequest(
+            RequestLedgerEntity(
+                requestId = requestId,
+                intentKey = "missing-attempt-chat",
+                requestKind = "chat_generation",
+                conversationId = CONVERSATION_ID,
+                assistantId = ASSISTANT_ID,
+                messageId = "10000000-0000-0000-0000-000000000015",
+                inputDigest = "missing-attempt-input",
+                capabilitySnapshotJson = "{}",
+                resolverVersion = 1,
+                approvalState = "not_required",
+                requestState = "dispatching",
+                billableBoundary = "not_sent",
+                createdAt = 1,
+                updatedAt = 1,
+            ),
+        )
+
+        val report = reconciler().reconcilePending()
+
+        assertEquals(1, report.inspected)
+        assertEquals(1, report.failed)
+        assertTrue(report.failures.isEmpty())
+        assertEquals("failed", repository.getRequest(me.rerere.pale.id.RequestId(requestId))!!.requestState)
+    }
+
+    @Test
     fun eachDurableToolLoopStepPointsToItsDirectPredecessor() = runTest {
         val context = ledgerContext()
         val firstInput = listOf(userMessage("start"))
@@ -318,11 +390,12 @@ class ChatProviderStepCoordinatorTest {
     }
 
     private fun ledgerContext(
+        responseMessageId: String = RESPONSE_MESSAGE_ID,
         persist: suspend () -> Unit = { persisted++ },
     ) = ChatGenerationLedgerContext(
         conversationId = CONVERSATION_ID,
         assistantId = ASSISTANT_ID,
-        responseMessageId = RESPONSE_MESSAGE_ID,
+        responseMessageId = responseMessageId,
         persistCurrentConversation = persist,
         persistMessages = { persist() },
         loadResponseMessage = { durableResponse },
