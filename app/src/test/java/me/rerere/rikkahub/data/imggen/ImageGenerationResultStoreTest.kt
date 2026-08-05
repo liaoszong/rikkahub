@@ -3,6 +3,7 @@ package me.rerere.rikkahub.data.imggen
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import me.rerere.ai.ui.ImageGenerationItem
+import me.rerere.ai.util.PayloadBudgetExceededException
 import me.rerere.rikkahub.data.db.entity.GenMediaEntity
 import me.rerere.rikkahub.data.repository.MediaAssetIds
 import org.junit.Assert.assertEquals
@@ -13,6 +14,36 @@ import java.nio.file.Files
 import java.util.Base64
 
 class ImageGenerationResultStoreTest {
+    @Test
+    fun `generated Base64 decode allows exact byte limit and rejects one extra byte before allocation`() {
+        val encoded = Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3, 4))
+
+        assertTrue(
+            byteArrayOf(1, 2, 3, 4).contentEquals(
+                decodeGeneratedImageBase64(encoded, maxDecodedBytes = 4),
+            ),
+        )
+        val failure = runCatching {
+            decodeGeneratedImageBase64(encoded, maxDecodedBytes = 3)
+        }.exceptionOrNull()
+
+        assertTrue(failure is PayloadBudgetExceededException)
+        assertEquals(4L, (failure as PayloadBudgetExceededException).actualBytes)
+        assertEquals(3L, failure.limitBytes)
+    }
+
+    @Test
+    fun `generated Base64 decode rejects malformed payload without echoing content`() {
+        val malformed = "data:image/png;base64,AA=A-private-content"
+
+        val failure = runCatching {
+            decodeGeneratedImageBase64(malformed, maxDecodedBytes = 32)
+        }.exceptionOrNull()
+
+        assertTrue(failure is IllegalArgumentException)
+        assertFalse(failure?.message.orEmpty().contains("private-content"))
+    }
+
     @Test
     fun `chat media asset identity is stable per tool output and distinct per index`() {
         val first = MediaAssetIds.forChatToolOutput("tool-call", 0)
@@ -115,7 +146,8 @@ class ImageGenerationResultStoreTest {
 
         assertTrue(runCatching { store.register(metadata) }.isFailure)
         val failedSidecar = imagesDir.resolve("task-0.png.imgmeta.json").readText()
-        assertTrue(failedSidecar.contains("database unavailable"))
+        assertTrue(failedSidecar.contains("IllegalStateException"))
+        assertFalse(failedSidecar.contains("database unavailable"))
         assertTrue(failedSidecar.contains("provider/model-id"))
         assertTrue(failedSidecar.contains("Friendly model name"))
         assertTrue(failedSidecar.contains("provider-uuid"))

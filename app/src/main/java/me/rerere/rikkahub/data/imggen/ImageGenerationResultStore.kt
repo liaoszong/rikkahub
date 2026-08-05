@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import me.rerere.ai.ui.ImageGenerationItem
+import me.rerere.ai.util.inspectBase64Payload
 import me.rerere.rikkahub.data.db.entity.GenMediaEntity
 import me.rerere.rikkahub.data.db.entity.MediaAssetEntity
 import me.rerere.rikkahub.data.files.FileFolders
@@ -168,7 +169,7 @@ class MediaAssetRecovery(
             failures = buildList {
                 addAll(pending.failures)
                 chatFolderSyncFailure?.let { error ->
-                    add("chat_generated_images: ${error.message ?: error::class.java.simpleName}")
+                    add("chat_generated_images: ${error::class.java.simpleName.ifBlank { "UnknownError" }}")
                 }
                 addAll(orphanedChatFiles.failures)
                 addAll(assets.failures)
@@ -227,8 +228,7 @@ internal data class ValidatedImagePayload(
 
 @OptIn(ExperimentalEncodingApi::class)
 internal fun decodeValidatedImage(item: ImageGenerationItem): ValidatedImagePayload {
-    val encoded = item.data.substringAfter("base64,", item.data).trim()
-    val bytes = Base64.decode(encoded)
+    val bytes = decodeGeneratedImageBase64(item.data)
     val detected = detectImageFormat(bytes)
         ?: throw IllegalArgumentException("Unsupported or invalid generated image payload")
     val declared = item.mimeType.normalizedImageMime()
@@ -236,6 +236,33 @@ internal fun decodeValidatedImage(item: ImageGenerationItem): ValidatedImagePayl
         throw IllegalArgumentException("Generated image MIME mismatch: declared $declared, detected ${detected.first}")
     }
     return ValidatedImagePayload(bytes, detected.first, detected.second)
+}
+
+private const val MAX_INLINE_GENERATED_IMAGE_BYTES = 25L * 1024 * 1024
+private const val MAX_IMAGE_DATA_URL_METADATA_LENGTH = 512
+
+@OptIn(ExperimentalEncodingApi::class)
+internal fun decodeGeneratedImageBase64(
+    source: String,
+    maxDecodedBytes: Long = MAX_INLINE_GENERATED_IMAGE_BYTES,
+): ByteArray {
+    val markerIndex = source.indexOf("base64,")
+    if (markerIndex >= 0) {
+        require(markerIndex <= MAX_IMAGE_DATA_URL_METADATA_LENGTH) {
+            "Generated image data URL metadata is invalid"
+        }
+    }
+    val payloadStart = if (markerIndex >= 0) markerIndex + "base64,".length else 0
+    val payload = inspectBase64Payload(
+        source = source,
+        startIndex = payloadStart,
+        maxDecodedBytes = maxDecodedBytes,
+    )
+    return try {
+        Base64.decode(source, payload.payloadStartIndex, payload.payloadEndIndex)
+    } catch (error: IllegalArgumentException) {
+        throw IllegalArgumentException("Generated image payload is not valid Base64", error)
+    }
 }
 
 /**
@@ -499,7 +526,7 @@ internal class PendingImageRegistrationStore(
                 writeMetadata(
                     metadata.copy(
                         registrationAttempts = metadata.registrationAttempts + 1,
-                        lastError = error.message?.take(500) ?: error::class.java.simpleName,
+                        lastError = error::class.java.simpleName.ifBlank { "UnknownError" },
                     ),
                 )
             }.exceptionOrNull()?.let(error::addSuppressed)
@@ -539,7 +566,7 @@ internal class PendingImageRegistrationStore(
             }
             runCatching { register(metadata) }
                 .onSuccess { registered++ }
-                .onFailure { failures += "${file.name}: ${it.message ?: it::class.java.simpleName}" }
+                .onFailure { failures += "metadata registration failed (${it::class.java.simpleName})" }
         }
         return ImageMediaReconciliationResult(
             inspected = inspected,

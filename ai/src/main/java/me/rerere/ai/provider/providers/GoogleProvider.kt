@@ -52,12 +52,14 @@ import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
+import me.rerere.ai.util.AttachmentBudgetTracker
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.encodeBase64
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.removeElements
+import me.rerere.ai.util.rethrowIfPayloadBudgetExceeded
 import me.rerere.ai.util.stringSafe
 import me.rerere.common.http.await
 import me.rerere.common.http.jsonPrimitiveOrNull
@@ -193,13 +195,6 @@ private fun sniffGoogleMediaMimeType(encodedBase64: String?, kind: GoogleMediaKi
 
 private fun String.normalizeMimeType(kind: GoogleMediaKind): String? =
     substringBefore(';').trim().lowercase().takeIf { it.startsWith("${kind.topLevelType}/") }
-
-private fun dataUrlBase64(url: String): String? {
-    if (!url.startsWith("data:", ignoreCase = true)) return null
-    val header = url.substringBefore(',', missingDelimiterValue = "")
-    if (!header.contains(";base64", ignoreCase = true)) return null
-    return url.substringAfter(',', missingDelimiterValue = "").takeIf { it.isNotEmpty() }
-}
 
 class GoogleProvider(private val client: OkHttpClient, context: Context? = null) : Provider<ProviderSetting.Google> {
     private val keyRoulette = if (context != null) KeyRoulette.lru(context) else KeyRoulette.default()
@@ -371,7 +366,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 .build()
         )
 
-        Log.i(TAG, "streamText: model=${params.model.modelId} messages=${messages.size}")
+        Log.i(TAG, "event=operation domain=provider operation=stream_text outcome=started itemCount=${messages.size}")
 
         val groundingAccumulator = GoogleGroundingAccumulator()
         val listener = object : EventSourceListener() {
@@ -442,7 +437,11 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
             ) {
                 var exception = t
 
-                Log.e(TAG, "onFailure: ${t?.javaClass?.simpleName ?: "HttpError"} status=${response?.code}")
+                Log.e(
+                    TAG,
+                    "event=operation domain=provider operation=stream_text outcome=failed " +
+                        "errorClass=${t?.javaClass?.simpleName ?: "HttpError"} httpStatus=${response?.code}",
+                )
 
                 try {
                     if (t == null && response != null) {
@@ -757,27 +756,31 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
     }
 
     private fun buildContents(messages: List<UIMessage>): JsonArray {
+        val attachmentBudget = AttachmentBudgetTracker()
         return buildJsonArray {
             messages
                 .filter { it.role != MessageRole.SYSTEM && it.isValidToUpload() }
                 .forEach { message ->
                     if (message.role == MessageRole.ASSISTANT) {
-                        addModelMessage(message)
+                        addModelMessage(message, attachmentBudget)
                     } else {
-                        addUserMessage(message)
+                        addUserMessage(message, attachmentBudget)
                     }
                 }
         }
     }
 
-    private fun JsonArrayBuilder.addModelMessage(message: UIMessage) {
+    private fun JsonArrayBuilder.addModelMessage(
+        message: UIMessage,
+        attachmentBudget: AttachmentBudgetTracker,
+    ) {
         val groups = groupPartsByToolBoundary(message.parts)
         val partsBuffer = mutableListOf<JsonObject>()
 
         for (group in groups) {
             when (group) {
                 is PartGroup.Content -> {
-                    group.parts.mapNotNull { it.toGooglePart() }.forEach { partsBuffer.add(it) }
+                    group.parts.mapNotNull { it.toGooglePart(attachmentBudget) }.forEach { partsBuffer.add(it) }
                 }
 
                 is PartGroup.Tools -> {
@@ -795,7 +798,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                     add(buildJsonObject {
                         put("role", "user")
                         putJsonArray("parts") {
-                            group.tools.forEach { add(it.toFunctionResponsePart()) }
+                            group.tools.forEach { add(it.toFunctionResponsePart(attachmentBudget)) }
                         }
                     })
                 }
@@ -811,38 +814,49 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
-    private fun JsonArrayBuilder.addUserMessage(message: UIMessage) {
+    private fun JsonArrayBuilder.addUserMessage(
+        message: UIMessage,
+        attachmentBudget: AttachmentBudgetTracker,
+    ) {
         add(buildJsonObject {
             put("role", commonRoleToGoogleRole(message.role))
             putJsonArray("parts") {
-                message.parts.mapNotNull { it.toGooglePart() }.forEach { add(it) }
+                message.parts.mapNotNull { it.toGooglePart(attachmentBudget) }.forEach { add(it) }
             }
         })
     }
 
-    private fun UIMessagePart.toGooglePart(): JsonObject? = when (this) {
+    private fun UIMessagePart.toGooglePart(attachmentBudget: AttachmentBudgetTracker): JsonObject? = when (this) {
         is UIMessagePart.Text -> buildJsonObject {
             put("text", text)
         }
 
         is UIMessagePart.Image -> {
-            encodeBase64(false).getOrNull()?.let { encoded ->
-                buildJsonObject {
-                    put("inlineData", buildJsonObject {
-                        put("mimeType", encoded.mimeType)
-                        put("data", encoded.base64)
-                    })
-                    metadataAs<GoogleThoughtMetadata>()?.thoughtSignature?.let {
-                        put("thoughtSignature", it)
+            encodeBase64(withPrefix = false, budgetTracker = attachmentBudget).fold(
+                onSuccess = { encoded ->
+                    buildJsonObject {
+                        put("inlineData", buildJsonObject {
+                            put("mimeType", encoded.mimeType)
+                            put("data", encoded.base64)
+                        })
+                        metadataAs<GoogleThoughtMetadata>()?.thoughtSignature?.let {
+                            put("thoughtSignature", it)
+                        }
                     }
-                }
-            }
+                },
+                onFailure = { error ->
+                    error.rethrowIfPayloadBudgetExceeded()
+                    null
+                },
+            )
         }
 
         is UIMessagePart.Video -> {
-            googleMediaBase64()?.let { base64Data ->
+            googleMediaBase64(attachmentBudget)?.let { base64Data ->
                 val mime = resolveGoogleMediaMimeType(url, metadata, GoogleMediaKind.VIDEO, base64Data)
-                mime.diagnostic?.let { Log.w(TAG, it) }
+                if (mime.diagnostic != null) {
+                    Log.w(TAG, "event=operation domain=provider operation=resolve_video_mime outcome=failed")
+                }
                 buildJsonObject {
                     put("inlineData", buildJsonObject {
                         put("mimeType", mime.mimeType)
@@ -853,9 +867,11 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
 
         is UIMessagePart.Audio -> {
-            googleMediaBase64()?.let { base64Data ->
+            googleMediaBase64(attachmentBudget)?.let { base64Data ->
                 val mime = resolveGoogleMediaMimeType(url, metadata, GoogleMediaKind.AUDIO, base64Data)
-                mime.diagnostic?.let { Log.w(TAG, it) }
+                if (mime.diagnostic != null) {
+                    Log.w(TAG, "event=operation domain=provider operation=resolve_audio_mime outcome=failed")
+                }
                 buildJsonObject {
                     put("inlineData", buildJsonObject {
                         put("mimeType", mime.mimeType)
@@ -868,11 +884,23 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         else -> null
     }
 
-    private fun UIMessagePart.Video.googleMediaBase64(): String? =
-        dataUrlBase64(url) ?: encodeBase64(false).getOrNull()
+    private fun UIMessagePart.Video.googleMediaBase64(attachmentBudget: AttachmentBudgetTracker): String? =
+        encodeBase64(withPrefix = false, budgetTracker = attachmentBudget).fold(
+            onSuccess = { it },
+            onFailure = { error ->
+                error.rethrowIfPayloadBudgetExceeded()
+                null
+            },
+        )
 
-    private fun UIMessagePart.Audio.googleMediaBase64(): String? =
-        dataUrlBase64(url) ?: encodeBase64(false).getOrNull()
+    private fun UIMessagePart.Audio.googleMediaBase64(attachmentBudget: AttachmentBudgetTracker): String? =
+        encodeBase64(withPrefix = false, budgetTracker = attachmentBudget).fold(
+            onSuccess = { it },
+            onFailure = { error ->
+                error.rethrowIfPayloadBudgetExceeded()
+                null
+            },
+        )
 
     private fun UIMessagePart.Tool.toFunctionCallPart() = buildJsonObject {
         put("functionCall", buildJsonObject {
@@ -884,7 +912,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
-    private fun UIMessagePart.Tool.toFunctionResponsePart() = buildJsonObject {
+    private fun UIMessagePart.Tool.toFunctionResponsePart(attachmentBudget: AttachmentBudgetTracker) = buildJsonObject {
             put("functionResponse", buildJsonObject {
                 put("name", toolName)
 
@@ -895,7 +923,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 // 过滤出最终包含 inlineData 的数据块
                 val mediaGoogleParts = output
                     .filter { it !is UIMessagePart.Text }
-                    .mapNotNull { it.toGooglePart() }
+                    .mapNotNull { it.toGooglePart(attachmentBudget) }
                     .filter { it.containsKey("inlineData") } 
 
                 // 3. 构建给模型看的结构化 response 节点

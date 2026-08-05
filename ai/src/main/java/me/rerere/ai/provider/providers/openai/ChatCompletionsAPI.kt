@@ -46,12 +46,14 @@ import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.util.AttachmentBudgetTracker
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.encodeBase64
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.parseErrorDetail
+import me.rerere.ai.util.rethrowIfPayloadBudgetExceeded
 import me.rerere.ai.util.stringSafe
 import me.rerere.common.http.await
 import me.rerere.common.http.jsonArrayOrNull
@@ -98,7 +100,7 @@ class ChatCompletionsAPI(
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        Log.i(TAG, "generateText: model=${params.model.modelId} messages=${messages.size}")
+        Log.i(TAG, "event=operation domain=provider operation=generate_text outcome=started itemCount=${messages.size}")
 
         params.dispatchObserver.onDispatch()
         val response = client.newCall(request).await()
@@ -161,7 +163,7 @@ class ChatCompletionsAPI(
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        Log.i(TAG, "streamText: model=${params.model.modelId} messages=${messages.size}")
+        Log.i(TAG, "event=operation domain=provider operation=stream_text outcome=started itemCount=${messages.size}")
 
         val listener = object : EventSourceListener() {
             override fun onEvent(
@@ -224,7 +226,11 @@ class ChatCompletionsAPI(
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                 var exception = t
 
-                Log.e(TAG, "onFailure: ${t?.javaClass?.simpleName ?: "HttpError"} status=${response?.code}")
+                Log.e(
+                    TAG,
+                    "event=operation domain=provider operation=stream_text outcome=failed " +
+                        "errorClass=${t?.javaClass?.simpleName ?: "HttpError"} httpStatus=${response?.code}",
+                )
 
                 val bodyRaw = response?.body?.stringSafe()
                 try {
@@ -476,6 +482,7 @@ class ChatCompletionsAPI(
         includeHistoryReasoning: Boolean = true,
         supportInputModalities: List<Modality> = listOf(Modality.TEXT, Modality.IMAGE),
     ) = buildJsonArray {
+        val attachmentBudget = AttachmentBudgetTracker()
         val filteredMessages = messages.filter { it.isValidToUpload() }
 
         filteredMessages.forEach { message ->
@@ -484,9 +491,10 @@ class ChatCompletionsAPI(
                     message = message,
                     includeReasoning = includeHistoryReasoning,
                     supportInputModalities = supportInputModalities,
+                    attachmentBudget = attachmentBudget,
                 )
             } else {
-                addNonAssistantMessage(message)
+                addNonAssistantMessage(message, attachmentBudget)
             }
         }
     }
@@ -495,6 +503,7 @@ class ChatCompletionsAPI(
         message: UIMessage,
         includeReasoning: Boolean,
         supportInputModalities: List<Modality>,
+        attachmentBudget: AttachmentBudgetTracker,
     ) {
         val groups = groupPartsByToolBoundary(message.parts)
         val contentBuffer = mutableListOf<UIMessagePart>()
@@ -519,7 +528,8 @@ class ChatCompletionsAPI(
                     buildAssistantMessageJson(
                         contentParts = contentBuffer,
                         tools = group.tools,
-                        reasoningPart = reasoningPart
+                        reasoningPart = reasoningPart,
+                        attachmentBudget = attachmentBudget,
                     )?.let { assistantMessage ->
                         add(assistantMessage)
                     }
@@ -532,7 +542,10 @@ class ChatCompletionsAPI(
                             put("role", "tool")
                             put("name", tool.toolName)
                             put("tool_call_id", tool.toolCallId)
-                            put("content", tool.toToolResultContent(supportInputModalities))
+                            put(
+                                "content",
+                                tool.toToolResultContent(supportInputModalities, attachmentBudget),
+                            )
                         })
                     }
                 }
@@ -544,7 +557,8 @@ class ChatCompletionsAPI(
             buildAssistantMessageJson(
                 contentParts = contentBuffer,
                 tools = emptyList(),
-                reasoningPart = reasoningPart
+                reasoningPart = reasoningPart,
+                attachmentBudget = attachmentBudget,
             )?.let { assistantMessage ->
                 add(assistantMessage)
             }
@@ -554,7 +568,8 @@ class ChatCompletionsAPI(
     private fun buildAssistantMessageJson(
         contentParts: List<UIMessagePart>,
         tools: List<UIMessagePart.Tool>,
-        reasoningPart: UIMessagePart.Reasoning?
+        reasoningPart: UIMessagePart.Reasoning?,
+        attachmentBudget: AttachmentBudgetTracker,
     ): JsonObject? {
         val hasUsableContent = contentParts.any { part ->
             when (part) {
@@ -594,12 +609,13 @@ class ChatCompletionsAPI(
 
                             is UIMessagePart.Image -> {
                                 add(buildJsonObject {
-                                    part.encodeBase64().onSuccess { encodedImage ->
+                                    part.encodeBase64(budgetTracker = attachmentBudget).onSuccess { encodedImage ->
                                         put("type", "image_url")
                                         put("image_url", buildJsonObject {
                                             put("url", encodedImage.base64)
                                         })
                                     }.onFailure {
+                                        it.rethrowIfPayloadBudgetExceeded()
                                         Log.w(TAG, "encode assistant image failed (${it.javaClass.simpleName})")
                                         put("type", "text")
                                         put("text", "")
@@ -632,7 +648,10 @@ class ChatCompletionsAPI(
         }
     }
 
-    private fun JsonArrayBuilder.addNonAssistantMessage(message: UIMessage) {
+    private fun JsonArrayBuilder.addNonAssistantMessage(
+        message: UIMessage,
+        attachmentBudget: AttachmentBudgetTracker,
+    ) {
         add(buildJsonObject {
             put("role", JsonPrimitive(message.role.name.lowercase()))
 
@@ -651,12 +670,13 @@ class ChatCompletionsAPI(
 
                             is UIMessagePart.Image -> {
                                 add(buildJsonObject {
-                                    part.encodeBase64().onSuccess { encodedImage ->
+                                    part.encodeBase64(budgetTracker = attachmentBudget).onSuccess { encodedImage ->
                                         put("type", "image_url")
                                         put("image_url", buildJsonObject {
                                             put("url", encodedImage.base64)
                                         })
                                     }.onFailure {
+                                        it.rethrowIfPayloadBudgetExceeded()
                                         Log.w(TAG, "encode message image failed (${it.javaClass.simpleName})")
                                         put("type", "text")
                                         put("text", "")
@@ -672,7 +692,10 @@ class ChatCompletionsAPI(
         })
     }
 
-    private fun UIMessagePart.Tool.toToolResultContent(supportInputModalities: List<Modality>): JsonElement {
+    private fun UIMessagePart.Tool.toToolResultContent(
+        supportInputModalities: List<Modality>,
+        attachmentBudget: AttachmentBudgetTracker,
+    ): JsonElement {
         // 只考虑文字和图片;只有模型支持图片输入时,图片才作为多模态内容回传,否则以文本占位,避免发给不支持的模型报错
         val supportsImageInput = Modality.IMAGE in supportInputModalities
         val hasImageToSend = output.any { it is UIMessagePart.Image && supportsImageInput }
@@ -699,12 +722,13 @@ class ChatCompletionsAPI(
 
                         is UIMessagePart.Image -> {
                             add(buildJsonObject {
-                                part.encodeBase64().onSuccess { encodedImage ->
+                                part.encodeBase64(budgetTracker = attachmentBudget).onSuccess { encodedImage ->
                                     put("type", "image_url")
                                     put("image_url", buildJsonObject {
                                         put("url", encodedImage.base64)
                                     })
                                 }.onFailure {
+                                    it.rethrowIfPayloadBudgetExceeded()
                                     Log.w(TAG, "encode tool result image failed (${it.javaClass.simpleName})")
                                     put("type", "text")
                                     put("text", "Error: Failed to encode image to base64")

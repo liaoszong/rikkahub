@@ -45,12 +45,14 @@ import me.rerere.ai.ui.UIMessageChoice
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
+import me.rerere.ai.util.AttachmentBudgetTracker
 import me.rerere.ai.util.KeyRoulette
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.encodeBase64
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.parseErrorDetail
+import me.rerere.ai.util.rethrowIfPayloadBudgetExceeded
 import me.rerere.ai.util.stringSafe
 import me.rerere.common.http.await
 import me.rerere.common.http.jsonObjectOrNull
@@ -96,7 +98,7 @@ class ResponseAPI(
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        Log.i(TAG, "generateText: model=${params.model.modelId} messages=${messages.size}")
+        Log.i(TAG, "event=operation domain=provider operation=generate_text outcome=started itemCount=${messages.size}")
 
         params.dispatchObserver.onDispatch()
         val response = client.newCall(request).await()
@@ -134,7 +136,7 @@ class ResponseAPI(
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        Log.i(TAG, "streamText: model=${params.model.modelId} messages=${messages.size}")
+        Log.i(TAG, "event=operation domain=provider operation=stream_text outcome=started itemCount=${messages.size}")
 
         val citationPartTracker = ResponseTextPartOrdinalTracker()
         val listener = object : EventSourceListener() {
@@ -148,7 +150,7 @@ class ResponseAPI(
                     close()
                     return
                 }
-                Log.d(TAG, "onEvent: id=$id type=$type")
+                Log.d(TAG, "event=operation domain=provider operation=process_stream_event outcome=started")
                 val json = json.parseToJsonElement(data).jsonObject
                 val chunk = parseResponseDelta(json, citationPartTracker)
                 if (chunk != null) {
@@ -164,7 +166,11 @@ class ResponseAPI(
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                 var exception = t
 
-                Log.e(TAG, "onFailure: ${t?.javaClass?.simpleName ?: "HttpError"} status=${response?.code}")
+                Log.e(
+                    TAG,
+                    "event=operation domain=provider operation=stream_text outcome=failed " +
+                        "errorClass=${t?.javaClass?.simpleName ?: "HttpError"} httpStatus=${response?.code}",
+                )
 
                 val bodyRaw = response?.body?.stringSafe()
                 try {
@@ -302,18 +308,22 @@ class ResponseAPI(
         ?.let { "Bearer ${keyRoulette.next(it, id.toString())}" }
 
     internal fun buildMessages(messages: List<UIMessage>) = buildJsonArray {
+        val attachmentBudget = AttachmentBudgetTracker()
         messages
             .filter { it.isValidToUpload() && it.role != MessageRole.SYSTEM }
             .forEach { message ->
                 if (message.role == MessageRole.ASSISTANT) {
-                    addAssistantItems(message)
+                    addAssistantItems(message, attachmentBudget)
                 } else {
-                    addUserItems(message)
+                    addUserItems(message, attachmentBudget)
                 }
             }
     }
 
-    private fun JsonArrayBuilder.addAssistantItems(message: UIMessage) {
+    private fun JsonArrayBuilder.addAssistantItems(
+        message: UIMessage,
+        attachmentBudget: AttachmentBudgetTracker,
+    ) {
         val groups = groupPartsByToolBoundary(message.parts)
         val contentBuffer = mutableListOf<UIMessagePart>()
 
@@ -325,7 +335,7 @@ class ResponseAPI(
                             is UIMessagePart.Reasoning -> {
                                 // 先输出累积的文本/图片内容
                                 if (contentBuffer.isNotEmpty()) {
-                                    addContentItem(MessageRole.ASSISTANT, contentBuffer)
+                                    addContentItem(MessageRole.ASSISTANT, contentBuffer, attachmentBudget)
                                     contentBuffer.clear()
                                 }
                                 // 输出 reasoning item
@@ -349,10 +359,10 @@ class ResponseAPI(
 
                             is UIMessagePart.Image -> {
                                 if (contentBuffer.isNotEmpty()) {
-                                    addContentItem(MessageRole.ASSISTANT, contentBuffer)
+                                    addContentItem(MessageRole.ASSISTANT, contentBuffer, attachmentBudget)
                                     contentBuffer.clear()
                                 }
-                                addContentItem(MessageRole.USER, listOf(part))
+                                addContentItem(MessageRole.USER, listOf(part), attachmentBudget)
                             }
 
                             is UIMessagePart.Text -> {
@@ -367,7 +377,7 @@ class ResponseAPI(
                 is PartGroup.Tools -> {
                     // 先输出累积的内容
                     if (contentBuffer.isNotEmpty()) {
-                        addContentItem(MessageRole.ASSISTANT, contentBuffer)
+                        addContentItem(MessageRole.ASSISTANT, contentBuffer, attachmentBudget)
                         contentBuffer.clear()
                     }
 
@@ -389,10 +399,11 @@ class ResponseAPI(
                                     tool.output.forEach { part ->
                                         when (part) {
                                             is UIMessagePart.Image -> add(buildJsonObject {
-                                                part.encodeBase64().onSuccess { encoded ->
+                                                part.encodeBase64(budgetTracker = attachmentBudget).onSuccess { encoded ->
                                                     put("type", "input_image")
                                                     put("image_url", encoded.base64)
                                                 }.onFailure {
+                                                    it.rethrowIfPayloadBudgetExceeded()
                                                     Log.w(TAG, "encode tool image failed (${it.javaClass.simpleName})")
                                                     put("type", "input_text")
                                                     put("text", "Error: Failed to encode image to base64")
@@ -421,18 +432,25 @@ class ResponseAPI(
 
         // 输出剩余内容
         if (contentBuffer.isNotEmpty()) {
-            addContentItem(MessageRole.ASSISTANT, contentBuffer)
+            addContentItem(MessageRole.ASSISTANT, contentBuffer, attachmentBudget)
         }
     }
 
-    private fun JsonArrayBuilder.addUserItems(message: UIMessage) {
+    private fun JsonArrayBuilder.addUserItems(
+        message: UIMessage,
+        attachmentBudget: AttachmentBudgetTracker,
+    ) {
         val contentParts = message.parts.filter { it is UIMessagePart.Text || it is UIMessagePart.Image }
         if (contentParts.isNotEmpty()) {
-            addContentItem(message.role, contentParts)
+            addContentItem(message.role, contentParts, attachmentBudget)
         }
     }
 
-    private fun JsonArrayBuilder.addContentItem(role: MessageRole, parts: List<UIMessagePart>) {
+    private fun JsonArrayBuilder.addContentItem(
+        role: MessageRole,
+        parts: List<UIMessagePart>,
+        attachmentBudget: AttachmentBudgetTracker,
+    ) {
         if (parts.isEmpty()) return
 
         add(buildJsonObject {
@@ -453,10 +471,11 @@ class ResponseAPI(
 
                             is UIMessagePart.Image -> {
                                 add(buildJsonObject {
-                                    part.encodeBase64().onSuccess { encodedImage ->
+                                    part.encodeBase64(budgetTracker = attachmentBudget).onSuccess { encodedImage ->
                                         put("type", "input_image")
                                         put("image_url", encodedImage.base64)
                                     }.onFailure {
+                                        it.rethrowIfPayloadBudgetExceeded()
                                         Log.w(TAG, "encode message image failed (${it.javaClass.simpleName})")
                                         put("type", "input_text")
                                         put("text", "Error: Failed to encode image to base64")

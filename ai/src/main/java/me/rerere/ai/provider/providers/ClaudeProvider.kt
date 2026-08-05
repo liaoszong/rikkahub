@@ -48,11 +48,13 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
 import me.rerere.ai.ui.toMetadata
 import me.rerere.ai.util.KeyRoulette
+import me.rerere.ai.util.AttachmentBudgetTracker
 import me.rerere.ai.util.configureReferHeaders
 import me.rerere.ai.util.encodeBase64
 import me.rerere.ai.util.json
 import me.rerere.ai.util.mergeCustomBody
 import me.rerere.ai.util.parseErrorDetail
+import me.rerere.ai.util.rethrowIfPayloadBudgetExceeded
 import me.rerere.ai.util.stringSafe
 import me.rerere.common.http.await
 import me.rerere.common.http.jsonPrimitiveOrNull
@@ -177,7 +179,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        Log.i(TAG, "generateText: model=${params.model.modelId} messages=${messages.size}")
+        Log.i(TAG, "event=operation domain=provider operation=generate_text outcome=started itemCount=${messages.size}")
 
         params.dispatchObserver.onDispatch()
         val response = client.newCall(request).await()
@@ -230,7 +232,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             .configureReferHeaders(providerSetting.baseUrl)
             .build()
 
-        Log.i(TAG, "streamText: model=${params.model.modelId} messages=${messages.size}")
+        Log.i(TAG, "event=operation domain=provider operation=stream_text outcome=started itemCount=${messages.size}")
 
         val listener = object : EventSourceListener() {
             override fun onEvent(
@@ -239,7 +241,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 type: String?,
                 data: String
             ) {
-                Log.d(TAG, "onEvent: type=$type")
+                Log.d(TAG, "event=operation domain=provider operation=process_stream_event outcome=started")
                 if (data == "[DONE]") {
                     return
                 }
@@ -291,7 +293,11 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
                 var exception = t
 
-                Log.e(TAG, "onFailure: ${t?.javaClass?.simpleName ?: "HttpError"} status=${response?.code}")
+                Log.e(
+                    TAG,
+                    "event=operation domain=provider operation=stream_text outcome=failed " +
+                        "errorClass=${t?.javaClass?.simpleName ?: "HttpError"} httpStatus=${response?.code}",
+                )
 
                 val bodyRaw = response?.body?.stringSafe()
                 try {
@@ -453,13 +459,14 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         promptCaching: Boolean,
         promptCacheTtl: ClaudePromptCacheTtl
     ) = buildJsonArray {
+        val attachmentBudget = AttachmentBudgetTracker()
         messages
             .filter { it.isValidToUpload() && it.role != MessageRole.SYSTEM }
             .forEach { message ->
                 if (message.role == MessageRole.ASSISTANT) {
-                    addAssistantMessage(message)
+                    addAssistantMessage(message, attachmentBudget)
                 } else {
-                    addUserMessage(message)
+                    addUserMessage(message, attachmentBudget)
                 }
             }
     }.let { messagesArray ->
@@ -508,14 +515,17 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         })
     }
 
-    private fun JsonArrayBuilder.addAssistantMessage(message: UIMessage) {
+    private fun JsonArrayBuilder.addAssistantMessage(
+        message: UIMessage,
+        attachmentBudget: AttachmentBudgetTracker,
+    ) {
         val groups = groupPartsByToolBoundary(message.parts)
         val contentBuffer = mutableListOf<JsonObject>()
 
         for (group in groups) {
             when (group) {
                 is PartGroup.Content -> {
-                    group.parts.mapNotNull { it.toContentBlock() }.forEach { contentBuffer.add(it) }
+                    group.parts.mapNotNull { it.toContentBlock(attachmentBudget) }.forEach { contentBuffer.add(it) }
                 }
 
                 is PartGroup.Tools -> {
@@ -533,7 +543,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     add(buildJsonObject {
                         put("role", "user")
                         putJsonArray("content") {
-                            group.tools.forEach { add(it.toToolResultBlock()) }
+                            group.tools.forEach { add(it.toToolResultBlock(attachmentBudget)) }
                         }
                     })
                 }
@@ -549,23 +559,26 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         }
     }
 
-    private fun JsonArrayBuilder.addUserMessage(message: UIMessage) {
+    private fun JsonArrayBuilder.addUserMessage(
+        message: UIMessage,
+        attachmentBudget: AttachmentBudgetTracker,
+    ) {
         add(buildJsonObject {
             put("role", message.role.name.lowercase())
             putJsonArray("content") {
-                message.parts.mapNotNull { it.toContentBlock() }.forEach { add(it) }
+                message.parts.mapNotNull { it.toContentBlock(attachmentBudget) }.forEach { add(it) }
             }
         })
     }
 
-    private fun UIMessagePart.toContentBlock(): JsonObject? = when (this) {
+    private fun UIMessagePart.toContentBlock(attachmentBudget: AttachmentBudgetTracker): JsonObject? = when (this) {
         is UIMessagePart.Text -> buildJsonObject {
             put("type", "text")
             put("text", text)
         }
 
         is UIMessagePart.Image -> buildJsonObject {
-            encodeBase64(withPrefix = false).onSuccess { encoded ->
+            encodeBase64(withPrefix = false, budgetTracker = attachmentBudget).onSuccess { encoded ->
                 put("type", "image")
                 put("source", buildJsonObject {
                     put("type", "base64")
@@ -573,6 +586,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     put("data", encoded.base64)
                 })
             }.onFailure {
+                it.rethrowIfPayloadBudgetExceeded()
                 Log.w(TAG, "encode image failed (${it.javaClass.simpleName})")
                 put("type", "text")
                 put("text", "")
@@ -595,11 +609,11 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
         put("input", inputAsJson())
     }
 
-    private fun UIMessagePart.Tool.toToolResultBlock() = buildJsonObject {
+    private fun UIMessagePart.Tool.toToolResultBlock(attachmentBudget: AttachmentBudgetTracker) = buildJsonObject {
         put("type", "tool_result")
         put("tool_use_id", toolCallId)
         putJsonArray("content") {
-            output.mapNotNull { it.toContentBlock() }.forEach { add(it) }
+            output.mapNotNull { it.toContentBlock(attachmentBudget) }.forEach { add(it) }
         }
     }
 
