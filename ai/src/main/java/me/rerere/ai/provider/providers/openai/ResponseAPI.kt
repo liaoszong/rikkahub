@@ -139,6 +139,7 @@ class ResponseAPI(
         Log.i(TAG, "event=operation domain=provider operation=stream_text outcome=started itemCount=${messages.size}")
 
         val citationPartTracker = ResponseTextPartOrdinalTracker()
+        val toolCallTracker = ResponseToolCallTracker()
         val listener = object : EventSourceListener() {
             override fun onEvent(
                 eventSource: EventSource,
@@ -152,7 +153,7 @@ class ResponseAPI(
                 }
                 Log.d(TAG, "event=operation domain=provider operation=process_stream_event outcome=started")
                 val json = json.parseToJsonElement(data).jsonObject
-                val chunk = parseResponseDelta(json, citationPartTracker)
+                val chunk = parseResponseDelta(json, citationPartTracker, toolCallTracker)
                 if (chunk != null) {
                     trySend(chunk).onFailure { e ->
                         Log.w(TAG, "onEvent: chunk dropped (${e?.javaClass?.simpleName})")
@@ -381,7 +382,9 @@ class ResponseAPI(
                         contentBuffer.clear()
                     }
 
-                    // 输出 function_call + function_call_output
+                    // A parallel Responses API tool batch must declare every call before any
+                    // output. Interleaving call/output pairs can make compatible gateways treat
+                    // later calls as belonging to a different turn.
                     group.tools.forEach { tool ->
                         add(buildJsonObject {
                             put("type", "function_call")
@@ -390,6 +393,8 @@ class ResponseAPI(
                             // 使用 inputAsJson() 归一化，避免流式中断导致的残缺 JSON 被发送
                             put("arguments", tool.inputAsJson().toString())
                         })
+                    }
+                    group.tools.forEach { tool ->
                         add(buildJsonObject {
                             put("type", "function_call_output")
                             put("call_id", tool.toolCallId)
@@ -491,9 +496,10 @@ class ResponseAPI(
         })
     }
 
-    private fun parseResponseDelta(
+    internal fun parseResponseDelta(
         jsonObject: JsonObject,
         citationPartTracker: ResponseTextPartOrdinalTracker,
+        toolCallTracker: ResponseToolCallTracker,
     ): MessageChunk? {
         val chunkType = jsonObject["type"]?.jsonPrimitive?.content ?: error("chunk type not found")
 
@@ -601,6 +607,10 @@ class ResponseAPI(
                 val type = item["type"]?.jsonPrimitive?.content ?: error("chunk type not found")
                 val id = item["id"]?.jsonPrimitive?.content ?: error("chunk id not found")
                 if (type == "function_call") {
+                    val callId = toolCallTracker.register(
+                        itemId = id,
+                        callId = item["call_id"]?.jsonPrimitive?.contentOrNull,
+                    )
                     return MessageChunk(
                         id = id,
                         model = "",
@@ -612,7 +622,7 @@ class ResponseAPI(
                                     role = MessageRole.ASSISTANT,
                                     parts = listOf(
                                         UIMessagePart.Tool(
-                                            toolCallId = id,
+                                            toolCallId = callId,
                                             toolName = item["name"]?.jsonPrimitive?.content ?: "",
                                             input = item["arguments"]?.jsonPrimitive?.content
                                                 ?: "",
@@ -724,12 +734,13 @@ class ResponseAPI(
             }
 
             "response.function_call_arguments.done" -> {
-                val toolCallId =
+                val itemId =
                     jsonObject["item_id"]?.jsonPrimitive?.content ?: error("item_id not found")
+                val toolCallId = toolCallTracker.resolve(itemId)
                 val arguments =
                     jsonObject["arguments"]?.jsonPrimitive?.content ?: error("arguments not found")
                 return MessageChunk(
-                    id = toolCallId,
+                    id = itemId,
                     model = "",
                     choices = listOf(
                         UIMessageChoice(
@@ -936,6 +947,25 @@ internal class ResponseTextPartOrdinalTracker {
         return listOf(outputIndex?.toString().orEmpty(), itemId.orEmpty(), resolvedContentIndex.toString())
             .joinToString(":")
     }
+}
+
+/**
+ * Responses streaming events use two identities for a function call: the output item's `id` for
+ * subsequent stream events, and the semantic `call_id` that must be persisted and sent back in a
+ * `function_call_output`. Keep this state per response stream so concurrent chats cannot cross.
+ */
+internal class ResponseToolCallTracker {
+    private val callIdsByItemId = linkedMapOf<String, String>()
+
+    fun register(itemId: String, callId: String?): String {
+        val semanticCallId = callIdsByItemId[itemId]
+            ?: callId?.takeIf(String::isNotBlank)
+            ?: itemId
+        callIdsByItemId[itemId] = semanticCallId
+        return semanticCallId
+    }
+
+    fun resolve(itemId: String): String = callIdsByItemId[itemId] ?: itemId
 }
 
 private data class ResponseTextPartKey(
