@@ -235,6 +235,11 @@ class GenMediaRepository(
      * Recovers managed chat-generated files whose file commit outlived a failed Room
      * registration. UUID file names retain the pre-reserved paid-request identity;
      * older random managed files receive a deterministic legacy identity.
+     *
+     * Keyset pagination is deliberate: a permanently damaged early file must not keep
+     * later paid outputs outside a fixed recovery window. Existing legacy placeholders
+     * are only upgraded when the durable task store supplies matching authoritative
+     * metadata; recovery never guesses lineage or replays a provider request.
      */
     suspend fun reconcileUnregisteredGeneratedFiles(
         folder: String,
@@ -244,32 +249,75 @@ class GenMediaRepository(
     ): MediaAssetReconciliationResult = withContext(Dispatchers.IO) {
         require(limit in 1..2_048) { "Reconciliation limit must be between 1 and 2048" }
         val failures = mutableListOf<String>()
+        var inspected = 0
         var registered = 0
         var missing = 0
-        val candidates = dao.getUnregisteredManagedFiles(folder, limit)
-        candidates.forEach { managedFile ->
-            runCatching {
-                val file = resolveFile(managedFile.relativePath)
-                val recoveredAssetId = managedFile.recoverableAssetId()
-                val asset = registerGeneratedAsset(
-                    managedFile = managedFile,
-                    file = file,
-                    registration = registrationsByAssetId[recoveredAssetId]
-                        ?: GeneratedMediaAssetRegistration(
-                            assetId = recoveredAssetId,
-                            modelId = LEGACY_CHAT_MODEL_ID,
-                            prompt = "",
-                            createdAt = managedFile.createdAt,
-                        ),
+        suspend fun reconcileCandidates(loadPage: suspend (afterId: Long) -> List<ManagedFileEntity>) {
+            var afterId = 0L
+            while (true) {
+                val candidates = loadPage(afterId)
+                if (candidates.isEmpty()) break
+                candidates.forEach { managedFile ->
+                    inspected++
+                    runCatching {
+                        val recoveredAssetId = managedFile.recoverableAssetId()
+                        val durableRegistration = registrationsByAssetId[recoveredAssetId]?.also { registration ->
+                            require(registration.assetId == recoveredAssetId) {
+                                "Durable media registration identity does not match its recovery key"
+                            }
+                        }
+                        val existing = dao.getByPath(managedFile.relativePath)
+                        if (existing != null) {
+                            val upgradeable = existing.modelId == LEGACY_CHAT_MODEL_ID &&
+                                existing.prompt.isBlank() && existing.assetId == recoveredAssetId
+                            if (!upgradeable || durableRegistration == null) {
+                                if (existing.storageState == MediaAssetEntity.STORAGE_MISSING) missing++
+                                return@runCatching
+                            }
+                        }
+                        val file = resolveFile(managedFile.relativePath)
+                        val asset = registerGeneratedAsset(
+                            managedFile = managedFile,
+                            file = file,
+                            registration = durableRegistration
+                                ?: GeneratedMediaAssetRegistration(
+                                    assetId = recoveredAssetId,
+                                    modelId = LEGACY_CHAT_MODEL_ID,
+                                    prompt = "",
+                                    createdAt = managedFile.createdAt,
+                                ),
+                        )
+                        registered++
+                        if (asset.storageState == MediaAssetEntity.STORAGE_MISSING) missing++
+                    }.onFailure { error ->
+                        failures += "${managedFile.relativePath}: ${error.message ?: error::class.java.simpleName}"
+                    }
+                }
+                afterId = candidates.last().id
+                if (candidates.size < limit) break
+            }
+        }
+
+        reconcileCandidates { afterId ->
+            dao.getUnregisteredGeneratedRecoveryCandidates(
+                folder = folder,
+                afterId = afterId,
+                limit = limit,
+            )
+        }
+        registrationsByAssetId.keys.chunked(RECOVERY_ASSET_ID_QUERY_CHUNK).forEach { assetIds ->
+            reconcileCandidates { afterId ->
+                dao.getUpgradeableGeneratedRecoveryCandidates(
+                    folder = folder,
+                    afterId = afterId,
+                    legacyModelId = LEGACY_CHAT_MODEL_ID,
+                    assetIds = assetIds,
+                    limit = limit,
                 )
-                registered++
-                if (asset.storageState == MediaAssetEntity.STORAGE_MISSING) missing++
-            }.onFailure { error ->
-                failures += "${managedFile.relativePath}: ${error.message ?: error::class.java.simpleName}"
             }
         }
         MediaAssetReconciliationResult(
-            inspected = candidates.size,
+            inspected = inspected,
             registered = registered,
             missing = missing,
             failures = failures,
@@ -654,6 +702,7 @@ private fun ManagedFileEntity.recoverableAssetId(): String {
 }
 
 private const val LEGACY_CHAT_MODEL_ID = "legacy-chat-image"
+private const val RECOVERY_ASSET_ID_QUERY_CHUNK = 400
 
 /** Preferred name for new call sites; retained as an alias to avoid a second repository binding. */
 typealias MediaAssetRepository = GenMediaRepository

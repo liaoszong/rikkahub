@@ -96,10 +96,29 @@ interface GenMediaDAO : ConversationMediaReferenceDAO {
     @Query(
         "SELECT managed.* FROM managed_files AS managed " +
             "LEFT JOIN GenMediaEntity AS media ON media.path = managed.relative_path " +
-            "WHERE managed.folder = :folder AND media.id IS NULL " +
-            "ORDER BY managed.created_at ASC LIMIT :limit",
+            "WHERE managed.folder = :folder AND managed.id > :afterId AND media.id IS NULL " +
+            "ORDER BY managed.id ASC LIMIT :limit",
     )
-    suspend fun getUnregisteredManagedFiles(folder: String, limit: Int): List<ManagedFileEntity>
+    suspend fun getUnregisteredGeneratedRecoveryCandidates(
+        folder: String,
+        afterId: Long,
+        limit: Int,
+    ): List<ManagedFileEntity>
+
+    @Query(
+        "SELECT managed.* FROM managed_files AS managed " +
+            "INNER JOIN GenMediaEntity AS media ON media.path = managed.relative_path " +
+            "WHERE managed.folder = :folder AND managed.id > :afterId " +
+            "AND media.model_id = :legacyModelId AND media.prompt = '' " +
+            "AND media.asset_id IN (:assetIds) ORDER BY managed.id ASC LIMIT :limit",
+    )
+    suspend fun getUpgradeableGeneratedRecoveryCandidates(
+        folder: String,
+        afterId: Long,
+        legacyModelId: String,
+        assetIds: List<String>,
+        limit: Int,
+    ): List<ManagedFileEntity>
 
     @Query(
         "SELECT * FROM GenMediaEntity " +

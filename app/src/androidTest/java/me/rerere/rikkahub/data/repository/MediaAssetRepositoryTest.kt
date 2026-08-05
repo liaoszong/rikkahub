@@ -31,7 +31,7 @@ class MediaAssetRepositoryTest {
         val file = directory.resolve("$assetId.png").apply { writeBytes(byteArrayOf(1, 2, 3)) }
         try {
             val files = FilesRepository(database.managedFileDao())
-            val managed = files.insert(
+            files.insert(
                 ManagedFileEntity(
                     folder = "chat_generated_images",
                     relativePath = "chat_generated_images/${file.name}",
@@ -61,22 +61,26 @@ class MediaAssetRepositoryTest {
                 resolveFile = { file },
             )
 
-            val upgraded = repository.registerGeneratedAsset(
-                managedFile = managed,
-                file = file,
-                registration = GeneratedMediaAssetRegistration(
-                    assetId = assetId,
-                    origin = MediaAssetEntity.ORIGIN_AI_EDITED,
-                    modelId = "real-model",
-                    modelDisplayName = "Real Model",
-                    providerId = "real-provider",
-                    prompt = "edit this image",
-                    createdAt = 11,
-                    conversationId = "conversation-id",
-                    toolCallId = "tool-call-id",
-                ),
+            val registration = GeneratedMediaAssetRegistration(
+                assetId = assetId,
+                origin = MediaAssetEntity.ORIGIN_AI_EDITED,
+                modelId = "real-model",
+                modelDisplayName = "Real Model",
+                providerId = "real-provider",
+                prompt = "edit this image",
+                createdAt = 11,
+                conversationId = "conversation-id",
+                toolCallId = "tool-call-id",
             )
+            val recovery = repository.reconcileUnregisteredGeneratedFiles(
+                folder = "chat_generated_images",
+                resolveFile = { file },
+                registrationsByAssetId = mapOf(assetId to registration),
+            )
+            val upgraded = requireNotNull(database.genMediaDao().getByAssetId(assetId))
 
+            assertEquals(1, recovery.inspected)
+            assertEquals(1, recovery.registered)
             assertEquals("real-model", upgraded.modelId)
             assertEquals("Real Model", upgraded.modelDisplayName)
             assertEquals("real-provider", upgraded.providerId)
@@ -85,6 +89,65 @@ class MediaAssetRepositoryTest {
             assertEquals(MediaAssetEntity.TYPE_IMAGE_EDIT, upgraded.type)
             assertEquals("conversation-id", upgraded.conversationId)
             assertEquals("tool-call-id", upgraded.toolCallId)
+        } finally {
+            directory.deleteRecursively()
+            database.close()
+        }
+    }
+
+    @Test
+    fun failedEarlyCandidateDoesNotStarveLaterPaidOutput() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(
+            ApplicationProvider.getApplicationContext(),
+            AppDatabase::class.java,
+        ).build()
+        val failedAssetId = "11111111-1111-4111-8111-111111111111"
+        val healthyAssetId = "22222222-2222-4222-8222-222222222222"
+        val directory = ApplicationProvider.getApplicationContext<android.content.Context>()
+            .cacheDir.resolve("media-recovery-keyset-${System.nanoTime()}").apply { mkdirs() }
+        val failedFile = directory.resolve("$failedAssetId.png").apply { writeBytes(byteArrayOf(1)) }
+        val healthyFile = directory.resolve("$healthyAssetId.png").apply { writeBytes(byteArrayOf(2)) }
+        try {
+            val files = FilesRepository(database.managedFileDao())
+            val failedManaged = files.insert(
+                managed(
+                    relativePath = "chat_generated_images/${failedFile.name}",
+                    displayName = failedFile.name,
+                ),
+            )
+            val healthyManaged = files.insert(
+                managed(
+                    relativePath = "chat_generated_images/${healthyFile.name}",
+                    displayName = healthyFile.name,
+                ),
+            )
+            val repository = GenMediaRepository(
+                dao = database.genMediaDao(),
+                filesRepository = files,
+                metadataProbe = availableProbe(SHA_A),
+            )
+
+            val result = repository.reconcileUnregisteredGeneratedFiles(
+                folder = "chat_generated_images",
+                resolveFile = { relativePath ->
+                    if (relativePath == failedManaged.relativePath) error("injected file failure")
+                    healthyFile
+                },
+                registrationsByAssetId = mapOf(
+                    failedAssetId to registration(failedAssetId),
+                    healthyAssetId to registration(healthyAssetId),
+                ),
+                limit = 1,
+            )
+
+            assertEquals(2, result.inspected)
+            assertEquals(1, result.registered)
+            assertEquals(1, result.failures.size)
+            assertNull(database.genMediaDao().getByAssetId(failedAssetId))
+            assertEquals(
+                healthyManaged.id,
+                database.genMediaDao().getByAssetId(healthyAssetId)?.managedFileId,
+            )
         } finally {
             directory.deleteRecursively()
             database.close()

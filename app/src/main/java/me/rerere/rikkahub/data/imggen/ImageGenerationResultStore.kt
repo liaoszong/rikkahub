@@ -7,6 +7,7 @@ import kotlinx.serialization.json.Json
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.util.inspectBase64Payload
 import me.rerere.rikkahub.data.db.entity.GenMediaEntity
+import me.rerere.rikkahub.data.db.entity.ManagedFileEntity
 import me.rerere.rikkahub.data.db.entity.MediaAssetEntity
 import me.rerere.rikkahub.data.files.FileFolders
 import me.rerere.rikkahub.data.files.FilesManager
@@ -186,7 +187,13 @@ class MediaAssetRecovery(
                 mimeType = metadata.mimeType,
                 createdAt = metadata.createAt,
             )
-            genMediaRepository.registerGeneratedAsset(
+            val existingDatabaseId = existingPendingMediaDatabaseId(
+                metadata = metadata,
+                imageFile = imageFile,
+                managedFile = managedFile,
+                existingAsset = genMediaRepository.getAssetByPath(metadata.path),
+            )
+            existingDatabaseId ?: genMediaRepository.registerGeneratedAsset(
                 managedFile = managedFile,
                 file = imageFile,
                 registration = GeneratedMediaAssetRegistration(
@@ -206,6 +213,30 @@ class MediaAssetRecovery(
             ).id.toLong()
         },
     )
+}
+
+/**
+ * A v1 sidecar can survive the DB commit that originally created its gallery row. The
+ * v25 -> v26 migration assigned that row a legacy stable id, while replaying the old
+ * sidecar would derive a different id from its path. The committed row is authoritative:
+ * acknowledge it after verifying that the path and optional ManagedFile link still point
+ * at the same physical file instead of trying to replace its identity.
+ */
+internal fun existingPendingMediaDatabaseId(
+    metadata: PendingImageMetadata,
+    imageFile: File,
+    managedFile: ManagedFileEntity,
+    existingAsset: MediaAssetEntity?,
+): Long? {
+    val expectedPath = "${FileFolders.LEGACY_GENERATED_IMAGES}/${imageFile.name}"
+    require(metadata.path == expectedPath) { "Pending media path does not match its image file" }
+    require(managedFile.relativePath == expectedPath) { "Managed media path does not match its image file" }
+    val asset = existingAsset ?: return null
+    require(asset.id > 0 && asset.path == expectedPath) { "Existing media row has an invalid path identity" }
+    asset.managedFileId?.let { linkedManagedFileId ->
+        require(linkedManagedFileId == managedFile.id) { "Existing media row points to a different managed file" }
+    }
+    return asset.id.toLong()
 }
 
 internal fun resolveManagedMediaFile(context: Context, relativePath: String): File {

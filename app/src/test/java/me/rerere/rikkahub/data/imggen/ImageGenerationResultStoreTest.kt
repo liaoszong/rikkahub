@@ -5,6 +5,8 @@ import kotlinx.serialization.json.Json
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.util.PayloadBudgetExceededException
 import me.rerere.rikkahub.data.db.entity.GenMediaEntity
+import me.rerere.rikkahub.data.db.entity.ManagedFileEntity
+import me.rerere.rikkahub.data.db.entity.MediaAssetEntity
 import me.rerere.rikkahub.data.repository.MediaAssetIds
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -169,11 +171,37 @@ class ImageGenerationResultStoreTest {
     fun `reconciliation safely retries sidecar without database error marker`() = runBlocking {
         val root = Files.createTempDirectory("imggen-committed-sidecar").toFile()
         val imagesDir = root.resolve("images").apply { mkdirs() }
-        imagesDir.resolve("task-0.png").writeBytes(byteArrayOf(1))
-        val rows = linkedMapOf<String, GenMediaEntity>()
+        val image = imagesDir.resolve("task-0.png").apply { writeBytes(byteArrayOf(1)) }
+        val managedFile = ManagedFileEntity(
+            id = 9,
+            folder = "images",
+            relativePath = "images/task-0.png",
+            displayName = image.name,
+            mimeType = "image/png",
+            sizeBytes = image.length(),
+            createdAt = 123,
+            updatedAt = 123,
+        )
+        val migratedAsset = MediaAssetEntity(
+            id = 7,
+            path = "images/task-0.png",
+            modelId = "model-id",
+            modelDisplayName = "Display name",
+            providerId = "provider-id",
+            prompt = "prompt",
+            createAt = 123,
+            assetId = "legacy-genmedia-7",
+            managedFileId = managedFile.id,
+        )
         val store = PendingImageRegistrationStore(imagesDir) { metadata, _ ->
-            val entity = metadata.toEntity()
-            rows.getOrPut(entity.path) { entity.copy(id = rows.size + 1) }.id.toLong()
+            requireNotNull(
+                existingPendingMediaDatabaseId(
+                    metadata = metadata,
+                    imageFile = image,
+                    managedFile = managedFile,
+                    existingAsset = migratedAsset,
+                ),
+            )
         }
         val metadata = PendingImageMetadata(
             path = "images/task-0.png",
@@ -188,13 +216,13 @@ class ImageGenerationResultStoreTest {
         // This is the state left when the DB commit succeeded but the sidecar
         // acknowledgement did not: no databaseId and no lastError.
         store.persist(metadata)
-        rows[metadata.path] = metadata.toEntity().copy(id = 7)
+        assertTrue(metadata.stableAssetId() != migratedAsset.assetId)
 
         val result = store.reconcile()
 
         assertEquals(1, result.inspected)
         assertEquals(1, result.registered)
-        assertEquals(1, rows.size)
+        assertEquals("legacy-genmedia-7", migratedAsset.assetId)
         val repaired = Json.decodeFromString<PendingImageMetadata>(
             imagesDir.resolve("task-0.png.imgmeta.json").readText(),
         )
