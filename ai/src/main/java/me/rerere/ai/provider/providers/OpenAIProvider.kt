@@ -5,6 +5,8 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -21,6 +23,7 @@ import me.rerere.ai.model.resolveTextApiSurface
 import me.rerere.ai.model.supports
 import me.rerere.ai.provider.EmbeddingGenerationParams
 import me.rerere.ai.provider.EmbeddingGenerationResult
+import me.rerere.ai.provider.CustomBody
 import me.rerere.ai.provider.ImageEditParams
 import me.rerere.ai.provider.ImageGenerationParams
 import me.rerere.ai.provider.Model
@@ -52,6 +55,7 @@ import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 
 private const val TAG = "OpenAIProvider"
+private const val MAX_PARALLEL_IMAGE_RESPONSE_MATERIALIZATIONS = 2
 
 class OpenAIProvider(
     private val client: OkHttpClient,
@@ -70,6 +74,14 @@ class OpenAIProvider(
      */
     private val imageMutationClient = client.newPaidImageMutationClient()
 
+    /**
+     * All paid n=1 requests may wait on the provider concurrently, but only a small number of
+     * large JSON/Base64 responses may be decoded and handed to the persistence collector at once.
+     * Holding the permit through emit keeps an eight-image batch progressive without retaining
+     * eight decoded payloads in the Android heap at the same time.
+     */
+    private val imageResponseMaterializationSemaphore =
+        Semaphore(MAX_PARALLEL_IMAGE_RESPONSE_MATERIALIZATIONS)
 
     override suspend fun listModels(providerSetting: ProviderSetting.OpenAI): List<Model> =
         withContext(Dispatchers.IO) {
@@ -243,6 +255,7 @@ class OpenAIProvider(
         ) {
             "Model ${params.model.modelId} does not declare OpenAI image generation"
         }
+        val safeCustomBody = params.customBody.requireSafeOpenAiImageCustomBody()
 
         val requestBody = json.encodeToString(
             buildJsonObject {
@@ -257,10 +270,10 @@ class OpenAIProvider(
                     put("size", params.size)
                 }
             }
-                .mergeCustomBody(params.customBody)
+                .mergeCustomBody(safeCustomBody)
         )
 
-        Log.i(TAG, "generateImage: model=${params.model.modelId}")
+        Log.i(TAG, "event=operation domain=provider operation=generate_image outcome=started")
 
         val request = Request.Builder()
             .url(providerSetting.imageApiUrl("/images/generations"))
@@ -276,19 +289,27 @@ class OpenAIProvider(
             .withImageRequestIdentity(params.requestId)
             .build()
 
-        val items = withContext(Dispatchers.IO) {
-            params.dispatchObserver.onDispatch()
-            val response = imageMutationClient.newCall(request).await()
-            if (!response.isSuccessful) {
-                error("Failed to generate image: ${response.code} ${response.body?.string()}")
-            }
-            parseImageResponse(
-                bodyStr = response.body.string(),
-                allowLocalDevelopment = GeneratedImageDownloadPolicy.isLocalDevelopmentBaseUrl(providerSetting.baseUrl),
-            )
+        params.dispatchObserver.onDispatch()
+        val response = withContext(Dispatchers.IO) {
+            imageMutationClient.newCall(request).await()
         }
-
-        items.forEach { emit(it) }
+        response.use {
+            if (!it.isSuccessful) {
+                val errorBody = withContext(Dispatchers.IO) { it.body.string() }
+                error("Failed to generate image: ${it.code} $errorBody")
+            }
+            imageResponseMaterializationSemaphore.withPermit {
+                val items = withContext(Dispatchers.IO) {
+                    parseImageResponse(
+                        bodyStr = it.body.string(),
+                        allowLocalDevelopment = GeneratedImageDownloadPolicy.isLocalDevelopmentBaseUrl(
+                            providerSetting.baseUrl,
+                        ),
+                    )
+                }
+                items.forEach { item -> emit(item) }
+            }
+        }
     }
 
     override suspend fun editImage(
@@ -308,6 +329,7 @@ class OpenAIProvider(
         require(params.images.isNotEmpty()) {
             "At least one image is required"
         }
+        val safeCustomBody = params.customBody.requireSafeOpenAiImageCustomBody()
 
         val bodyBuilder = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
@@ -334,7 +356,7 @@ class OpenAIProvider(
             )
         }
 
-        params.customBody.forEach { customBody ->
+        safeCustomBody.forEach { customBody ->
             val value = when (val element = customBody.value) {
                 is JsonPrimitive -> element.contentOrNull ?: element.toString()
                 else -> element.toString()
@@ -355,19 +377,27 @@ class OpenAIProvider(
             .withImageRequestIdentity(params.requestId)
             .build()
 
-        val items = withContext(Dispatchers.IO) {
-            params.dispatchObserver.onDispatch()
-            val response = imageMutationClient.newCall(request).await()
-            if (!response.isSuccessful) {
-                error("Failed to edit image: ${response.code} ${response.body?.string()}")
-            }
-            parseImageResponse(
-                bodyStr = response.body.string(),
-                allowLocalDevelopment = GeneratedImageDownloadPolicy.isLocalDevelopmentBaseUrl(providerSetting.baseUrl),
-            )
+        params.dispatchObserver.onDispatch()
+        val response = withContext(Dispatchers.IO) {
+            imageMutationClient.newCall(request).await()
         }
-
-        items.forEach { emit(it) }
+        response.use {
+            if (!it.isSuccessful) {
+                val errorBody = withContext(Dispatchers.IO) { it.body.string() }
+                error("Failed to edit image: ${it.code} $errorBody")
+            }
+            imageResponseMaterializationSemaphore.withPermit {
+                val items = withContext(Dispatchers.IO) {
+                    parseImageResponse(
+                        bodyStr = it.body.string(),
+                        allowLocalDevelopment = GeneratedImageDownloadPolicy.isLocalDevelopmentBaseUrl(
+                            providerSetting.baseUrl,
+                        ),
+                    )
+                }
+                items.forEach { item -> emit(item) }
+            }
+        }
     }
 
     private fun shouldUseResponsesApi(
@@ -497,3 +527,33 @@ internal fun Request.Builder.withImageRequestIdentity(requestId: String?): Reque
         header("X-RikkaHub-Request-Id", stableId)
     }
 }
+
+/**
+ * Custom image options may tune quality, background, output format, and compression, but they
+ * must never replace fields that define the paid slot or change the response protocol. In
+ * particular, allowing a stored custom `n` after the slot's `n=1` can make every independently
+ * billed slot generate the whole requested batch again.
+ */
+internal fun List<CustomBody>.requireSafeOpenAiImageCustomBody(): List<CustomBody> = apply {
+    val blocked = asSequence()
+        .map { it.key.trim().lowercase() }
+        .filter { it in OPENAI_IMAGE_RESERVED_CUSTOM_BODY_KEYS }
+        .distinct()
+        .sorted()
+        .toList()
+    require(blocked.isEmpty()) {
+        "OpenAI image custom body cannot override reserved fields: ${blocked.joinToString()}"
+    }
+}
+
+private val OPENAI_IMAGE_RESERVED_CUSTOM_BODY_KEYS = setOf(
+    "model",
+    "prompt",
+    "n",
+    "size",
+    "image",
+    "image[]",
+    "mask",
+    "stream",
+    "partial_images",
+)

@@ -1,7 +1,6 @@
 package me.rerere.rikkahub.data.ai.tools.local
 
 import android.content.Context
-import android.util.Log
 import androidx.core.net.toUri
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -73,10 +72,32 @@ import me.rerere.rikkahub.fork.pale.request.ImageGenerationLedgerCoordinator
 import me.rerere.rikkahub.fork.pale.request.ImageGenerationRequestDescriptor
 import me.rerere.rikkahub.fork.pale.request.ImageGenerationSlotOpenResult
 import me.rerere.rikkahub.fork.pale.request.ImageGenerationSlotLedgerStatus
+import me.rerere.rikkahub.utils.logSafeError
+import me.rerere.rikkahub.utils.logSafeFailure
 import java.io.File
 import java.security.MessageDigest
 
 private const val TAG = "ImageGenerationTool"
+private const val MAX_IMAGE_GENERATION_COUNT = 8
+
+/**
+ * Each paid slot is a separate n=1 request. Keep small multi-image requests in one wave so later
+ * images do not spend another entire provider-latency cycle queued behind an earlier wave.
+ * The tool schema caps the user-requested batch at eight, which remains the hard socket/upload
+ * bound; provider-side throttling is surfaced per slot without cancelling successful siblings.
+ */
+internal fun imageGenerationParallelism(slotCount: Int): Int {
+    require(slotCount in 1..MAX_IMAGE_GENERATION_COUNT) {
+        "Image generation count must be between 1 and $MAX_IMAGE_GENERATION_COUNT"
+    }
+    return slotCount
+}
+
+private data class ImageGenerationProgressProjection(
+    val state: ChatImageGenerationState,
+    val images: List<UIMessagePart.Image>,
+    val outputAssetIds: List<String>,
+)
 
 internal fun buildImageGenerationTool(
     applicationContext: Context,
@@ -93,7 +114,9 @@ internal fun buildImageGenerationTool(
         Generate an image in the current conversation with the image model selected in the app.
         Call this only when the user explicitly asks to draw, create, or generate an image.
         Do not call it merely to analyze or discuss an existing image.
-        Write a complete standalone visual prompt; the returned image is shown directly to the user.
+        Write a complete standalone visual prompt for one variant; the returned image is shown directly to the user.
+        Put the requested number of variants only in count. Do not repeat the quantity in prompt or ask the image model
+        for a grid/collage unless the user explicitly requested one composite image.
     """.trimIndent().replace("\n", " "),
     systemPrompt = { _, messages ->
         val availability = settingsStore.settingsFlow.value
@@ -117,7 +140,10 @@ internal fun buildImageGenerationTool(
             properties = buildJsonObject {
                 put("prompt", buildJsonObject {
                     put("type", "string")
-                    put("description", "A complete, detailed prompt for the image model")
+                    put(
+                        "description",
+                        "A complete prompt for one image variant. Omit the variant count; use count for quantity.",
+                    )
                 })
                 put("size", buildJsonObject {
                     put("type", "string")
@@ -125,9 +151,12 @@ internal fun buildImageGenerationTool(
                 })
                 put("count", buildJsonObject {
                     put("type", "integer")
-                    put("description", "Number of image variants to generate, from 1 to 8")
+                    put(
+                        "description",
+                        "Number of image variants to generate, from 1 to $MAX_IMAGE_GENERATION_COUNT",
+                    )
                     put("minimum", 1)
-                    put("maximum", 8)
+                    put("maximum", MAX_IMAGE_GENERATION_COUNT)
                 })
                 put("reference_image_ids", buildJsonObject {
                     put("type", "array")
@@ -182,7 +211,10 @@ private suspend fun executeImageGeneration(
         val size = requestedSize?.takeIf { candidate ->
             ImageGenSize.entries.any { it.value == candidate }
         } ?: ImageGenSize.AUTO.value
-        val count = arguments["count"]?.jsonPrimitive?.intOrNull?.coerceIn(1, 8) ?: 1
+        val count = arguments["count"]?.jsonPrimitive?.intOrNull ?: 1
+        require(count in 1..MAX_IMAGE_GENERATION_COUNT) {
+            "generate_image count must be between 1 and $MAX_IMAGE_GENERATION_COUNT"
+        }
         settingsStore.awaitCredentialReady()
         val settings = settingsStore.settingsFlow.value
         val model = settings.resolveImageGenerationModel()
@@ -280,7 +312,7 @@ private suspend fun executeImageGeneration(
             ?: error("generate_image requires a durable conversation identity")
         val durableTaskId = requestId
 
-        suspend fun snapshot(finishedAt: Long? = null): ChatImageGenerationState = stateMutex.withLock {
+        fun snapshotLocked(finishedAt: Long? = null): ChatImageGenerationState =
             ChatImageGenerationState(
                 requestId = requestId,
                 attempt = attempt,
@@ -292,6 +324,15 @@ private suspend fun executeImageGeneration(
                 referenceImageCount = referencePaths.size,
                 slots = slots.toList(),
             )
+
+        fun projectionLocked(finishedAt: Long? = null) = ImageGenerationProgressProjection(
+            state = snapshotLocked(finishedAt),
+            images = slotImages.filterNotNull(),
+            outputAssetIds = committedAssetIds.filterNotNull(),
+        )
+
+        suspend fun snapshot(finishedAt: Long? = null): ChatImageGenerationState = stateMutex.withLock {
+            snapshotLocked(finishedAt)
         }
 
         suspend fun settleRemainingSlots(fallback: ChatImageSlotStatus) = withContext(NonCancellable) {
@@ -331,7 +372,13 @@ private suspend fun executeImageGeneration(
                     errorMessage = firstIssue?.error ?: fallbackMessage,
                 )
             }.onFailure { error ->
-                Log.e(TAG, "Unable to project terminal image task $taskId", error)
+                logSafeError(
+                    tag = TAG,
+                    domain = "image_generation",
+                    operation = "project_terminal_task",
+                    error = error,
+                    requestId = taskId,
+                )
             }
         }
 
@@ -370,10 +417,13 @@ private suspend fun executeImageGeneration(
                     },
             )
 
-            val semaphore = Semaphore(2)
+            val semaphore = Semaphore(imageGenerationParallelism(slots.size))
             val taskExecutor = ImageGenerationTaskExecutor(gateway)
             coroutineScope {
-                val updates = Channel<Unit>(Channel.UNLIMITED)
+                // Carry immutable projections rather than wake-up signals. A Unit signal followed
+                // by a later snapshot can collapse two near-simultaneous completions into one UI
+                // update, which makes independently completed images appear as an all-at-once batch.
+                val updates = Channel<ImageGenerationProgressProjection>(Channel.UNLIMITED)
                 val jobs = slots.indices.map { index ->
                     async {
                         try {
@@ -403,6 +453,7 @@ private suspend fun executeImageGeneration(
                                             failureKind = null,
                                             finishedAtEpochMillis = finishedAt,
                                         )
+                                        updates.trySend(projectionLocked())
                                     }
                                     return@withPermit
                                 }
@@ -414,8 +465,8 @@ private suspend fun executeImageGeneration(
                                         status = ChatImageSlotStatus.RUNNING,
                                         startedAtEpochMillis = slotStartedAt,
                                     )
+                                    updates.trySend(projectionLocked())
                                 }
-                                updates.trySend(Unit)
                                 taskExecutor.execute(
                                     execution = ImageGenerationExecution(
                                         requestId = slots[index].requestId,
@@ -486,6 +537,7 @@ private suspend fun executeImageGeneration(
                                                         failureKind = null,
                                                         finishedAtEpochMillis = finishedAt,
                                                     )
+                                                    updates.trySend(projectionLocked())
                                                 }
                                             }
                                         }
@@ -522,10 +574,12 @@ private suspend fun executeImageGeneration(
                                                             failureKind = null,
                                                             finishedAtEpochMillis = System.currentTimeMillis(),
                                                         )
-                                                        Log.e(
-                                                            TAG,
-                                                            "Image file committed; ledger repair deferred " +
-                                                                "requestId=${plans[index].requestId.value}",
+                                                        logSafeFailure(
+                                                            tag = TAG,
+                                                            domain = "image_generation",
+                                                            operation = "repair_slot_ledger",
+                                                            warning = true,
+                                                            requestId = plans[index].requestId.value,
                                                         )
                                                     } else {
                                                         slots[index] = slots[index].copy(
@@ -540,16 +594,20 @@ private suspend fun executeImageGeneration(
                                                         )
                                                     }
                                                 }
+                                                updates.trySend(projectionLocked())
                                             }
                                         }
-                                        is ImageGenerationExecutionEvent.Cancelled -> stateMutex.withLock {
-                                            if (slots[index].status != ChatImageSlotStatus.SUCCEEDED) {
-                                                slots[index] = slots[index].copy(
-                                                    status = event.ledgerState.toImageSlotStatus(
-                                                        fallback = ChatImageSlotStatus.CANCELLED,
-                                                    ),
-                                                    finishedAtEpochMillis = System.currentTimeMillis(),
-                                                )
+                                        is ImageGenerationExecutionEvent.Cancelled -> {
+                                            stateMutex.withLock {
+                                                if (slots[index].status != ChatImageSlotStatus.SUCCEEDED) {
+                                                    slots[index] = slots[index].copy(
+                                                        status = event.ledgerState.toImageSlotStatus(
+                                                            fallback = ChatImageSlotStatus.CANCELLED,
+                                                        ),
+                                                        finishedAtEpochMillis = System.currentTimeMillis(),
+                                                    )
+                                                }
+                                                updates.trySend(projectionLocked())
                                             }
                                         }
                                     }
@@ -576,22 +634,22 @@ private suspend fun executeImageGeneration(
                                         finishedAtEpochMillis = finishedAt,
                                     )
                                 }
+                                updates.trySend(projectionLocked())
                             }
                             throw cancelled
-                        } catch (error: Throwable) {
+                        } catch (error: Exception) {
                             val finishedAt = System.currentTimeMillis()
                             stateMutex.withLock {
                                 if (slots[index].status != ChatImageSlotStatus.SUCCEEDED) {
                                     slots[index] = slots[index].copy(
                                         status = ChatImageSlotStatus.FAILED,
-                                        error = error.message?.take(160) ?: error.javaClass.simpleName,
+                                        error = error.javaClass.simpleName.ifBlank { "UnknownError" },
                                         failureKind = ImageGenerationFailureKind.UNKNOWN,
                                         finishedAtEpochMillis = finishedAt,
                                     )
                                 }
+                                updates.trySend(projectionLocked())
                             }
-                        } finally {
-                            updates.trySend(Unit)
                         }
                     }
                 }
@@ -601,30 +659,42 @@ private suspend fun executeImageGeneration(
                 }
                 // Flow emissions must remain on the owning coroutine. Workers only signal that
                 // their slot changed; this parent serializes snapshots for progressive rendering.
-                for (ignored in updates) {
-                    val progressState = snapshot()
+                for (projection in updates) {
+                    val progressState = projection.state
                     runCatching {
                         chatImageTaskController.updateProgress(
                             taskId = durableTaskId,
                             completedImageCount = progressState.succeededCount,
                             failedImageCount = progressState.failedCount,
-                            outputAssetIds = stateMutex.withLock { committedAssetIds.filterNotNull() },
+                            outputAssetIds = projection.outputAssetIds,
                             slotStatuses = progressState.slots.map(ChatImageGenerationSlot::status),
                         )
                     }.onFailure { error ->
-                        Log.e(TAG, "Unable to persist image task progress $durableTaskId", error)
+                        logSafeError(
+                            tag = TAG,
+                            domain = "image_generation",
+                            operation = "persist_task_progress",
+                            error = error,
+                            requestId = durableTaskId,
+                        )
                     }
                     try {
                         context.emitProgress(
                             buildList {
                                 add(progressState.toStatusPart())
-                                stateMutex.withLock { slotImages.filterNotNull().forEach(::add) }
+                                projection.images.forEach(::add)
                             },
                         )
                     } catch (cancelled: CancellationException) {
                         throw cancelled
-                    } catch (error: Throwable) {
-                        Log.e(TAG, "Unable to persist progressive image result $requestId", error)
+                    } catch (error: Exception) {
+                        logSafeError(
+                            tag = TAG,
+                            domain = "image_generation",
+                            operation = "emit_progressive_result",
+                            error = error,
+                            requestId = requestId,
+                        )
                     }
                 }
             }
@@ -647,7 +717,7 @@ private suspend fun executeImageGeneration(
             settleRemainingSlots(ChatImageSlotStatus.FAILED)
             settleDurableTask(
                 snapshot(finishedAt = System.currentTimeMillis()),
-                error.message ?: "Image generation failed",
+                "Image generation failed (${error.javaClass.simpleName.ifBlank { "UnknownError" }})",
             )
             throw error
         }
@@ -804,11 +874,12 @@ private suspend fun saveToolImage(
             )
         }
     } catch (error: Exception) {
-        Log.e(
-            TAG,
-            "Generated image file committed; ManagedFile registration deferred " +
-                "assetId=${registration.assetId} toolCallId=${registration.toolCallId}",
-            error,
+        logSafeError(
+            tag = TAG,
+            domain = "image_generation",
+            operation = "register_managed_file",
+            error = error,
+            requestId = registration.assetId,
         )
         null
     }
@@ -825,11 +896,12 @@ private suspend fun saveToolImage(
                 ).assetId
             },
             onDeferred = { error ->
-            Log.e(
-                TAG,
-                "Generated image file committed; MediaAsset registration deferred " +
-                    "assetId=${registration.assetId} toolCallId=${registration.toolCallId}",
-                error,
+            logSafeError(
+                tag = TAG,
+                domain = "image_generation",
+                operation = "register_media_asset",
+                error = error,
+                requestId = registration.assetId,
             )
             },
         )
