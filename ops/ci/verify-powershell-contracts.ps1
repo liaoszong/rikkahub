@@ -23,6 +23,22 @@ function Assert-Contract {
     }
 }
 
+function Assert-Throws {
+    param(
+        [scriptblock]$Action,
+        [string]$Message
+    )
+
+    $threw = $false
+    try {
+        & $Action
+    }
+    catch {
+        $threw = $true
+    }
+    Assert-Contract $threw $Message
+}
+
 foreach ($relativePath in $scripts) {
     $path = Join-Path $repoRoot $relativePath
     Assert-Contract (Test-Path -LiteralPath $path -PathType Leaf) "Required PowerShell script is missing: $relativePath"
@@ -65,6 +81,35 @@ Assert-Contract ($releaseText.Contains("[ValidateSet('Full', 'Verify', 'Publish'
     'release.ps1 must expose resumable release phases.'
 Assert-Contract ($releaseText.Contains('[switch]$UploadSymbols')) `
     'Crashlytics symbol upload must be explicitly opted into.'
+Assert-Contract ($releaseText.Contains('[int]$TargetRevision = 0')) `
+    'release.ps1 must expose an explicit target PaleInk revision override.'
+$releaseTokens = $null
+$releaseParseErrors = $null
+$releaseAst = [System.Management.Automation.Language.Parser]::ParseFile(
+    (Join-Path $repoRoot 'ops/release/release.ps1'),
+    [ref]$releaseTokens,
+    [ref]$releaseParseErrors
+)
+$revisionResolver = $releaseAst.Find({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Resolve-PaleTargetRevision'
+}, $true)
+Assert-Contract ($null -ne $revisionResolver) `
+    'release.ps1 must keep target revision validation in Resolve-PaleTargetRevision.'
+. ([scriptblock]::Create($revisionResolver.Extent.Text))
+Assert-Contract ((Resolve-PaleTargetRevision -CurrentRevision 4 -RequestedRevision 0 -PreparingRelease $true) -eq 5) `
+    'The default release path must increment the PaleInk revision by one.'
+Assert-Contract ((Resolve-PaleTargetRevision -CurrentRevision 4 -RequestedRevision 6 -PreparingRelease $true) -eq 6) `
+    'An explicit forward PaleInk revision must be supported.'
+Assert-Contract ((Resolve-PaleTargetRevision -CurrentRevision 6 -RequestedRevision 6 -PreparingRelease $false) -eq 6) `
+    'Publish resume must accept the prepared revision.'
+Assert-Throws {
+    Resolve-PaleTargetRevision -CurrentRevision 4 -RequestedRevision 4 -PreparingRelease $true
+} 'A release must reject a target revision that does not advance.'
+Assert-Throws {
+    Resolve-PaleTargetRevision -CurrentRevision 6 -RequestedRevision 5 -PreparingRelease $false
+} 'Publish resume must reject a mismatched requested revision.'
 foreach ($mutation in @('git add --', 'git commit -m', 'git tag -a', 'git push')) {
     $mutationOffset = $releaseText.IndexOf($mutation, [StringComparison]::Ordinal)
     Assert-Contract ($mutationOffset -gt $dryRunGuard) "release.ps1 mutation must remain after the DryRun guard: $mutation"

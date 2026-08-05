@@ -84,6 +84,17 @@ ignored `.release-cache/` directory and is reused while those build
 inputs remain unchanged; documentation and release-note-only commits do not
 invalidate it. Only then does the runner increment the version, archive the
 notes, and build the universal signed APK in a separate Gradle invocation.
+The default target is the next PaleInk revision. When a deliberately skipped
+public revision is required, pass the exact forward revision explicitly; the
+monotonic Android `versionCode` still advances by exactly one:
+
+```powershell
+pwsh ops/release/release.ps1 -Phase Full -TargetRevision 6
+```
+
+The runner rejects a target revision that is not greater than the current
+revision and verifies that both the local version name and version code match
+the live stable feed before preparing a new artifact.
 
 The prepared APK and its SHA-256 receipt are retained in that ignored cache
 directory. Publication then stages and commits the release allowlist, creates

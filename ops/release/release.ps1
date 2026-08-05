@@ -6,6 +6,8 @@ param(
     [string]$GitRemote = 'origin',
     [ValidateSet('Full', 'Verify', 'Publish', 'Symbols')]
     [string]$Phase = 'Full',
+    [ValidateRange(0, 2147483647)]
+    [int]$TargetRevision = 0,
     [switch]$UploadSymbols,
     [switch]$ConfirmRelease,
     [switch]$DryRun
@@ -38,6 +40,35 @@ function Require-Command {
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
         throw "Required command is not available: $Name"
     }
+}
+
+function Resolve-PaleTargetRevision {
+    param(
+        [Parameter(Mandatory)]
+        [int]$CurrentRevision,
+        [Parameter(Mandatory)]
+        [int]$RequestedRevision,
+        [Parameter(Mandatory)]
+        [bool]$PreparingRelease
+    )
+
+    if ($PreparingRelease) {
+        $resolvedRevision = if ($RequestedRevision -eq 0) {
+            $CurrentRevision + 1
+        }
+        else {
+            $RequestedRevision
+        }
+        if ($resolvedRevision -le $CurrentRevision) {
+            throw "Target PaleInk revision $resolvedRevision must be greater than current revision $CurrentRevision."
+        }
+        return [int]$resolvedRevision
+    }
+
+    if ($RequestedRevision -ne 0 -and $RequestedRevision -ne $CurrentRevision) {
+        throw "Prepared release revision is $CurrentRevision, but -TargetRevision requested $RequestedRevision."
+    }
+    return $CurrentRevision
 }
 
 function Invoke-TimedPhase {
@@ -305,15 +336,23 @@ else {
 }
 
 if ($Phase -eq 'Full') {
-    if ([int]$live.versionCode -ne $currentCode) {
-        throw "Local versionCode $currentCode does not match live versionCode $($live.versionCode). Use -Phase Publish only to resume an already prepared release."
+    if ([int]$live.versionCode -ne $currentCode -or [string]$live.version -ne $currentVersion) {
+        throw "Local version $currentVersion ($currentCode) does not match live version $($live.version) ($($live.versionCode)). Use -Phase Publish only to resume an already prepared release."
     }
     $targetCode = $currentCode + 1
-    $targetVersion = "$($paleMatch.Groups['base'].Value)-pale.$([int]$paleMatch.Groups['revision'].Value + 1)"
+    $targetRevision = Resolve-PaleTargetRevision `
+        -CurrentRevision ([int]$paleMatch.Groups['revision'].Value) `
+        -RequestedRevision $TargetRevision `
+        -PreparingRelease $true
+    $targetVersion = "$($paleMatch.Groups['base'].Value)-pale.$targetRevision"
     $archiveNotesPath = "ops/update-site/CHANGELOG-$targetVersion.md"
     if (Test-Path -LiteralPath $archiveNotesPath) { throw "Archived notes already exist: $archiveNotesPath" }
 }
 else {
+    [void](Resolve-PaleTargetRevision `
+        -CurrentRevision ([int]$paleMatch.Groups['revision'].Value) `
+        -RequestedRevision $TargetRevision `
+        -PreparingRelease $false)
     $targetCode = $currentCode
     $targetVersion = $currentVersion
     $archiveNotesPath = "ops/update-site/CHANGELOG-$targetVersion.md"
