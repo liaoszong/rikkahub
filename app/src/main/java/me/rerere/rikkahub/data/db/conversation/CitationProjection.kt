@@ -914,7 +914,7 @@ private fun citationDecodedVariants(value: String): Sequence<String> = sequence 
     yield(current)
     repeat(MAX_CITATION_QUERY_DECODE_PASSES) {
         val decoded = runCatching {
-            java.net.URLDecoder.decode(current, Charsets.UTF_8)
+            java.net.URLDecoder.decode(current, Charsets.UTF_8.name())
         }.getOrDefault(current)
         if (decoded == current) return@sequence
         current = decoded
@@ -960,7 +960,7 @@ private fun decodeCitationQueryComponent(value: String): String {
     var decoded = value
     repeat(MAX_CITATION_QUERY_DECODE_PASSES) {
         val next = runCatching {
-            java.net.URLDecoder.decode(decoded, Charsets.UTF_8)
+            java.net.URLDecoder.decode(decoded, Charsets.UTF_8.name())
         }.getOrDefault(decoded)
         if (next == decoded) return decoded
         decoded = next

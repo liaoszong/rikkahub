@@ -295,7 +295,7 @@ internal object CitationEgressSanitizer {
     private fun decodeQueryComponent(value: String): String {
         var decoded = value
         repeat(MAX_QUERY_DECODE_PASSES) {
-            val next = runCatching { URLDecoder.decode(decoded, Charsets.UTF_8) }.getOrDefault(decoded)
+            val next = runCatching { URLDecoder.decode(decoded, Charsets.UTF_8.name()) }.getOrDefault(decoded)
             if (next == decoded) return decoded
             decoded = next
         }
