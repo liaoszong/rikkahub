@@ -1,10 +1,15 @@
 package me.rerere.rikkahub.ui.activity
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.Process
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -56,8 +61,11 @@ import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.ui.hooks.writeStringPreference
 import me.rerere.rikkahub.ui.theme.RikkahubTheme
 import me.rerere.rikkahub.RouteActivity
+import me.rerere.rikkahub.startup.StartupBootstrapGate
+import me.rerere.rikkahub.startup.SafeModeRestartCoordinator
 import me.rerere.rikkahub.utils.CrashHandler
 import org.koin.android.ext.android.inject
+import kotlin.system.exitProcess
 import kotlin.uuid.Uuid
 
 class SafeModeActivity : ComponentActivity() {
@@ -66,8 +74,12 @@ class SafeModeActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (!StartupBootstrapGate.isSafeModeReady()) {
+            startActivity(Intent(this, RouteActivity::class.java))
+            finish()
+            return
+        }
         val stackTrace = CrashHandler.getStackTrace(this)
-        CrashHandler.clearCrashed(this)
         enableEdgeToEdge()
         setContent {
             RikkahubTheme {
@@ -110,10 +122,7 @@ class SafeModeActivity : ComponentActivity() {
                         }
 
                         OutlinedButton(
-                            onClick = {
-                                startActivity(Intent(this@SafeModeActivity, RouteActivity::class.java))
-                                finish()
-                            },
+                            onClick = ::restartFromSafeMode,
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(stringResource(R.string.safe_mode_enter_app))
@@ -174,6 +183,43 @@ class SafeModeActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private fun restartFromSafeMode() {
+        val restartIntent = Intent.makeRestartActivityTask(
+            ComponentName(this, RouteActivity::class.java),
+        )
+        val restartPendingIntent = PendingIntent.getActivity(
+            this,
+            SAFE_MODE_RESTART_REQUEST_CODE,
+            restartIntent,
+            PendingIntent.FLAG_CANCEL_CURRENT or
+                PendingIntent.FLAG_ONE_SHOT or
+                PendingIntent.FLAG_IMMUTABLE,
+        )
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        SafeModeRestartCoordinator(
+            scheduleColdStart = {
+                // An inexact alarm needs no exact-alarm permission and runs after this process is
+                // gone. The explicit restart task guarantees the next RouteActivity is cold.
+                alarmManager.set(
+                    AlarmManager.ELAPSED_REALTIME,
+                    SystemClock.elapsedRealtime() + SAFE_MODE_RESTART_DELAY_MS,
+                    restartPendingIntent,
+                )
+            },
+            clearCrashMarker = { CrashHandler.clearCrashed(this) },
+            terminateCurrentProcess = {
+                finishAffinity()
+                Process.killProcess(Process.myPid())
+                exitProcess(0)
+            },
+        ).restart()
+    }
+
+    private companion object {
+        const val SAFE_MODE_RESTART_REQUEST_CODE = 0x5248
+        const val SAFE_MODE_RESTART_DELAY_MS = 500L
     }
 }
 

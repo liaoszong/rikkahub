@@ -51,10 +51,12 @@ object CrashHandler {
         return sanitizeStoredCrashReport(stored)
     }
 
-    fun clearCrashed(context: Context) {
+    fun clearCrashed(context: Context): Boolean =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit { remove(KEY_CRASHED).remove(KEY_STACKTRACE) }
-    }
+            .edit()
+            .remove(KEY_CRASHED)
+            .remove(KEY_STACKTRACE)
+            .commit()
 
     private fun markCrashed(context: Context, safeReport: String) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

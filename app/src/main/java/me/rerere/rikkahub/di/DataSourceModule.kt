@@ -58,6 +58,7 @@ import me.rerere.rikkahub.data.sync.BackupRestoreCoordinator
 import me.rerere.search.SearchService
 import me.rerere.rikkahub.data.sync.S3Sync
 import me.rerere.rikkahub.utils.logSafeFailure
+import me.rerere.rikkahub.startup.StartupBootstrapGate
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import org.koin.dsl.module
@@ -76,6 +77,11 @@ val dataSourceModule = module {
     }
 
     single {
+        // This is the final fail-closed boundary for Android components that bypass the launcher
+        // activity. Registering the definition is safe; constructing Room before restore is not.
+        // Runtime activation is the only pre-Ready phase allowed to construct Room. The launcher
+        // and exported providers remain closed until activation has completed successfully.
+        StartupBootstrapGate.requireDatabaseAccess()
         val context: Context = get()
         Room.databaseBuilder(context, AppDatabase::class.java, "rikka_hub")
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)

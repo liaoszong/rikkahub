@@ -4,6 +4,8 @@ import android.app.Application
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.compose.foundation.ComposeFoundationFlags
 import androidx.compose.runtime.Composer
@@ -31,6 +33,7 @@ import me.rerere.rikkahub.di.dataSourceModule
 import me.rerere.rikkahub.di.repositoryModule
 import me.rerere.rikkahub.di.viewModelModule
 import me.rerere.rikkahub.data.files.FilesManager
+import me.rerere.rikkahub.data.imggen.ImageMediaReconciliationResult
 import me.rerere.rikkahub.data.imggen.MediaAssetRecovery
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.credential.CredentialReadiness
@@ -45,8 +48,13 @@ import me.rerere.rikkahub.fork.pale.request.ToolRequestReconcileReport
 import me.rerere.rikkahub.fork.pale.request.ImageRequestReconciler
 import me.rerere.rikkahub.fork.pale.request.ImageTaskRecoveryCoordinator
 import me.rerere.rikkahub.service.WebServerService
+import me.rerere.rikkahub.service.ChatNotificationManager
+import me.rerere.rikkahub.startup.StartupBootstrapCoordinator
+import me.rerere.rikkahub.startup.StartupBootstrapGate
+import me.rerere.rikkahub.startup.StartupRuntimeMode
 import me.rerere.rikkahub.utils.CrashHandler
 import me.rerere.rikkahub.utils.DatabaseUtil
+import me.rerere.rikkahub.utils.UpdateChecker
 import me.rerere.rikkahub.utils.logSafeError
 import me.rerere.rikkahub.utils.logSafeFailure
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
@@ -57,6 +65,7 @@ import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
 import org.koin.androidx.workmanager.koin.workManagerFactory
 import org.koin.core.context.startKoin
+import java.util.concurrent.atomic.AtomicBoolean
 
 private const val TAG = "RikkaHubApp"
 
@@ -96,37 +105,93 @@ private operator fun ToolRequestReconcileReport.plus(other: ToolRequestReconcile
         deferred = other.deferred,
     )
 
+private operator fun ImageMediaReconciliationResult.plus(other: ImageMediaReconciliationResult) =
+    ImageMediaReconciliationResult(
+        inspected = inspected + other.inspected,
+        registered = registered + other.registered,
+        metadataRepaired = metadataRepaired + other.metadataRepaired,
+        missingFiles = missingFiles + other.missingFiles,
+        failures = failures + other.failures,
+    )
+
 class RikkaHubApp : Application() {
+    private lateinit var startupBootstrapCoordinator: StartupBootstrapCoordinator
+    private val runtimeStarted = AtomicBoolean(false)
+
     override fun onCreate() {
         super.onCreate()
         // Install this before restore, dependency injection, or Keystore access. Credential
         // bootstrap is fail-closed, but unrelated startup failures must still be observable.
         CrashHandler.install(this)
-        runCatching {
-            PendingRestoreManager.applyFilesBeforeDatabase(this)
-        }.onFailure {
-            logSafeError(TAG, "startup", "switch_pending_restore_files", it)
-        }
         startKoin {
             androidLogger()
             androidContext(this@RikkaHubApp)
             workManagerFactory()
             modules(appModule, viewModelModule, dataSourceModule, repositoryModule)
         }
-        // Credential projection can touch DataStore, fsync-backed journal files and Android
-        // Keystore. Never block Application.onCreate with that work. Network entry points share
-        // SettingsStore's readiness gate and cannot dispatch until this coroutine reaches Ready.
-        get<AppScope>().launch(Dispatchers.IO) {
-            runCatching {
+
+        this.createNotificationChannel()
+
+        // set cursor window size to 32MB
+        DatabaseUtil.setCursorWindowSize(32 * 1024 * 1024)
+
+        startupBootstrapCoordinator = StartupBootstrapCoordinator(
+            scope = get<AppScope>(),
+            restoreDispatcher = Dispatchers.IO,
+            activationDispatcher = Dispatchers.Main.immediate,
+            stateStore = StartupBootstrapGate.stateStore(),
+            restore = {
+                // The verified session is an in-memory capability: settings commit reuses the
+                // validation performed before file application instead of hashing payloads twice.
+                val session = PendingRestoreManager.applyFilesBeforeDatabase(this@RikkaHubApp)
                 PendingRestoreManager.completeSettingsAfterKoin(
                     context = this@RikkaHubApp,
                     settingsStore = get(),
                     json = get<Json>(),
+                    session = session,
                 )
-            }.onFailure {
-                logSafeError(TAG, "startup", "commit_pending_restore_settings", it)
-            }
-            when (val readiness = get<SettingsStore>().migrateCredentialVault()) {
+            },
+            activateRuntime = {
+                // A previous activation or UI crash must be able to reach SafeModeActivity on the
+                // next clean process. Restore is already committed at this boundary, so skip the
+                // normal consumers and let RouteActivity publish the existing crash recovery UI.
+                if (CrashHandler.hasCrashed(this@RikkaHubApp)) {
+                    StartupRuntimeMode.SAFE_MODE
+                } else {
+                    startRuntimeAfterBootstrap()
+                    StartupRuntimeMode.NORMAL
+                }
+            },
+            onRestoreFailure = { error ->
+                logSafeError(TAG, "startup", "bootstrap_restore", error)
+            },
+            onActivationFailure = { error ->
+                // Activation may have started durable consumers and is unsafe to retry in-process.
+                // Re-throw from a fresh main-loop task so CrashHandler records it before Android
+                // terminates the partial process. The public gate remains Failed, never Ready.
+                check(Handler(Looper.getMainLooper()).post { throw error }) {
+                    "Unable to schedule fail-fast runtime termination"
+                }
+            },
+        )
+        startupBootstrapCoordinator.start()
+    }
+
+    internal fun retryStartupBootstrap(): Boolean =
+        ::startupBootstrapCoordinator.isInitialized && startupBootstrapCoordinator.start()
+
+    private fun startRuntimeAfterBootstrap() {
+        StartupBootstrapGate.requireDatabaseAccess()
+        if (!runtimeStarted.compareAndSet(false, true)) return
+
+        // These used to be eager Koin singletons. Resolve them only after settings are committed.
+        get<UpdateChecker>()
+        get<ChatNotificationManager>()
+
+        // Credential projection can touch DataStore, fsync-backed journal files and Android
+        // Keystore. It starts only after restore, and its own readiness gate protects networking.
+        get<AppScope>().launch(Dispatchers.IO) {
+            when (get<SettingsStore>().migrateCredentialVault()) {
                 CredentialReadiness.Ready -> {
                     startWebServerIfEnabled()
                     incrementLaunchCount()
@@ -134,10 +199,6 @@ class RikkaHubApp : Application() {
                 else -> logSafeFailure(TAG, "credential", "initialize_boundary")
             }
         }
-        this.createNotificationChannel()
-
-        // set cursor window size to 32MB
-        DatabaseUtil.setCursorWindowSize(32 * 1024 * 1024)
 
         // Resume durable search projection work before creating any new outbox events.
         get<MessageFtsOutboxProcessor>().start()
@@ -151,20 +212,17 @@ class RikkaHubApp : Application() {
         // Init QuickJS native library
         QuickJSLoader.init()
 
-        // delete temp files
         deleteTempFiles()
-
-        // cleanup stale tool output files
         cleanupToolOutputs()
-
-        // cleanup workspace temp dirs (proot + rootfs /tmp)
         cleanupWorkspaceTempDirs()
-
-        // check workspace integrity (mark workspaces with missing files as broken after backup restore)
         checkWorkspaceIntegrity()
-
-        // sync upload files to DB
         syncManagedFiles()
+
+        // A committed restore is already invisible to future startup. Its former payload and
+        // rollback journal can therefore be reclaimed independently without delaying the gate.
+        get<AppScope>().launch(Dispatchers.IO) {
+            PendingRestoreManager.cleanupCommittedGarbage(this@RikkaHubApp)
+        }
 
         // Composer.setDiagnosticStackTraceMode(ComposeStackTraceMode.Auto)
     }
@@ -269,14 +327,23 @@ class RikkaHubApp : Application() {
                         var taskRecovery = get<ImageTaskRecoveryCoordinator>().reconcilePending()
                         // Rebuild the durable task descriptor before orphan file registration so
                         // MediaAsset never freezes a paid result with placeholder lineage.
-                        val mediaRecovery = get<MediaAssetRecovery>().reconcilePending()
+                        var mediaRecovery = get<MediaAssetRecovery>().reconcilePending()
+                        var taskDescriptorAdvancedAfterMedia = false
                         // A dead process can leave at most one 90-second fenced lease. Wait here;
                         // never reclaim or resend a charged request early.
                         while (taskRecovery.pending > 0 && imageRecoveryPasses < 20) {
                             delay(5_000)
                             requestRecovery = get<ImageRequestReconciler>().reconcilePending()
                             taskRecovery = get<ImageTaskRecoveryCoordinator>().reconcilePending()
+                            taskDescriptorAdvancedAfterMedia =
+                                taskDescriptorAdvancedAfterMedia || taskRecovery.projected > 0
                             imageRecoveryPasses++
+                        }
+                        if (taskDescriptorAdvancedAfterMedia) {
+                            // A newly projected task descriptor can supply lineage that was absent
+                            // during the first media pass. Reconcile again before downstream tool
+                            // recovery and report both passes as one startup domain result.
+                            mediaRecovery += get<MediaAssetRecovery>().reconcilePending()
                         }
                         if (mediaRecovery.inspected > 0 || mediaRecovery.failures.isNotEmpty()) {
                             Log.i(

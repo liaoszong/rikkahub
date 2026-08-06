@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,6 +49,7 @@ import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import coil3.ImageLoader
+import coil3.annotation.ExperimentalCoilApi
 import coil3.compose.setSingletonImageLoaderFactory
 import coil3.gif.AnimatedImageDecoder
 import coil3.gif.GifDecoder
@@ -127,8 +129,9 @@ import me.rerere.rikkahub.ui.pages.translator.TranslatorPage
 import me.rerere.rikkahub.ui.pages.webview.WebViewPage
 import me.rerere.rikkahub.ui.theme.LocalDarkMode
 import me.rerere.rikkahub.ui.theme.RikkahubTheme
-import me.rerere.rikkahub.utils.CrashHandler
 import me.rerere.rikkahub.utils.openUsageAccessSettings
+import me.rerere.rikkahub.startup.StartupBootstrapGate
+import me.rerere.rikkahub.startup.StartupBootstrapState
 import okhttp3.OkHttpClient
 import org.koin.android.ext.android.inject
 import org.koin.compose.koinInject
@@ -161,37 +164,121 @@ class RouteActivity : ComponentActivity() {
         return super.dispatchKeyEvent(event)
     }
 
+    @OptIn(ExperimentalCoilApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         disableNavigationBarContrast()
         super.onCreate(savedInstanceState)
-        if (CrashHandler.hasCrashed(this)) {
-            startActivity(Intent(this, SafeModeActivity::class.java))
-            finish()
-            return
-        }
         setContent {
-            RikkahubTheme {
-                setSingletonImageLoaderFactory { context ->
-                    ImageLoader.Builder(context)
-                        .crossfade(true)
-                        .components {
-                            add(
-                                OkHttpNetworkFetcherFactory(
-                                    callFactory = { okHttpClient },
-                                    cacheStrategy = { CacheControlCacheStrategy() },
-                                )
-                            )
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                                add(AnimatedImageDecoder.Factory())
-                            } else {
-                                add(GifDecoder.Factory())
-                            }
-                            add(SvgDecoder.Factory(scaleToDensity = true))
-                        }
-                        .build()
+            val bootstrapState by StartupBootstrapGate.state.collectAsStateWithLifecycle()
+            when (val state = bootstrapState) {
+                StartupBootstrapState.NotStarted,
+                is StartupBootstrapState.Running,
+                -> StartupBootstrapScreen(state = state)
+
+                is StartupBootstrapState.Failed -> StartupBootstrapScreen(
+                    state = state,
+                    onRetry = { (application as? RikkaHubApp)?.retryStartupBootstrap() },
+                )
+
+                StartupBootstrapState.SafeMode -> {
+                    LaunchedEffect(Unit) {
+                        startActivity(Intent(this@RouteActivity, SafeModeActivity::class.java))
+                        finish()
+                    }
                 }
-                AppRoutes()
+
+                StartupBootstrapState.Ready -> {
+                    RikkahubTheme {
+                        setSingletonImageLoaderFactory { context ->
+                            ImageLoader.Builder(context)
+                                .crossfade(true)
+                                .components {
+                                    add(
+                                        OkHttpNetworkFetcherFactory(
+                                            callFactory = { okHttpClient },
+                                            cacheStrategy = { CacheControlCacheStrategy() },
+                                        )
+                                    )
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                                        add(AnimatedImageDecoder.Factory())
+                                    } else {
+                                        add(GifDecoder.Factory())
+                                    }
+                                    add(SvgDecoder.Factory(scaleToDensity = true))
+                                }
+                                .build()
+                        }
+                        AppRoutes()
+                    }
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun StartupBootstrapScreen(
+        state: StartupBootstrapState,
+        onRetry: () -> Unit = {},
+    ) {
+        MaterialTheme {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background)
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    when (state) {
+                        StartupBootstrapState.NotStarted,
+                        is StartupBootstrapState.Running,
+                        -> {
+                            CircularProgressIndicator()
+                            Text(
+                                text = "正在安全恢复数据…",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text(
+                                text = "完成前不会打开数据库。",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+
+                        is StartupBootstrapState.Failed -> {
+                            Text(
+                                text = "启动恢复失败",
+                                style = MaterialTheme.typography.headlineSmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            Text(
+                                text = if (state.retryable) {
+                                    "为保护数据，应用尚未打开数据库。请重试恢复。"
+                                } else {
+                                    "运行时启动失败，应用将安全退出；重新打开后会从干净进程启动。"
+                                },
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                text = "错误类型：${state.reason}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            if (state.retryable) {
+                                Button(onClick = onRetry) {
+                                    Text("重试")
+                                }
+                            }
+                        }
+
+                        StartupBootstrapState.Ready,
+                        StartupBootstrapState.SafeMode,
+                        -> Unit
+                    }
+                }
             }
         }
     }

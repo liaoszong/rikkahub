@@ -93,7 +93,9 @@ class BackupRestoreCoordinator(
             )
             File(staging, MANIFEST_FILE).writeText(json.encodeToString(manifest))
             File(staging, PHASE_FILE).writeText(RestorePhase.READY.name)
+            PendingRestoreManager.invalidateVerifiedSession()
             atomicMove(staging, PendingRestoreManager.pendingDirectory(context))
+            PendingRestoreManager.invalidateVerifiedSession()
             Log.i(RESTORE_TAG, "Validated restore staged with ${entries.size} files")
         } catch (error: Throwable) {
             staging.deleteRecursively()
@@ -109,53 +111,84 @@ class BackupRestoreCoordinator(
 }
 
 object PendingRestoreManager {
+    private val verifier = PendingRestoreVerifier()
+
     fun restoreRoot(context: Context): File = File(context.noBackupFilesDir, "backup-restore")
 
     fun pendingDirectory(context: Context): File = File(restoreRoot(context), "pending")
 
-    fun applyFilesBeforeDatabase(context: Context) {
-        val pending = pendingDirectory(context)
-        if (!pending.exists()) return
-        val json = restoreJson()
-        val manifest = readManifest(pending, json)
-        verifyPayload(pending, manifest)
+    internal fun applyFilesBeforeDatabase(context: Context): PendingRestoreSession? {
+        val pending = pendingDirectory(context).canonicalFile
+        if (!pending.exists()) {
+            verifier.invalidatePath(pending)
+            return null
+        }
         val transaction = AtomicRestoreTransaction(File(pending, "transaction"))
 
-        when (readPhase(pending)) {
-            RestorePhase.FILES_APPLIED -> return
-            RestorePhase.APPLYING -> transaction.rollback()
-            RestorePhase.READY -> Unit
+        // Rollback evidence is authoritative and must be handled before reading or hashing staged
+        // payloads. This also repairs READY written by older builds after a failed rollback.
+        when (readRestorePhase(pending)) {
+            RestorePhase.APPLYING,
+            RestorePhase.ROLLING_BACK,
+            RestorePhase.ROLLBACK_FAILED,
+            -> rollbackPendingTransaction(pending, transaction)
+
+            RestorePhase.READY -> {
+                if (transaction.hasTransactionState()) {
+                    rollbackPendingTransaction(pending, transaction)
+                }
+            }
+
+            RestorePhase.FILES_APPLIED -> Unit
         }
 
-        writePhase(pending, RestorePhase.APPLYING)
+        val session = verifier.verify(pending)
+        when (readRestorePhase(pending)) {
+            RestorePhase.FILES_APPLIED -> {
+                check(transaction.hasRecoveryJournal()) {
+                    "Applied restore has no durable rollback journal"
+                }
+                return session
+            }
+
+            RestorePhase.READY -> Unit
+            else -> error("Pending restore did not reach a stable phase after rollback recovery")
+        }
+
+        writeRestorePhase(pending, RestorePhase.APPLYING)
         try {
-            transaction.apply(buildOperations(context, pending, manifest))
-            writePhase(pending, RestorePhase.FILES_APPLIED)
+            transaction.apply(buildOperations(context, pending, session.manifest))
+            writeRestorePhase(pending, RestorePhase.FILES_APPLIED)
             Log.i(RESTORE_TAG, "Pending restore files applied before Room initialization")
+            return session
         } catch (error: Throwable) {
-            runCatching { transaction.rollback() }
+            runCatching { rollbackPendingTransaction(pending, transaction) }
                 .onFailure { error.addSuppressed(it) }
-            writePhase(pending, RestorePhase.READY)
             throw error
         }
     }
 
-    suspend fun completeSettingsAfterKoin(
+    internal suspend fun completeSettingsAfterKoin(
         context: Context,
         settingsStore: SettingsStore,
         json: Json,
+        session: PendingRestoreSession?,
     ) {
-        val pending = pendingDirectory(context)
-        if (!pending.exists()) return
-        check(readPhase(pending) == RestorePhase.FILES_APPLIED) {
+        if (session == null) return
+        val pending = session.pendingDirectory
+        check(pending.canonicalFile == pendingDirectory(context).canonicalFile) {
+            "Pending restore session does not belong to this application"
+        }
+        check(pending.exists()) { "Pending restore session disappeared before settings commit" }
+        check(session.identity == PendingRestoreIdentity.readFrom(pending)) {
+            "Pending restore identity changed after payload verification"
+        }
+        check(readRestorePhase(pending) == RestorePhase.FILES_APPLIED) {
             "Pending restore files were not applied"
         }
-        val manifest = readManifest(pending, json)
-        verifyPayload(pending, manifest)
-        val settingsFile = SafeBackupArchive.resolveWithin(File(pending, "payload"), SETTINGS_ENTRY)
         val previousSettings = settingsStore.settingsFlowRaw.first()
         try {
-            val migrated = SettingsJsonMigrator.migrate(settingsFile.readText())
+            val migrated = SettingsJsonMigrator.migrate(session.settingsFile.readText())
             settingsStore.update(
                 decodeRestoredSettingsPreservingLocalSecrets(
                     restoredSettingsJson = migrated,
@@ -163,16 +196,36 @@ object PendingRestoreManager {
                     json = json,
                 )
             )
-            pending.deleteRecursively()
-            Log.i(RESTORE_TAG, "Pending restore committed")
+            movePendingToCommittedGarbage(
+                restoreRoot = restoreRoot(context),
+                pending = pending,
+            )
         } catch (error: Throwable) {
             runCatching { settingsStore.update(previousSettings) }
                 .onFailure { error.addSuppressed(it) }
-            runCatching { AtomicRestoreTransaction(File(pending, "transaction")).rollback() }
-                .onFailure { error.addSuppressed(it) }
-            writePhase(pending, RestorePhase.READY)
+            if (pending.exists()) {
+                runCatching {
+                    rollbackPendingTransaction(
+                        pending = pending,
+                        transaction = AtomicRestoreTransaction(File(pending, "transaction")),
+                    )
+                }.onFailure { error.addSuppressed(it) }
+            }
             throw error
         }
+        // Nothing after the atomic rename belongs to the rollback boundary: pending is now absent
+        // and this commit must remain authoritative even if bookkeeping or logging later fails.
+        verifier.invalidate(session.identity)
+        Log.i(RESTORE_TAG, "Pending restore committed")
+    }
+
+    /** Old committed directories are never interpreted as pending restore work. */
+    internal fun cleanupCommittedGarbage(context: Context) {
+        cleanupCommittedRestoreGarbage(restoreRoot(context))
+    }
+
+    internal fun invalidateVerifiedSession() {
+        verifier.invalidateAll()
     }
 
     private fun buildOperations(
@@ -209,28 +262,156 @@ object PendingRestoreManager {
         return operations
     }
 
-    private fun verifyPayload(pending: File, manifest: PendingRestoreManifest) {
-        val payload = File(pending, "payload")
-        manifest.entries.forEach { entry ->
-            val file = SafeBackupArchive.resolveWithin(payload, entry.name)
-            check(file.isFile && file.length() == entry.size && file.sha256() == entry.sha256) {
-                "Staged restore payload failed integrity verification: ${entry.name}"
-            }
+}
+
+/** Capability produced only after this process has verified the complete staged payload. */
+internal data class PendingRestoreSession(
+    val pendingDirectory: File,
+    val settingsFile: File,
+    val manifest: PendingRestoreManifest,
+    val identity: PendingRestoreIdentity,
+)
+
+internal data class PendingRestoreIdentity(
+    val canonicalPath: String,
+    val manifestFingerprint: String,
+) {
+    companion object {
+        fun readFrom(pending: File): PendingRestoreIdentity {
+            val canonicalPending = pending.canonicalFile
+            val manifestBytes = File(canonicalPending, MANIFEST_FILE).readBytes()
+            return PendingRestoreIdentity(
+                canonicalPath = canonicalPending.path,
+                manifestFingerprint = manifestBytes.sha256(),
+            )
         }
-        check(manifest.entries.any { it.name == SETTINGS_ENTRY }) { "Restore manifest has no settings" }
+    }
+}
+
+internal class PendingRestoreVerifier(
+    private val json: Json = Json { ignoreUnknownKeys = true },
+    private val payloadVerifier: (File, PendingRestoreManifest) -> Unit = ::verifyPendingRestorePayload,
+) {
+    private val monitor = Any()
+    private var cachedSession: PendingRestoreSession? = null
+
+    fun verify(pending: File): PendingRestoreSession {
+        val canonicalPending = pending.canonicalFile
+        val manifestBytes = File(canonicalPending, MANIFEST_FILE).readBytes()
+        val identity = PendingRestoreIdentity(
+            canonicalPath = canonicalPending.path,
+            manifestFingerprint = manifestBytes.sha256(),
+        )
+        synchronized(monitor) {
+            cachedSession?.takeIf { it.identity == identity }?.let { return it }
+
+            val manifest = json.decodeFromString<PendingRestoreManifest>(manifestBytes.decodeToString())
+            payloadVerifier(canonicalPending, manifest)
+            return PendingRestoreSession(
+                pendingDirectory = canonicalPending,
+                settingsFile = SafeBackupArchive.resolveWithin(
+                    File(canonicalPending, "payload"),
+                    SETTINGS_ENTRY,
+                ),
+                manifest = manifest,
+                identity = identity,
+            ).also { cachedSession = it }
+        }
     }
 
-    private fun readManifest(pending: File, json: Json): PendingRestoreManifest =
-        json.decodeFromString(File(pending, MANIFEST_FILE).readText())
-
-    private fun readPhase(pending: File): RestorePhase =
-        RestorePhase.valueOf(File(pending, PHASE_FILE).readText().trim())
-
-    private fun writePhase(pending: File, phase: RestorePhase) {
-        writeTextAtomically(File(pending, PHASE_FILE), phase.name)
+    fun invalidate(identity: PendingRestoreIdentity) {
+        synchronized(monitor) {
+            if (cachedSession?.identity == identity) cachedSession = null
+        }
     }
 
-    private fun restoreJson() = Json { ignoreUnknownKeys = true }
+    fun invalidatePath(pending: File) {
+        val canonicalPath = pending.canonicalFile.path
+        synchronized(monitor) {
+            if (cachedSession?.identity?.canonicalPath == canonicalPath) cachedSession = null
+        }
+    }
+
+    fun invalidateAll() {
+        synchronized(monitor) { cachedSession = null }
+    }
+}
+
+private fun verifyPendingRestorePayload(pending: File, manifest: PendingRestoreManifest) {
+    val payload = File(pending, "payload")
+    manifest.entries.forEach { entry ->
+        val file = SafeBackupArchive.resolveWithin(payload, entry.name)
+        check(file.isFile && file.length() == entry.size && file.sha256() == entry.sha256) {
+            "Staged restore payload failed integrity verification: ${entry.name}"
+        }
+    }
+    check(manifest.entries.any { it.name == SETTINGS_ENTRY }) { "Restore manifest has no settings" }
+}
+
+/**
+ * Durably records rollback intent before touching live files. READY is written only after every
+ * journal entry was restored and the transaction directory was removed successfully.
+ */
+internal fun rollbackPendingTransaction(
+    pending: File,
+    transaction: AtomicRestoreTransaction,
+    rollback: () -> Unit = { transaction.rollback() },
+) {
+    writeRestorePhase(pending, RestorePhase.ROLLING_BACK)
+    try {
+        rollback()
+        writeRestorePhase(pending, RestorePhase.READY)
+    } catch (error: Throwable) {
+        runCatching { writeRestorePhase(pending, RestorePhase.ROLLBACK_FAILED) }
+            .onFailure { error.addSuppressed(it) }
+        throw error
+    }
+}
+
+internal fun movePendingToCommittedGarbage(
+    restoreRoot: File,
+    pending: File,
+    uniqueSuffix: String = UUID.randomUUID().toString(),
+    atomicMover: (source: File, target: File) -> Unit = ::atomicMoveRequired,
+): File {
+    val canonicalRoot = restoreRoot.canonicalFile
+    val canonicalPending = pending.canonicalFile
+    check(canonicalPending.parentFile == canonicalRoot && canonicalPending.name == PENDING_DIRECTORY) {
+        "Only the active pending restore may be committed"
+    }
+    val committed = File(canonicalRoot, "$COMMITTED_GC_PREFIX$uniqueSuffix")
+    check(!committed.exists()) { "Committed restore garbage destination already exists" }
+
+    try {
+        atomicMover(canonicalPending, committed)
+    } catch (error: Throwable) {
+        // An injected interruption can be observed after the atomic rename reached disk. Treat
+        // that exact source-missing/target-present state as committed; every other state fails.
+        if (!canonicalPending.exists() && committed.isDirectory) return committed
+        throw error
+    }
+    check(!canonicalPending.exists() && committed.isDirectory) {
+        "Pending restore commit rename did not complete"
+    }
+    return committed
+}
+
+/** Best-effort GC. Failures never recreate or reactivate a committed restore. */
+internal fun cleanupCommittedRestoreGarbage(
+    restoreRoot: File,
+    delete: (File) -> Boolean = { it.deleteRecursively() },
+) {
+    restoreRoot.listFiles()
+        .orEmpty()
+        .filter { it.name.startsWith(COMMITTED_GC_PREFIX) }
+        .forEach { garbage -> runCatching { delete(garbage) } }
+}
+
+private fun readRestorePhase(pending: File): RestorePhase =
+    RestorePhase.valueOf(File(pending, PHASE_FILE).readText().trim())
+
+private fun writeRestorePhase(pending: File, phase: RestorePhase) {
+    writeTextAtomically(File(pending, PHASE_FILE), phase.name)
 }
 
 internal fun decodeRestoredSettingsPreservingLocalSecrets(
@@ -261,10 +442,9 @@ internal class AtomicRestoreTransaction(private val transactionRoot: File) {
         operations: List<RestoreFileOperation>,
         afterOperation: (Int) -> Unit = {},
     ) {
-        transactionRoot.deleteRecursively()
-        rollbackRoot.mkdirs()
-        journalFile.parentFile?.mkdirs()
-        journalFile.createNewFile()
+        check(!transactionRoot.exists()) { "Unresolved restore transaction must be rolled back first" }
+        check(rollbackRoot.mkdirs()) { "Unable to create restore rollback directory" }
+        check(journalFile.createNewFile()) { "Unable to create restore rollback journal" }
 
         operations.forEachIndexed { index, operation ->
             val target = operation.target.canonicalFile
@@ -275,25 +455,47 @@ internal class AtomicRestoreTransaction(private val transactionRoot: File) {
 
             when (operation) {
                 is RestoreFileOperation.Replace -> copyFileAtomically(operation.source, target)
-                is RestoreFileOperation.Delete -> target.delete()
+                is RestoreFileOperation.Delete -> if (target.exists()) {
+                    check(target.delete()) { "Unable to delete restored target: ${target.name}" }
+                }
             }
             afterOperation(index)
         }
     }
 
-    fun rollback() {
-        if (!journalFile.exists()) return
-        readJournal().asReversed().forEach { entry ->
-            val target = File(entry.target)
-            if (entry.hadOriginal) {
-                val backup = File(entry.backup)
-                check(backup.isFile) { "Restore rollback file is missing: ${backup.name}" }
-                copyFileAtomically(backup, target)
-            } else {
-                target.delete()
+    fun hasTransactionState(): Boolean = transactionRoot.exists()
+
+    fun hasRecoveryJournal(): Boolean = journalFile.isFile
+
+    fun rollback(afterRestoredEntry: (Int) -> Unit = {}) {
+        if (!transactionRoot.exists()) return
+        if (journalFile.exists()) {
+            readJournal().asReversed().forEachIndexed { index, entry ->
+                val target = File(entry.target)
+                if (entry.hadOriginal) {
+                    val backup = File(entry.backup)
+                    check(backup.isFile) { "Restore rollback file is missing: ${backup.name}" }
+                    copyFileAtomically(backup, target)
+                } else if (target.exists()) {
+                    check(target.delete()) { "Unable to delete rollback target: ${target.name}" }
+                }
+                afterRestoredEntry(index)
             }
         }
-        transactionRoot.deleteRecursively()
+
+        // Never recursively delete active rollback evidence. Once every live target is restored,
+        // atomically detach the directory from the active transaction name; only that detached
+        // garbage may be deleted best-effort.
+        val completedGarbage = File(
+            requireNotNull(transactionRoot.parentFile),
+            "$ROLLBACK_GC_PREFIX${UUID.randomUUID()}",
+        )
+        try {
+            atomicMoveRequired(transactionRoot, completedGarbage)
+        } catch (error: Throwable) {
+            if (transactionRoot.exists() || !completedGarbage.isDirectory) throw error
+        }
+        runCatching { completedGarbage.deleteRecursively() }
     }
 
     private fun appendJournal(entry: RestoreJournalEntry) {
@@ -342,7 +544,13 @@ private data class RestoreJournalEntry(
     val hadOriginal: Boolean,
 )
 
-private enum class RestorePhase { READY, APPLYING, FILES_APPLIED }
+private enum class RestorePhase {
+    READY,
+    APPLYING,
+    ROLLING_BACK,
+    ROLLBACK_FAILED,
+    FILES_APPLIED,
+}
 
 private const val SETTINGS_ENTRY = "settings.json"
 private const val DATABASE_ENTRY = "rikka_hub.db"
@@ -350,6 +558,9 @@ private const val DATABASE_WAL_ENTRY = "rikka_hub-wal"
 private const val DATABASE_SHM_ENTRY = "rikka_hub-shm"
 private const val MANIFEST_FILE = "manifest.json"
 private const val PHASE_FILE = "phase"
+private const val PENDING_DIRECTORY = "pending"
+private const val COMMITTED_GC_PREFIX = "committed-gc-"
+private const val ROLLBACK_GC_PREFIX = "rollback-gc-"
 private val DATABASE_ENTRIES = setOf(DATABASE_ENTRY, DATABASE_WAL_ENTRY, DATABASE_SHM_ENTRY)
 
 private fun validateSqlite(file: File) {
@@ -371,6 +582,10 @@ private fun File.sha256(): String {
     }
     return digest.digest().joinToString("") { "%02x".format(it) }
 }
+
+private fun ByteArray.sha256(): String = MessageDigest.getInstance("SHA-256")
+    .digest(this)
+    .joinToString("") { "%02x".format(it) }
 
 private fun copyFileAtomically(source: File, target: File) {
     target.parentFile?.mkdirs()
@@ -404,6 +619,15 @@ private fun atomicMove(source: File, target: File) {
             java.nio.file.StandardCopyOption.REPLACE_EXISTING,
         )
     }
+}
+
+private fun atomicMoveRequired(source: File, target: File) {
+    target.parentFile?.mkdirs()
+    java.nio.file.Files.move(
+        source.toPath(),
+        target.toPath(),
+        java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+    )
 }
 
 private fun writeTextAtomically(target: File, value: String) {

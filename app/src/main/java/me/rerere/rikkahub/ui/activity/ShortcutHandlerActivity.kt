@@ -9,6 +9,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.FileProvider
 import me.rerere.rikkahub.BuildConfig
 import me.rerere.rikkahub.RouteActivity
+import me.rerere.rikkahub.startup.StartupBootstrapGate
 import java.io.File
 
 class ShortcutHandlerActivity : ComponentActivity() {
@@ -37,6 +38,11 @@ class ShortcutHandlerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (!StartupBootstrapGate.isRuntimeReady()) {
+            startActivity(Intent(this, RouteActivity::class.java))
+            finish()
+            return
+        }
         requestPermissionLauncher.launch(Manifest.permission.CAMERA)
     }
 

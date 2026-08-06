@@ -45,7 +45,8 @@ val appModule = module {
         AppScope()
     }
 
-    single(createdAtStart = true) {
+    // Resolved explicitly by RikkaHubApp only after startup restore commits.
+    single {
         UpdateChecker(
             context = get(),
             client = get(),
@@ -114,9 +115,9 @@ val appModule = module {
         SoundEffectPlayer(get())
     }
 
-    // 生成通知与业务解耦：ChatService 只发事件，通知由这里消费；
-    // createdAtStart 保证进程启动即订阅，否则后台生成的事件会因无订阅者而丢失
-    single(createdAtStart = true) {
+    // 生成通知与业务解耦：ChatService 只发事件，通知由这里消费。RikkaHubApp 在启动恢复
+    // 成功后立即解析此单例，既保证及时订阅，也避免它在 restored settings 提交前运行。
+    single {
         ChatNotificationManager(
             context = get(),
             appScope = get(),

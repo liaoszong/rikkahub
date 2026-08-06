@@ -13,6 +13,7 @@ import kotlinx.coroutines.runBlocking
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.db.dao.WorkspaceDAO
 import me.rerere.rikkahub.data.db.entity.WorkspaceEntity
+import me.rerere.rikkahub.startup.StartupBootstrapGate
 import me.rerere.workspace.WorkspaceManager
 import org.koin.core.context.GlobalContext
 import java.io.File
@@ -63,6 +64,7 @@ class WorkspaceDocumentsProvider : DocumentsProvider() {
     }
 
     override fun queryDocument(documentId: String, projection: Array<String>?): Cursor {
+        requireRuntimeReady()
         val cursor = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
         val target = parseDocId(documentId)
         if (target.isRoot) {
@@ -85,6 +87,7 @@ class WorkspaceDocumentsProvider : DocumentsProvider() {
         projection: Array<String>?,
         sortOrder: String?,
     ): Cursor {
+        requireRuntimeReady()
         val cursor = MatrixCursor(projection ?: DEFAULT_DOCUMENT_PROJECTION)
         val parent = parseDocId(parentDocumentId)
         if (parent.isRoot) {
@@ -111,6 +114,7 @@ class WorkspaceDocumentsProvider : DocumentsProvider() {
         mode: String,
         signal: CancellationSignal?,
     ): ParcelFileDescriptor {
+        requireRuntimeReady()
         val target = parseDocId(documentId)
         require(!target.isRoot) { "Cannot open root as a document" }
         val file = resolveFile(target.root, target.relPath)
@@ -122,6 +126,7 @@ class WorkspaceDocumentsProvider : DocumentsProvider() {
         mimeType: String,
         displayName: String,
     ): String {
+        requireRuntimeReady()
         val parent = parseDocId(parentDocumentId)
         require(!parent.isRoot) { "Cannot create document at root" }
         manager().ensureWorkspace(parent.root)
@@ -138,6 +143,7 @@ class WorkspaceDocumentsProvider : DocumentsProvider() {
     }
 
     override fun deleteDocument(documentId: String) {
+        requireRuntimeReady()
         val target = parseDocId(documentId)
         require(!target.isRoot && target.relPath.isNotEmpty()) { "Cannot delete this document" }
         val file = resolveFile(target.root, target.relPath)
@@ -147,6 +153,7 @@ class WorkspaceDocumentsProvider : DocumentsProvider() {
     }
 
     override fun renameDocument(documentId: String, displayName: String): String {
+        requireRuntimeReady()
         val target = parseDocId(documentId)
         require(!target.isRoot && target.relPath.isNotEmpty()) { "Cannot rename this document" }
         val file = resolveFile(target.root, target.relPath)
@@ -158,6 +165,7 @@ class WorkspaceDocumentsProvider : DocumentsProvider() {
     }
 
     override fun copyDocument(sourceDocumentId: String, targetParentDocumentId: String): String {
+        requireRuntimeReady()
         val source = parseDocId(sourceDocumentId)
         val targetParent = parseDocId(targetParentDocumentId)
         require(!source.isRoot && source.relPath.isNotEmpty()) { "Cannot copy this document" }
@@ -180,6 +188,7 @@ class WorkspaceDocumentsProvider : DocumentsProvider() {
         sourceParentDocumentId: String?,
         targetParentDocumentId: String,
     ): String {
+        requireRuntimeReady()
         val source = parseDocId(sourceDocumentId)
         val targetParent = parseDocId(targetParentDocumentId)
         require(!source.isRoot && source.relPath.isNotEmpty()) { "Cannot move this document" }
@@ -205,12 +214,14 @@ class WorkspaceDocumentsProvider : DocumentsProvider() {
     }
 
     override fun getDocumentType(documentId: String): String {
+        requireRuntimeReady()
         val target = parseDocId(documentId)
         if (target.isRoot) return Document.MIME_TYPE_DIR
         return mimeOf(resolveFile(target.root, target.relPath))
     }
 
     override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean {
+        requireRuntimeReady()
         val parent = parseDocId(parentDocumentId)
         val child = parseDocId(documentId)
         if (child.isRoot) return false
@@ -221,6 +232,10 @@ class WorkspaceDocumentsProvider : DocumentsProvider() {
     }
 
     // --- helpers ---
+
+    private fun requireRuntimeReady() {
+        StartupBootstrapGate.requireRuntimeReady()
+    }
 
     private fun addFileRow(cursor: MatrixCursor, root: String, file: File) {
         val relPath = relPathOf(root, file)
