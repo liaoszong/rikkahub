@@ -136,6 +136,32 @@ class FilesManagerDeletionPolicyTest {
     }
 
     @Test
+    fun `durable asset in upload is preserved even when managed identity is valid`() {
+        val root = Files.createTempDirectory("chat-file-durable-asset-policy").toFile()
+        try {
+            val file = root.resolve("${FileFolders.UPLOAD}/historical.png").apply {
+                parentFile?.mkdirs()
+                writeText("paid-output")
+            }
+            val candidate = requireNotNull(
+                resolveChatFileDeletionCandidate(root, "file", file.path),
+            )
+
+            assertFalse(
+                deleteManagedChatFileIfAuthorized(
+                    filesDir = root,
+                    candidate = candidate,
+                    managedFile = managedFile(candidate, id = 52L),
+                    durableAssetOwned = true,
+                ),
+            )
+            assertTrue(file.exists())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun `failed physical delete preserves managed identity and replica authority`() = runBlocking {
         val root = Files.createTempDirectory("managed-file-delete-failure").toFile()
         try {

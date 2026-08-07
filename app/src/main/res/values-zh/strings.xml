@@ -393,7 +393,13 @@
   <string name="imggen_page_cancel_generation_title">取消生成</string>
   <string name="imggen_page_confirm">确定</string>
   <string name="imggen_page_delete">删除</string>
-  <string name="imggen_page_gallery">图片库</string>
+  <string name="imggen_page_gallery">资产库</string>
+  <string name="asset_library_title">资产库</string>
+  <string name="asset_library_images">图片</string>
+  <string name="asset_library_attachments">普通附件</string>
+  <string name="asset_library_no_attachments">还没有已保存的普通附件</string>
+  <string name="asset_library_file_missing">文件缺失</string>
+  <string name="asset_library_retry">重试</string>
   <string name="imggen_page_generate_image">生成图片</string>
   <string name="imggen_page_generating_background">正在后台生成图片</string>
   <string name="imggen_page_preview_waiting">已收到预览图，正在等待最终图片</string>

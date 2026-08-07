@@ -174,7 +174,7 @@ internal class ConversationV2Codec(
                         kind = kind,
                         payloadJson = payloadJson,
                         payloadDigest = sha256Hex(payloadJson),
-                        assetId = (message.parts[ordinal] as? UIMessagePart.Image)?.assetId,
+                        assetId = message.parts[ordinal].mediaAssetIdOrNull(),
                         toolInvocationId = message.parts[ordinal].toolInvocationIdOrNull(),
                     )
                 }
@@ -208,6 +208,14 @@ internal class ConversationV2Codec(
             inferenceFlags = inferenceFlags,
         )
     }
+}
+
+private fun UIMessagePart.mediaAssetIdOrNull(): String? = when (this) {
+    is UIMessagePart.Image -> assetId
+    is UIMessagePart.Video -> assetId
+    is UIMessagePart.Audio -> assetId
+    is UIMessagePart.Document -> assetId
+    else -> null
 }
 
 internal class ConversationV2LegacySourceDigest(

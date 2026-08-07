@@ -1283,5 +1283,11 @@ mDNSアドレス: .localホスト名を使用し、IPを知らなくても同じ
   <string name="assistant_page_context_message_limit_warning">コンテキストの制限は、コンテキストが切り詰められるたびにプロンプトキャッシュを無効化します。制限が大きいほど切り詰めの頻度が減り、無制限なら切り詰めが発生せず、キャッシュは完全に保持されます。</string>
   <string name="update_dialog_stale">最新バージョンを確認できませんでした。キャッシュ済みの更新情報を表示しています。</string>
   <string name="update_dialog_stale_checked_at">更新情報を取得できませんでした。前回の確認成功日時：%1$s</string>
+  <string name="asset_library_title">アセットライブラリ</string>
+  <string name="asset_library_images">画像</string>
+  <string name="asset_library_attachments">添付ファイル</string>
+  <string name="asset_library_no_attachments">保存済みの添付ファイルはありません</string>
+  <string name="asset_library_file_missing">ファイルが見つかりません</string>
+  <string name="asset_library_retry">再試行</string>
 </resources>
 

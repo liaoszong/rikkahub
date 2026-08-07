@@ -86,6 +86,7 @@ import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.data.datastore.resolveBackgroundTextModel
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.files.FileFolders
+import me.rerere.rikkahub.data.media.MediaAssetMaterializer
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.AssistantAffectScope
@@ -230,6 +231,7 @@ class ChatService(
     private val localTools: LocalTools,
     val mcpManager: McpManager,
     private val filesManager: FilesManager,
+    private val mediaAssetMaterializer: MediaAssetMaterializer,
     private val skillManager: SkillManager,
     private val workspaceRepository: WorkspaceRepository,
     private val folderRepository: FolderRepository,
@@ -552,17 +554,28 @@ class ChatService(
                 finishInterruptedPendingTools(conversationId)
 
                 val settings = settingsStore.settingsFlow.first()
+                var supersededFiles = emptyList<String>()
                 mutateAndSaveConversation(conversationId) { current ->
                     val assistant = settings.getAssistantById(current.assistantId)
                         ?: settings.getCurrentAssistant()
                     val processedContent = preprocessUserInputParts(content, assistant)
+                    val node = UIMessage(
+                        role = MessageRole.USER,
+                        parts = processedContent,
+                    ).toMessageNode()
+                    val materialized = mediaAssetMaterializer.materializeMessage(
+                        conversationId = conversationId.toString(),
+                        messageNodeId = node.id.toString(),
+                        message = node.currentMessage,
+                    )
+                    supersededFiles = materialized.supersededFiles
                     current.copy(
-                        messageNodes = current.messageNodes + UIMessage(
-                            role = MessageRole.USER,
-                            parts = processedContent,
-                        ).toMessageNode(),
+                        messageNodes = current.messageNodes + node.copy(
+                            messages = listOf(materialized.message),
+                        ),
                     )
                 }
+                filesManager.deleteChatFiles(supersededFiles.map(String::toUri))
 
                 // 开始补全
                 if (answer) {
@@ -912,8 +925,7 @@ class ChatService(
             logChatError(operation = "complete_generation", error = it)
             addError(it, conversationId, title = context.getString(R.string.error_title_generation))
         }.onSuccess {
-            val finalConversation = getConversationFlow(conversationId).value
-            persistCurrentConversation(conversationId)
+            val finalConversation = materializeAndPersistCurrentConversation(conversationId)
 
             launchForegroundMetadataGeneration(conversationId, senderName) {
                 coroutineScope {
@@ -1673,6 +1685,26 @@ class ChatService(
         }
     }
 
+    private suspend fun materializeAndPersistCurrentConversation(conversationId: Uuid): Conversation {
+        var supersededFiles = emptyList<String>()
+        val persisted = withConversationPersistenceLock(conversationId) { session ->
+            val current = currentConversationForMutationLocked(session)
+            val result = mediaAssetMaterializer.materializeConversation(current)
+            if (result.failures.isNotEmpty()) {
+                Log.w(
+                    TAG,
+                    "event=operation domain=media operation=materialize_conversation " +
+                        "outcome=partial_failure failure_count=${result.failures.size}",
+                )
+            }
+            supersededFiles = result.supersededFiles
+            if (result.conversation != current) session.state.value = result.conversation
+            persistConversationLocked(session, session.state.value)
+        }
+        filesManager.deleteChatFiles(supersededFiles.map(String::toUri))
+        return persisted
+    }
+
     private suspend fun persistConversationLocked(
         session: ConversationSession,
         conversation: Conversation,
@@ -1727,7 +1759,7 @@ class ChatService(
 
     private suspend fun mutateAndSaveConversation(
         conversationId: Uuid,
-        transform: (Conversation) -> Conversation,
+        transform: suspend (Conversation) -> Conversation,
     ): Conversation {
         return withConversationPersistenceLock(conversationId) { session ->
             currentConversationForMutationLocked(session)
@@ -2076,9 +2108,9 @@ internal suspend fun UIMessagePart.copyForConversationFork(
     copyLocalFile: suspend (String) -> String,
 ): UIMessagePart = when (this) {
     is UIMessagePart.Image -> if (assetId.isNullOrBlank()) copy(url = copyLocalFile(url)) else this
-    is UIMessagePart.Document -> copy(url = copyLocalFile(url))
-    is UIMessagePart.Video -> copy(url = copyLocalFile(url))
-    is UIMessagePart.Audio -> copy(url = copyLocalFile(url))
+    is UIMessagePart.Document -> if (assetId.isNullOrBlank()) copy(url = copyLocalFile(url)) else this
+    is UIMessagePart.Video -> if (assetId.isNullOrBlank()) copy(url = copyLocalFile(url)) else this
+    is UIMessagePart.Audio -> if (assetId.isNullOrBlank()) copy(url = copyLocalFile(url)) else this
     is UIMessagePart.Tool -> copy(
         output = output.map { part -> part.copyForConversationFork(copyLocalFile) },
         progress = progress.map { part -> part.copyForConversationFork(copyLocalFile) },

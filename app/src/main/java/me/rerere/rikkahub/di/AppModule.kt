@@ -5,6 +5,7 @@ import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.ai.tools.local.LocalTools
 import me.rerere.rikkahub.data.imggen.ImageGenerationGateway
 import me.rerere.rikkahub.data.imggen.MediaAssetRecovery
+import me.rerere.rikkahub.data.media.MediaAssetMaterializer
 import me.rerere.rikkahub.data.imggen.ProviderImageGenerationGateway
 import me.rerere.rikkahub.data.imggen.ChatImageGenerationForegroundController
 import me.rerere.rikkahub.data.imggen.ChatImageGenerationTaskController
@@ -99,6 +100,15 @@ val appModule = module {
         )
     }
 
+    single {
+        MediaAssetMaterializer(
+            context = get(),
+            filesManager = get(),
+            mediaRepository = get(),
+            conversationRepository = get(),
+        )
+    }
+
     single<EmojiData> {
         EmojiUtils.loadEmoji(get())
     }
@@ -141,6 +151,7 @@ val appModule = module {
             localTools = get(),
             mcpManager = get(),
             filesManager = get(),
+            mediaAssetMaterializer = get(),
             skillManager = get(),
             workspaceRepository = get(),
             folderRepository = get(),

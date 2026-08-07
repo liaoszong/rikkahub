@@ -20,6 +20,74 @@ import java.io.File
 @RunWith(AndroidJUnit4::class)
 class MediaAssetRepositoryTest {
     @Test
+    fun ordinaryAttachmentRelocatesToCanonicalLibraryWithoutChangingAssetIdentity() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val database = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).build()
+        val directory = context.cacheDir.resolve("attachment-relocation-${System.nanoTime()}").apply { mkdirs() }
+        val source = directory.resolve("source.pdf").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+        val canonical = directory.resolve("canonical.pdf").apply { writeBytes(source.readBytes()) }
+        try {
+            val files = FilesRepository(database.managedFileDao())
+            val upload = files.insert(
+                managed(
+                    relativePath = "upload/source.pdf",
+                    displayName = "report.pdf",
+                    mimeType = "application/pdf",
+                    sizeBytes = source.length(),
+                ),
+            )
+            val library = files.insert(
+                managed(
+                    relativePath = "library_attachments/canonical.pdf",
+                    displayName = "report.pdf",
+                    mimeType = "application/pdf",
+                    sizeBytes = canonical.length(),
+                ),
+            )
+            val repository = GenMediaRepository(
+                dao = database.genMediaDao(),
+                filesRepository = files,
+                metadataProbe = MediaAssetMetadataProbe { file, _ ->
+                    MediaAssetFileMetadata(
+                        mimeType = "application/pdf",
+                        sizeBytes = file.length(),
+                        width = null,
+                        height = null,
+                        sha256 = SHA_A,
+                        storageState = MediaAssetEntity.STORAGE_AVAILABLE,
+                    )
+                },
+            )
+            val registration = AttachmentMediaAssetRegistration(
+                assetId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                origin = MediaAssetEntity.ORIGIN_USER_ATTACHMENT,
+                conversationId = "conversation",
+                messageNodeId = "node",
+            )
+
+            repository.registerAttachmentAsset(upload, source, registration)
+            val relocated = repository.registerAttachmentAsset(library, canonical, registration)
+
+            assertEquals(registration.assetId, relocated.assetId)
+            assertEquals("library_attachments/canonical.pdf", relocated.path)
+            assertEquals(library.id, relocated.managedFileId)
+            assertEquals(MediaAssetEntity.TYPE_ATTACHMENT, relocated.type)
+            assertEquals(MediaAssetEntity.MEDIA_KIND_DOCUMENT, relocated.mediaKind)
+            assertEquals(
+                MediaV2Values.JOURNAL_COMPLETE,
+                database.genMediaDao().getJournal(
+                    "file",
+                    library.fileId,
+                    MediaV2Values.STAGE_FILE_RELOCATION,
+                )?.state,
+            )
+        } finally {
+            directory.deleteRecursively()
+            database.close()
+        }
+    }
+
+    @Test
     fun recoveredLegacyPlaceholderIsUpgradedByDurableTaskMetadata() = runBlocking {
         val database = Room.inMemoryDatabaseBuilder(
             ApplicationProvider.getApplicationContext(),
@@ -635,12 +703,17 @@ class MediaAssetRepositoryTest {
         }
     }
 
-    private fun managed(relativePath: String, displayName: String) = ManagedFileEntity(
-        folder = "chat_generated_images",
+    private fun managed(
+        relativePath: String,
+        displayName: String,
+        mimeType: String = "image/png",
+        sizeBytes: Long = 1,
+    ) = ManagedFileEntity(
+        folder = relativePath.substringBefore('/'),
         relativePath = relativePath,
         displayName = displayName,
-        mimeType = "image/png",
-        sizeBytes = 1,
+        mimeType = mimeType,
+        sizeBytes = sizeBytes,
         createdAt = 10,
         updatedAt = 10,
     )

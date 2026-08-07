@@ -641,7 +641,7 @@ class ConversationV2BackfillCoordinator(
                     kind = kind,
                     payloadJson = canonicalPayload,
                     payloadDigest = payloadDigest,
-                    assetId = (message.parts[ordinal] as? UIMessagePart.Image)?.assetId,
+                    assetId = message.parts[ordinal].backfillMediaAssetIdOrNull(),
                     toolInvocationId = message.parts[ordinal].toolInvocationIdOrNull(),
                 )
             }
@@ -937,6 +937,14 @@ class ConversationV2BackfillCoordinator(
             "conversation_v2_invalidate_storage_downgrade",
         )
     }
+}
+
+private fun UIMessagePart.backfillMediaAssetIdOrNull(): String? = when (this) {
+    is UIMessagePart.Image -> assetId
+    is UIMessagePart.Video -> assetId
+    is UIMessagePart.Audio -> assetId
+    is UIMessagePart.Document -> assetId
+    else -> null
 }
 
 data class ConversationV2BackfillSummary(

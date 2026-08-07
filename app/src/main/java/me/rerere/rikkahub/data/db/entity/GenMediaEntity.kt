@@ -116,6 +116,10 @@ data class MediaAssetEntity(
         const val METADATA_VERSION = 2
 
         const val MEDIA_KIND_IMAGE = "image"
+        const val MEDIA_KIND_VIDEO = "video"
+        const val MEDIA_KIND_AUDIO = "audio"
+        const val MEDIA_KIND_DOCUMENT = "document"
+        const val MEDIA_KIND_FILE = "file"
 
         const val LIFECYCLE_RESERVED = "reserved"
         const val LIFECYCLE_ACTIVE = "active"
@@ -132,9 +136,13 @@ data class MediaAssetEntity(
 
         const val TYPE_IMAGE_GENERATION = "image_generation"
         const val TYPE_IMAGE_EDIT = "image_edit"
+        const val TYPE_ATTACHMENT = "attachment"
 
         const val ORIGIN_AI_GENERATED = "ai_generated"
         const val ORIGIN_AI_EDITED = "ai_edited"
+        const val ORIGIN_USER_ATTACHMENT = "user_attachment"
+        const val ORIGIN_ASSISTANT_ATTACHMENT = "assistant_attachment"
+        const val ORIGIN_TOOL_OUTPUT = "tool_output"
 
         const val STORAGE_AVAILABLE = "available"
         const val STORAGE_NEEDS_METADATA = "needs_metadata"

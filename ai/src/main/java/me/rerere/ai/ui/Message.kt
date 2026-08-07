@@ -442,14 +442,16 @@ sealed class UIMessagePart {
     @SerialName("video")
     data class Video(
         val url: String,
-        override var metadata: JsonObject? = null
+        override var metadata: JsonObject? = null,
+        val assetId: String? = null,
     ) : UIMessagePart()
 
     @Serializable
     @SerialName("audio")
     data class Audio(
         val url: String,
-        override var metadata: JsonObject? = null
+        override var metadata: JsonObject? = null,
+        val assetId: String? = null,
     ) : UIMessagePart()
 
     @Serializable
@@ -458,7 +460,8 @@ sealed class UIMessagePart {
         val url: String,
         val fileName: String,
         val mime: String = "text/*",
-        override var metadata: JsonObject? = null
+        override var metadata: JsonObject? = null,
+        val assetId: String? = null,
     ) : UIMessagePart()
 
     @Serializable

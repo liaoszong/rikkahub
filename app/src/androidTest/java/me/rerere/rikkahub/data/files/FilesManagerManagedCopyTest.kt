@@ -11,13 +11,45 @@ import me.rerere.rikkahub.AppScope
 import me.rerere.rikkahub.data.db.AppDatabase
 import me.rerere.rikkahub.data.repository.FilesRepository
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 
 @RunWith(AndroidJUnit4::class)
 class FilesManagerManagedCopyTest {
+    @Test
+    fun nestedBulkCleanupPreservesDurableAssetAndDeletesOnlyUnownedSibling() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val database = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java).build()
+        val appScope = AppScope()
+        val root = File(context.filesDir, FileFolders.TOOL_OUTPUTS)
+        val nested = File(root, "nested-${System.nanoTime()}").apply { mkdirs() }
+        val durable = File(nested, "durable.bin").apply { writeText("keep") }
+        val transient = File(nested, "transient.bin").apply { writeText("delete") }
+        val manager = FilesManager(
+            context = context,
+            repository = FilesRepository(database.managedFileDao()),
+            appScope = appScope,
+            durableAssetOwnership = DurableAssetOwnership { relativePath, _ ->
+                relativePath.endsWith("/${durable.name}")
+            },
+        )
+        try {
+            assertFalse(manager.deleteAll(FileFolders.TOOL_OUTPUTS))
+            assertTrue(durable.isFile)
+            assertFalse(transient.exists())
+            assertTrue(nested.isDirectory)
+        } finally {
+            durable.delete()
+            nested.delete()
+            appScope.cancel()
+            database.close()
+        }
+    }
+
     @Test
     fun failedSourceOpenRemovesTheReservedTargetAndDoesNotRegisterIdentity() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()

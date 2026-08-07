@@ -25,6 +25,18 @@ interface GenMediaDAO : ConversationMediaReferenceDAO {
     )
     fun getAll(): PagingSource<Int, MediaAssetEntity>
 
+    @Query(
+        "SELECT * FROM GenMediaEntity WHERE visibility = 'visible' " +
+            "AND type IN ('image_generation', 'image_edit') ORDER BY create_at DESC",
+    )
+    fun getLibraryImages(): PagingSource<Int, MediaAssetEntity>
+
+    @Query(
+        "SELECT * FROM GenMediaEntity WHERE visibility = 'visible' " +
+            "AND type = 'attachment' ORDER BY create_at DESC",
+    )
+    fun getLibraryAttachments(): PagingSource<Int, MediaAssetEntity>
+
     @Query("SELECT * FROM GenMediaEntity ORDER BY create_at DESC")
     fun getAllIncludingHidden(): PagingSource<Int, MediaAssetEntity>
 
@@ -78,6 +90,30 @@ interface GenMediaDAO : ConversationMediaReferenceDAO {
         expectedUpdatedAt: Long,
     ): Int
 
+    @Query(
+        "UPDATE GenMediaEntity SET path = :path, display_name = :displayName, " +
+            "managed_file_id = :managedFileId, mime_type = :mimeType, size_bytes = :sizeBytes, " +
+            "width = :width, height = :height, sha256 = :sha256, storage_state = :storageState, " +
+            "metadata_version = :metadataVersion, updated_at = :updatedAt " +
+            "WHERE id = :id AND asset_id = :assetId AND updated_at = :expectedUpdatedAt",
+    )
+    suspend fun updateRelocatedAsset(
+        id: Int,
+        assetId: String,
+        path: String,
+        displayName: String,
+        managedFileId: Long,
+        mimeType: String,
+        sizeBytes: Long,
+        width: Int?,
+        height: Int?,
+        sha256: String?,
+        storageState: String,
+        metadataVersion: Int,
+        updatedAt: Long,
+        expectedUpdatedAt: Long,
+    ): Int
+
     @Query("SELECT * FROM GenMediaEntity WHERE asset_id = :assetId LIMIT 1")
     suspend fun getByAssetId(assetId: String): MediaAssetEntity?
 
@@ -92,6 +128,13 @@ interface GenMediaDAO : ConversationMediaReferenceDAO {
 
     @Query("SELECT * FROM GenMediaEntity WHERE parent_asset_id = :parentAssetId ORDER BY create_at ASC, id ASC")
     suspend fun getDirectVersions(parentAssetId: String): List<MediaAssetEntity>
+
+    @Query(
+        "SELECT * FROM GenMediaEntity WHERE id > :afterId AND lifecycle != 'deleted' " +
+            "AND (path LIKE 'upload/%' OR path LIKE 'tool_outputs/%') " +
+            "ORDER BY id ASC LIMIT :limit",
+    )
+    suspend fun getAssetsRequiringRelocation(afterId: Int, limit: Int): List<MediaAssetEntity>
 
     @Query(
         "SELECT managed.* FROM managed_files AS managed " +
@@ -123,7 +166,7 @@ interface GenMediaDAO : ConversationMediaReferenceDAO {
     @Query(
         "SELECT * FROM GenMediaEntity " +
             "WHERE storage_state IN ('needs_metadata', 'missing', 'corrupt') " +
-            "OR sha256 IS NULL OR width IS NULL OR height IS NULL " +
+            "OR sha256 IS NULL OR (media_kind = 'image' AND (width IS NULL OR height IS NULL)) " +
             "ORDER BY CASE WHEN storage_state = 'needs_metadata' THEN 0 ELSE 1 END, " +
             "updated_at ASC LIMIT :limit",
     )
@@ -389,6 +432,36 @@ interface GenMediaDAO : ConversationMediaReferenceDAO {
         ) {
             "Media asset reconciliation lost a concurrent update: ${asset.assetId}"
         }
+        persistV2Graph(write)
+        return requireNotNull(getByAssetId(asset.assetId))
+    }
+
+    @Transaction
+    suspend fun relocateAssetGraph(write: MediaAssetGraphWrite): MediaAssetEntity {
+        val file = requireNotNull(write.managedFile) { "Media relocation requires a managed file" }
+        requireManagedFileUpdate(file)
+        val expectedUpdatedAt = requireNotNull(write.expectedAssetUpdatedAt) {
+            "Media relocation requires an expected update timestamp"
+        }
+        val asset = write.asset
+        require(
+            updateRelocatedAsset(
+                id = asset.id,
+                assetId = asset.assetId,
+                path = asset.path,
+                displayName = asset.displayName,
+                managedFileId = file.id,
+                mimeType = asset.mimeType,
+                sizeBytes = asset.sizeBytes,
+                width = asset.width,
+                height = asset.height,
+                sha256 = asset.sha256,
+                storageState = asset.storageState,
+                metadataVersion = asset.metadataVersion,
+                updatedAt = asset.updatedAt,
+                expectedUpdatedAt = expectedUpdatedAt,
+            ) == 1,
+        ) { "Media relocation lost a concurrent update: ${asset.assetId}" }
         persistV2Graph(write)
         return requireNotNull(getByAssetId(asset.assetId))
     }

@@ -35,15 +35,20 @@ data class ImageLibraryItem(
     val messageNodeId: String?,
     val toolCallId: String?,
     val parentAssetId: String?,
+    val displayName: String,
+    val mediaKind: String,
+    val sizeBytes: Long,
+    val storageState: String,
+    val fileExists: Boolean,
 )
 
 internal fun MediaAssetEntity.toImageLibraryItem(resolvePath: (String) -> File): ImageLibraryItem {
-    val fullPath = resolvePath(path).absolutePath
+    val resolvedFile = resolvePath(path)
     return ImageLibraryItem(
         assetId = assetId,
         legacyId = id,
         prompt = prompt,
-        filePath = fullPath,
+        filePath = resolvedFile.absolutePath,
         timestamp = createAt,
         model = modelDisplayName ?: modelId,
         modelId = modelId,
@@ -55,6 +60,11 @@ internal fun MediaAssetEntity.toImageLibraryItem(resolvePath: (String) -> File):
         messageNodeId = messageNodeId,
         toolCallId = toolCallId,
         parentAssetId = parentAssetId,
+        displayName = displayName.ifBlank { resolvedFile.name },
+        mediaKind = mediaKind,
+        sizeBytes = sizeBytes,
+        storageState = storageState,
+        fileExists = resolvedFile.isFile,
     )
 }
 
@@ -65,15 +75,25 @@ class ImgGenVM(
     private val _localError = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _localError.asStateFlow()
 
-    val pager = Pager(
+    private val imagesPager = Pager(
         config = PagingConfig(pageSize = 20, enablePlaceholders = false),
-        pagingSourceFactory = { genMediaRepository.getAllMedia() },
+        pagingSourceFactory = { genMediaRepository.getLibraryImages() },
     )
-    val generatedImages: Flow<PagingData<ImageLibraryItem>> = pager.flow
+    val generatedImages: Flow<PagingData<ImageLibraryItem>> = imagesPager.flow
         .map { pagingData ->
             pagingData.map { asset ->
                 asset.toImageLibraryItem(filesManager::resolveManagedFile)
             }
+        }
+        .cachedIn(viewModelScope)
+
+    private val attachmentsPager = Pager(
+        config = PagingConfig(pageSize = 30, enablePlaceholders = false),
+        pagingSourceFactory = { genMediaRepository.getLibraryAttachments() },
+    )
+    val attachments: Flow<PagingData<ImageLibraryItem>> = attachmentsPager.flow
+        .map { pagingData ->
+            pagingData.map { asset -> asset.toImageLibraryItem(filesManager::resolveManagedFile) }
         }
         .cachedIn(viewModelScope)
 
@@ -97,6 +117,8 @@ class ImgGenVM(
     private companion object {
         const val TAG = "ImgGenVM"
     }
+
+    fun hideAsset(asset: ImageLibraryItem) = hideImage(asset)
 }
 
 typealias ImageLibraryVM = ImgGenVM

@@ -101,6 +101,36 @@ class ConversationV2CodecTest {
         assertEquals(setOf(INFERENCE_EMPTY_BRANCH_GROUP_DROPPED), encoded.inferenceFlags)
     }
 
+    @Test
+    fun allAttachmentKindsPersistTheirStableAssetIdentity() {
+        val message = UIMessage(
+            id = Uuid.parse("20000000-0000-0000-0000-000000000021"),
+            role = MessageRole.USER,
+            parts = listOf(
+                UIMessagePart.Image("file:///a", assetId = "image-asset"),
+                UIMessagePart.Video("file:///b", assetId = "video-asset"),
+                UIMessagePart.Audio("file:///c", assetId = "audio-asset"),
+                UIMessagePart.Document("file:///d", "d.pdf", "application/pdf", assetId = "document-asset"),
+            ),
+        )
+
+        val encoded = codec.encode(
+            conversation(
+                listOf(
+                    MessageNode(
+                        id = Uuid.parse("30000000-0000-0000-0000-000000000021"),
+                        messages = listOf(message),
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(
+            listOf("image-asset", "video-asset", "audio-asset", "document-asset"),
+            encoded.graph.parts.map { it.assetId },
+        )
+    }
+
     private fun conversation(nodes: List<MessageNode>) = Conversation(
         id = Uuid.parse("10000000-0000-0000-0000-000000000001"),
         assistantId = Uuid.parse("40000000-0000-0000-0000-000000000001"),

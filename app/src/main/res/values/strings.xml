@@ -394,7 +394,13 @@
   <string name="imggen_page_cancel_generation_title">Cancel Generation</string>
   <string name="imggen_page_confirm">Confirm</string>
   <string name="imggen_page_delete">Delete</string>
-  <string name="imggen_page_gallery">Image Library</string>
+  <string name="imggen_page_gallery">Asset Library</string>
+  <string name="asset_library_title">Asset Library</string>
+  <string name="asset_library_images">Images</string>
+  <string name="asset_library_attachments">Attachments</string>
+  <string name="asset_library_no_attachments">No saved attachments yet</string>
+  <string name="asset_library_file_missing">File missing</string>
+  <string name="asset_library_retry">Retry</string>
   <string name="imggen_page_generate_image">Generate Image</string>
   <string name="imggen_page_generating_background">Generating in background</string>
   <string name="imggen_page_preview_waiting">Preview received · waiting for final image</string>

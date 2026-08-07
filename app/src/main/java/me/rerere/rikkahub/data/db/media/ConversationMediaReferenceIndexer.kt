@@ -516,7 +516,9 @@ class ConversationMediaReferenceIndexer(
 
 private fun String.isGeneratedMediaPath(): Boolean {
     val folder = substringBefore('/')
-    return folder == FileFolders.LEGACY_GENERATED_IMAGES || folder == FileFolders.CHAT_GENERATED_IMAGES
+    return folder == FileFolders.LEGACY_GENERATED_IMAGES ||
+        folder == FileFolders.CHAT_GENERATED_IMAGES ||
+        folder == FileFolders.LIBRARY_ATTACHMENTS
 }
 
 internal fun projectTypedConversation(
@@ -576,10 +578,11 @@ internal fun projectV2Conversation(
             val payloadKind = (payload.jsonObject["type"] as? JsonPrimitive)?.contentOrNull.orEmpty()
             require(payloadKind == row.kind) { "Part ${row.partId} kind does not match its payload" }
             val part = json.decodeFromJsonElement(UIMessagePart.serializer(), payload)
-            if (part is UIMessagePart.Image) {
+            if (part.isMediaAttachmentPart()) {
+                val decodedAssetId = part.mediaAssetIdOrNull()
                 require(
-                    row.partAssetId.isNullOrBlank() || part.assetId.isNullOrBlank() ||
-                        row.partAssetId == part.assetId,
+                    row.partAssetId.isNullOrBlank() || decodedAssetId.isNullOrBlank() ||
+                        row.partAssetId == decodedAssetId,
                 ) { "Part ${row.partId} has conflicting media asset identities" }
             }
             if (part is UIMessagePart.Tool) {
@@ -624,6 +627,15 @@ private fun collectImageCandidates(
             assetId = topLevelAssetId?.takeIf(String::isNotBlank) ?: part.assetId,
             location = pathResolver.resolve(part.url),
         )
+        is UIMessagePart.Video -> output += part.toMediaCandidate(
+            owner, pathResolver, nestedLocation, inheritedToolCallId, topLevelAssetId,
+        )
+        is UIMessagePart.Audio -> output += part.toMediaCandidate(
+            owner, pathResolver, nestedLocation, inheritedToolCallId, topLevelAssetId,
+        )
+        is UIMessagePart.Document -> output += part.toMediaCandidate(
+            owner, pathResolver, nestedLocation, inheritedToolCallId, topLevelAssetId,
+        )
         is UIMessagePart.Tool -> {
             val toolCallId = part.toolCallId.takeIf(String::isNotBlank) ?: inheritedToolCallId
             part.output.forEachIndexed { index, child ->
@@ -649,6 +661,43 @@ private fun collectImageCandidates(
         }
         else -> Unit
     }
+}
+
+private fun UIMessagePart.toMediaCandidate(
+    owner: ConversationMediaOwner,
+    pathResolver: ManagedMediaPathResolver,
+    nestedLocation: String,
+    inheritedToolCallId: String?,
+    topLevelAssetId: String?,
+): ConversationMediaImageCandidate {
+    val url = when (this) {
+        is UIMessagePart.Video -> url
+        is UIMessagePart.Audio -> url
+        is UIMessagePart.Document -> url
+        else -> error("Not an attachment part")
+    }
+    return ConversationMediaImageCandidate(
+        branchGroupId = owner.branchGroupId,
+        messageId = owner.messageId,
+        partId = owner.partId,
+        nestedLocation = nestedLocation,
+        toolCallId = inheritedToolCallId?.takeIf(String::isNotBlank),
+        assetId = topLevelAssetId?.takeIf(String::isNotBlank) ?: mediaAssetIdOrNull(),
+        location = pathResolver.resolve(url),
+    )
+}
+
+private fun UIMessagePart.isMediaAttachmentPart(): Boolean = when (this) {
+    is UIMessagePart.Image, is UIMessagePart.Video, is UIMessagePart.Audio, is UIMessagePart.Document -> true
+    else -> false
+}
+
+private fun UIMessagePart.mediaAssetIdOrNull(): String? = when (this) {
+    is UIMessagePart.Image -> assetId
+    is UIMessagePart.Video -> assetId
+    is UIMessagePart.Audio -> assetId
+    is UIMessagePart.Document -> assetId
+    else -> null
 }
 
 internal fun conversationMediaConversationSourceDigest(

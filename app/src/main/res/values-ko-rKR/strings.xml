@@ -1283,5 +1283,11 @@ mDNS 주소: .local 호스트네임을 사용하며, IP를 몰라도 같은 네�
   <string name="assistant_page_context_message_limit_warning">컨텍스트 제한 시 컨텍스트가 정리될 때마다 프롬프트 캐시가 무효화됩니다. 제한이 클수록 정리 빈도가 낮아지며, 무제한일 경우 정리되지 않아 캐시가 완전히 보존됩니다.</string>
   <string name="update_dialog_stale">최신 버전을 확인하지 못했습니다. 캐시된 업데이트 정보를 표시합니다.</string>
   <string name="update_dialog_stale_checked_at">업데이트를 새로 확인하지 못했습니다. 마지막 확인 성공: %1$s</string>
+  <string name="asset_library_title">에셋 라이브러리</string>
+  <string name="asset_library_images">이미지</string>
+  <string name="asset_library_attachments">첨부 파일</string>
+  <string name="asset_library_no_attachments">저장된 첨부 파일이 없습니다</string>
+  <string name="asset_library_file_missing">파일을 찾을 수 없음</string>
+  <string name="asset_library_retry">다시 시도</string>
 </resources>
 

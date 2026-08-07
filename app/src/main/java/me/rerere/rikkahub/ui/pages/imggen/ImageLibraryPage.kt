@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.material3.Card
@@ -24,6 +26,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -59,6 +63,7 @@ import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Copy01
 import me.rerere.hugeicons.stroke.Delete01
 import me.rerere.hugeicons.stroke.FloppyDisk
+import me.rerere.hugeicons.stroke.File02
 import me.rerere.hugeicons.stroke.Image03
 import me.rerere.hugeicons.stroke.Share08
 import me.rerere.rikkahub.R
@@ -81,6 +86,7 @@ fun ImageLibraryPage(
 ) {
     val error by vm.error.collectAsStateWithLifecycle()
     val toaster = LocalToaster.current
+    var selectedTab by remember { mutableStateOf(0) }
 
     LaunchedEffect(error) {
         error?.let { message ->
@@ -92,17 +98,79 @@ fun ImageLibraryPage(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.imggen_page_gallery)) },
+                title = { Text(stringResource(R.string.asset_library_title)) },
                 navigationIcon = { BackButton() },
             )
         },
     ) { innerPadding ->
-        ImageLibraryContent(
-            vm = vm,
+        Column(
             modifier = modifier
                 .padding(innerPadding)
                 .consumeWindowInsets(innerPadding),
-        )
+        ) {
+            TabRow(selectedTabIndex = selectedTab) {
+                Tab(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    text = { Text(stringResource(R.string.asset_library_images)) },
+                )
+                Tab(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    text = { Text(stringResource(R.string.asset_library_attachments)) },
+                )
+            }
+            if (selectedTab == 0) {
+                ImageLibraryContent(vm = vm, modifier = Modifier.weight(1f))
+            } else {
+                AttachmentLibraryContent(vm = vm, modifier = Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun AttachmentLibraryContent(
+    vm: ImageLibraryVM,
+    modifier: Modifier = Modifier,
+) {
+    val attachments = vm.attachments.collectAsLazyPagingItems()
+    val refreshState = attachments.loadState.refresh
+    PullToRefreshBox(
+        isRefreshing = refreshState is LoadState.Loading,
+        onRefresh = attachments::refresh,
+        state = rememberPullToRefreshState(),
+        modifier = modifier,
+    ) {
+        when {
+            refreshState is LoadState.Loading && attachments.itemCount == 0 -> Box(
+                Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) { CircularProgressIndicator() }
+            refreshState is LoadState.Error && attachments.itemCount == 0 -> EmptyLibrary(
+                message = refreshState.error.message ?: stringResource(R.string.asset_library_no_attachments),
+                actionLabel = stringResource(R.string.asset_library_retry),
+                onAction = attachments::retry,
+            )
+            attachments.itemCount == 0 -> EmptyLibrary(
+                message = stringResource(R.string.asset_library_no_attachments),
+            )
+            else -> LazyColumn(
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                items(
+                    count = attachments.itemCount,
+                    key = { index -> attachments[index]?.assetId ?: "attachment-$index" },
+                    contentType = { "AttachmentLibraryItem" },
+                ) { index ->
+                    attachments[index]?.let { asset ->
+                        AttachmentLibraryCard(asset = asset, onRemove = { vm.hideAsset(asset) })
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -218,15 +286,27 @@ private fun ImageLibraryCard(
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column {
-            AsyncImage(
-                model = File(image.filePath),
-                contentDescription = stringResource(R.string.chat_image_generation_main_description),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f)
-                    .clickable { showPreview = true },
-                contentScale = ContentScale.Crop,
-            )
+            if (image.fileExists) {
+                AsyncImage(
+                    model = File(image.filePath),
+                    contentDescription = stringResource(R.string.chat_image_generation_main_description),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(1f)
+                        .clickable { showPreview = true },
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Box(
+                    modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        stringResource(R.string.asset_library_file_missing),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
 
             Column(
                 modifier = Modifier
@@ -249,6 +329,7 @@ private fun ImageLibraryCard(
 
                 Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     IconButton(
+                        enabled = image.fileExists,
                         onClick = {
                             clipboardManager.setText(AnnotatedString(image.prompt))
                             toaster.show(
@@ -266,6 +347,7 @@ private fun ImageLibraryCard(
                     }
 
                     IconButton(
+                        enabled = image.fileExists,
                         onClick = {
                             runCatching {
                                 shareImage(
@@ -339,12 +421,82 @@ private fun ImageLibraryCard(
         }
     }
 
-    if (showPreview) {
+    if (showPreview && image.fileExists) {
         ImagePreviewDialog(
             images = listOf(image.filePath),
             onDismissRequest = { showPreview = false },
         )
     }
+}
+
+@Composable
+private fun AttachmentLibraryCard(
+    asset: ImageLibraryItem,
+    onRemove: () -> Unit,
+) {
+    val context = LocalContext.current
+    val resources = LocalResources.current
+    val toaster = LocalToaster.current
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(
+                imageVector = HugeIcons.File02,
+                contentDescription = null,
+                modifier = Modifier.size(36.dp),
+                tint = if (asset.fileExists) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+            )
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(asset.displayName, style = MaterialTheme.typography.titleSmall, maxLines = 2)
+                Text(
+                    if (asset.fileExists) {
+                        "${asset.mimeType} · ${formatAssetSize(asset.sizeBytes)}"
+                    } else {
+                        stringResource(R.string.asset_library_file_missing)
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (asset.fileExists) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    },
+                )
+            }
+            IconButton(
+                enabled = asset.fileExists,
+                onClick = {
+                    runCatching { shareAsset(context, File(asset.filePath), asset.mimeType) }
+                        .onFailure { error ->
+                            toaster.show(
+                                message = buildString {
+                                    append(resources.getString(R.string.error_title_operation))
+                                    error.message?.let { append(": ").append(it) }
+                                },
+                                type = ToastType.Error,
+                            )
+                        }
+                },
+            ) {
+                Icon(HugeIcons.Share08, stringResource(R.string.common_share))
+            }
+            IconButton(onClick = onRemove) {
+                Icon(
+                    HugeIcons.Delete01,
+                    stringResource(R.string.imggen_page_delete),
+                    tint = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+    }
+}
+
+private fun formatAssetSize(bytes: Long): String = when {
+    bytes >= 1024L * 1024L -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+    bytes >= 1024L -> "%.1f KB".format(bytes / 1024.0)
+    else -> "$bytes B"
 }
 
 private fun shareImage(context: Context, file: File, mimeType: String) {
@@ -356,6 +508,17 @@ private fun shareImage(context: Context, file: File, mimeType: String) {
     )
     val intent = Intent(Intent.ACTION_SEND).apply {
         type = mimeType.takeIf { it.startsWith("image/") } ?: "image/*"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(intent, context.getString(R.string.common_share)))
+}
+
+private fun shareAsset(context: Context, file: File, mimeType: String) {
+    require(file.isFile) { "Attachment file is unavailable" }
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = mimeType.ifBlank { "application/octet-stream" }
         putExtra(Intent.EXTRA_STREAM, uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }

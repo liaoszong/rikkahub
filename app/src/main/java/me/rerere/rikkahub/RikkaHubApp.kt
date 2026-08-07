@@ -19,7 +19,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import me.rerere.rikkahub.data.files.FileFolders
-import java.io.File
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -33,6 +32,7 @@ import me.rerere.rikkahub.di.dataSourceModule
 import me.rerere.rikkahub.di.repositoryModule
 import me.rerere.rikkahub.di.viewModelModule
 import me.rerere.rikkahub.data.files.FilesManager
+import me.rerere.rikkahub.data.media.MediaAssetMaterializer
 import me.rerere.rikkahub.data.imggen.ImageMediaReconciliationResult
 import me.rerere.rikkahub.data.imggen.MediaAssetRecovery
 import me.rerere.rikkahub.data.datastore.SettingsStore
@@ -213,10 +213,8 @@ class RikkaHubApp : Application() {
         QuickJSLoader.init()
 
         deleteTempFiles()
-        cleanupToolOutputs()
         cleanupWorkspaceTempDirs()
         checkWorkspaceIntegrity()
-        syncManagedFiles()
 
         // A committed restore is already invisible to future startup. Its former payload and
         // rollback journal can therefore be reclaimed independently without delaying the gate.
@@ -269,27 +267,6 @@ class RikkaHubApp : Application() {
         }
     }
 
-    private fun cleanupToolOutputs() {
-        get<AppScope>().launch(Dispatchers.IO) {
-            runCatching {
-                val dir = File(filesDir, FileFolders.TOOL_OUTPUTS)
-                if (dir.exists()) {
-                    dir.deleteRecursively()
-                }
-            }
-        }
-    }
-
-    private fun syncManagedFiles() {
-        get<AppScope>().launch(Dispatchers.IO) {
-            runCatching {
-                get<FilesManager>().syncFolder()
-            }.onFailure {
-                logSafeError(TAG, "files", "sync_managed_files", it)
-            }
-        }
-    }
-
     private fun backfillConversationStoreV2() {
         get<AppScope>().launch(Dispatchers.IO) {
             var imageRecoveryPasses = 1
@@ -309,6 +286,26 @@ class RikkaHubApp : Application() {
                                     "inProgress=${result.inProgress} failed=${result.failed}",
                             )
                         }
+                    },
+                    StartupRecoveryDomain("managed_files") {
+                        get<FilesManager>().apply {
+                            syncFolder(FileFolders.UPLOAD)
+                            syncFolder(FileFolders.LIBRARY_ATTACHMENTS)
+                        }
+                    },
+                    StartupRecoveryDomain("attachment_asset_materialization") {
+                        val result = get<MediaAssetMaterializer>().backfillReadyConversations()
+                        if (result.materialized > 0 || result.failures.isNotEmpty()) {
+                            Log.i(
+                                TAG,
+                                "materializeAttachments: inspected=${result.inspected} " +
+                                    "updated=${result.updated} materialized=${result.materialized} " +
+                                    "failures=${result.failures.size}",
+                            )
+                        }
+                        // Only temporary, unowned files are removed. MediaAsset ownership wins
+                        // even if the originating conversation has already been deleted.
+                        get<FilesManager>().deleteAll(FileFolders.TOOL_OUTPUTS)
                     },
                     StartupRecoveryDomain("chat_request_ledger") {
                         val recovery = get<ChatRequestReconciler>().reconcilePending()

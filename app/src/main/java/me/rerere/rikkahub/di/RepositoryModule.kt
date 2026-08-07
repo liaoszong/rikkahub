@@ -193,7 +193,7 @@ val repositoryModule = module {
     }
 
     single {
-        FilesManager(get(), get(), get())
+        FilesManager(get(), get(), get(), get<GenMediaRepository>())
     }
 
     single {

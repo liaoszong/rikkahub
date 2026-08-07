@@ -17,6 +17,8 @@ import me.rerere.rikkahub.data.db.entity.MediaReplicaEntity
 import me.rerere.rikkahub.data.db.entity.MediaV2Values
 import me.rerere.rikkahub.data.db.entity.MessageMediaRefEntity
 import me.rerere.rikkahub.data.db.media.MediaReferenceBackfillScheduler
+import me.rerere.rikkahub.data.files.DurableAssetOwnership
+import me.rerere.rikkahub.data.files.FileFolders
 import me.rerere.pale.media.MediaStableIds
 import java.io.File
 import java.io.FileInputStream
@@ -36,8 +38,12 @@ class GenMediaRepository(
     private val metadataProbe: MediaAssetMetadataProbe = AndroidMediaAssetMetadataProbe,
     private val mediaReferenceBackfillScheduler: MediaReferenceBackfillScheduler =
         MediaReferenceBackfillScheduler {},
-) {
+) : DurableAssetOwnership {
     fun getAllMedia(): PagingSource<Int, GenMediaEntity> = dao.getAll()
+
+    fun getLibraryImages(): PagingSource<Int, MediaAssetEntity> = dao.getLibraryImages()
+
+    fun getLibraryAttachments(): PagingSource<Int, MediaAssetEntity> = dao.getLibraryAttachments()
 
     fun getAllMediaIncludingHidden(): PagingSource<Int, GenMediaEntity> = dao.getAllIncludingHidden()
 
@@ -47,11 +53,124 @@ class GenMediaRepository(
 
     suspend fun getAssetByPath(relativePath: String): MediaAssetEntity? = dao.getByPath(relativePath)
 
+    override suspend fun isOwned(relativePath: String, managedFileId: Long?): Boolean {
+        val asset = if (managedFileId == null) null else dao.getByManagedFileId(managedFileId)
+        val resolved = asset ?: dao.getByPath(relativePath)
+        return resolved != null && resolved.lifecycle != MediaAssetEntity.LIFECYCLE_DELETED
+    }
+
     suspend fun getAssetsForToolCall(toolCallId: String): List<MediaAssetEntity> =
         dao.getByToolCallId(toolCallId)
 
     suspend fun getDirectVersions(parentAssetId: String): List<MediaAssetEntity> =
         dao.getDirectVersions(parentAssetId)
+
+    suspend fun getReadyConversationIds(afterConversationId: String?, limit: Int): List<String> =
+        dao.getReadyConversationIdsForMediaPage(afterConversationId, limit)
+
+    suspend fun getAssetsRequiringRelocation(afterId: Int, limit: Int): List<MediaAssetEntity> =
+        dao.getAssetsRequiringRelocation(afterId, limit)
+
+    suspend fun registerAttachmentAsset(
+        managedFile: ManagedFileEntity,
+        file: File,
+        registration: AttachmentMediaAssetRegistration,
+    ): MediaAssetEntity {
+        val committed = withContext(Dispatchers.IO) {
+            require(managedFile.id > 0) { "A committed managed file is required" }
+            MediaStableIds.requireValid(registration.assetId, "Media asset id")
+            MediaStableIds.requireValid(managedFile.fileId, "Managed file id")
+            require(registration.origin in MediaAssetOrigins.ATTACHMENTS) {
+                "Unsupported attachment origin: ${registration.origin}"
+            }
+            val inspected = metadataProbe.inspect(file, managedFile.mimeType)
+            val now = System.currentTimeMillis()
+            val updatedManagedFile = managedFile.copy(
+                mimeType = inspected.mimeType,
+                sizeBytes = inspected.sizeBytes,
+                updatedAt = now,
+            )
+            val draft = MediaAssetEntity(
+                path = updatedManagedFile.relativePath,
+                modelId = ATTACHMENT_MODEL_ID,
+                prompt = "",
+                createAt = registration.createdAt,
+                type = MediaAssetEntity.TYPE_ATTACHMENT,
+                assetId = registration.assetId,
+                mediaKind = inspected.mimeType.toMediaKind(),
+                displayName = updatedManagedFile.displayName,
+                retentionPolicy = MediaAssetEntity.RETENTION_LIBRARY,
+                managedFileId = updatedManagedFile.id,
+                origin = registration.origin,
+                mimeType = inspected.mimeType,
+                sizeBytes = inspected.sizeBytes,
+                width = inspected.width,
+                height = inspected.height,
+                sha256 = inspected.sha256,
+                storageState = inspected.storageState,
+                conversationId = registration.conversationId,
+                messageNodeId = registration.messageNodeId,
+                toolCallId = registration.toolCallId,
+                updatedAt = now,
+            )
+            val existing = dao.getByAssetId(registration.assetId)
+            if (existing != null && existing.path != draft.path) {
+                dao.relocateAssetGraph(
+                    buildGraphWrite(
+                        managedFile = updatedManagedFile,
+                        asset = draft.copy(id = existing.id, createAt = existing.createAt),
+                        includeMigrationJournal = true,
+                        expectedAssetUpdatedAt = existing.updatedAt,
+                    ),
+                )
+            } else {
+                dao.registerAssetGraph(
+                    buildGraphWrite(
+                        managedFile = updatedManagedFile,
+                        asset = draft,
+                        includeMigrationJournal = true,
+                    ),
+                )
+            }
+        }
+        mediaReferenceBackfillScheduler.requestBackfill()
+        return committed
+    }
+
+    suspend fun relocateAsset(
+        asset: MediaAssetEntity,
+        managedFile: ManagedFileEntity,
+        file: File,
+    ): MediaAssetEntity = withContext(Dispatchers.IO) {
+        require(managedFile.id > 0) { "A committed managed file is required" }
+        require(asset.lifecycle != MediaAssetEntity.LIFECYCLE_DELETED) { "Deleted asset cannot be relocated" }
+        val inspected = metadataProbe.inspect(file, managedFile.mimeType)
+        val now = maxOf(System.currentTimeMillis(), asset.updatedAt + 1)
+        val updatedManagedFile = managedFile.copy(
+            mimeType = inspected.mimeType,
+            sizeBytes = inspected.sizeBytes,
+            updatedAt = now,
+        )
+        dao.relocateAssetGraph(
+            buildGraphWrite(
+                managedFile = updatedManagedFile,
+                asset = asset.copy(
+                    path = updatedManagedFile.relativePath,
+                    displayName = updatedManagedFile.displayName,
+                    managedFileId = updatedManagedFile.id,
+                    mimeType = inspected.mimeType,
+                    sizeBytes = inspected.sizeBytes,
+                    width = inspected.width,
+                    height = inspected.height,
+                    sha256 = inspected.sha256,
+                    storageState = inspected.storageState,
+                    updatedAt = now,
+                ),
+                includeMigrationJournal = true,
+                expectedAssetUpdatedAt = asset.updatedAt,
+            ),
+        )
+    }
 
     /**
      * Registers a generated or edited image exactly once. [managedFile] is the file
@@ -465,13 +584,22 @@ class GenMediaRepository(
                     ),
                 )
                 managedFile?.let { file ->
+                    val relocationComplete = file.folder in setOf(
+                        FileFolders.CHAT_GENERATED_IMAGES,
+                        FileFolders.LEGACY_GENERATED_IMAGES,
+                        FileFolders.LIBRARY_ATTACHMENTS,
+                    )
                     add(
                         migrationJournal(
                             scopeKind = "file",
                             scopeKey = file.fileId,
                             stage = MediaV2Values.STAGE_FILE_RELOCATION,
-                            state = MediaV2Values.JOURNAL_PENDING,
-                            detail = "lazy_verification_and_relocation_required",
+                            state = if (relocationComplete) {
+                                MediaV2Values.JOURNAL_COMPLETE
+                            } else {
+                                MediaV2Values.JOURNAL_PENDING
+                            },
+                            detail = if (relocationComplete) null else "relocation_required",
                             updatedAt = asset.updatedAt,
                         ),
                     )
@@ -587,6 +715,15 @@ data class GeneratedMediaAssetRegistration(
     val referenceInputs: List<MediaAssetReferenceInput> = emptyList(),
 )
 
+data class AttachmentMediaAssetRegistration(
+    val assetId: String,
+    val origin: String,
+    val createdAt: Long = System.currentTimeMillis(),
+    val conversationId: String? = null,
+    val messageNodeId: String? = null,
+    val toolCallId: String? = null,
+)
+
 data class MediaAssetReferenceInput(
     val assetId: String? = null,
     val sourcePath: String? = null,
@@ -607,12 +744,26 @@ object MediaAssetIds {
             "chat-image:$toolCallId:$outputIndex".encodeToByteArray(),
         ).toString()
     }
+
+    fun forMessagePart(messageId: String, nestedLocation: String): String {
+        require(messageId.isNotBlank()) { "Message id cannot be blank" }
+        require(nestedLocation.isNotBlank()) { "Message part location cannot be blank" }
+        return UUID.nameUUIDFromBytes(
+            "message-asset:$messageId:$nestedLocation".encodeToByteArray(),
+        ).toString()
+    }
 }
 
 object MediaAssetOrigins {
     val ALL = setOf(
         MediaAssetEntity.ORIGIN_AI_GENERATED,
         MediaAssetEntity.ORIGIN_AI_EDITED,
+    )
+
+    val ATTACHMENTS = setOf(
+        MediaAssetEntity.ORIGIN_USER_ATTACHMENT,
+        MediaAssetEntity.ORIGIN_ASSISTANT_ATTACHMENT,
+        MediaAssetEntity.ORIGIN_TOOL_OUTPUT,
     )
 }
 
@@ -652,8 +803,9 @@ private object AndroidMediaAssetMetadataProbe : MediaAssetMetadataProbe {
             )
         }
 
+        val isImage = mimeType.startsWith("image/")
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        if (isImage) BitmapFactory.decodeFile(file.absolutePath, bounds)
         val width = bounds.outWidth.takeIf { it > 0 }
         val height = bounds.outHeight.takeIf { it > 0 }
         val digest = MessageDigest.getInstance("SHA-256")
@@ -671,7 +823,7 @@ private object AndroidMediaAssetMetadataProbe : MediaAssetMetadataProbe {
             width = width,
             height = height,
             sha256 = digest.digest().joinToString("") { byte -> "%02x".format(byte) },
-            storageState = if (width != null && height != null) {
+            storageState = if (!isImage || width != null && height != null) {
                 MediaAssetEntity.STORAGE_AVAILABLE
             } else {
                 MediaAssetEntity.STORAGE_CORRUPT
@@ -702,7 +854,16 @@ private fun ManagedFileEntity.recoverableAssetId(): String {
 }
 
 private const val LEGACY_CHAT_MODEL_ID = "legacy-chat-image"
+private const val ATTACHMENT_MODEL_ID = "local-attachment"
 private const val RECOVERY_ASSET_ID_QUERY_CHUNK = 400
+
+private fun String.toMediaKind(): String = when {
+    startsWith("image/") -> MediaAssetEntity.MEDIA_KIND_IMAGE
+    startsWith("video/") -> MediaAssetEntity.MEDIA_KIND_VIDEO
+    startsWith("audio/") -> MediaAssetEntity.MEDIA_KIND_AUDIO
+    startsWith("text/") || this == "application/pdf" -> MediaAssetEntity.MEDIA_KIND_DOCUMENT
+    else -> MediaAssetEntity.MEDIA_KIND_FILE
+}
 
 /** Preferred name for new call sites; retained as an alias to avoid a second repository binding. */
 typealias MediaAssetRepository = GenMediaRepository

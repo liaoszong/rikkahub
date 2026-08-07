@@ -38,6 +38,7 @@ class FilesManager(
     private val context: Context,
     private val repository: FilesRepository,
     private val appScope: AppScope,
+    private val durableAssetOwnership: DurableAssetOwnership = DurableAssetOwnership.NONE,
 ) {
     companion object {
         private const val TAG = "FilesManager"
@@ -255,6 +256,14 @@ class FilesManager(
             candidates.forEach { candidate ->
                 val managedFile = repository.getByPath(candidate.relativePath)
                     ?: return@forEach
+                if (durableAssetOwnership.isOwned(candidate.relativePath, managedFile.id)) {
+                    Log.i(
+                        TAG,
+                        "event=operation domain=files operation=delete_managed_chat_file " +
+                            "outcome=skipped reason=durable_asset",
+                    )
+                    return@forEach
+                }
                 if (deleteManagedChatFileIfAuthorized(
                         filesDir = context.filesDir,
                         candidate = candidate,
@@ -356,13 +365,7 @@ class FilesManager(
         val canonicalAssetId = runCatching { UUID.fromString(assetId).toString() }
             .getOrElse { throw IllegalArgumentException("Media asset id must be a UUID", it) }
         require(canonicalAssetId == assetId) { "Media asset id must use canonical UUID form" }
-        val extension = when (mimeType.lowercase().substringBefore(';').trim()) {
-            "image/png" -> "png"
-            "image/jpeg", "image/jpg" -> "jpg"
-            "image/webp" -> "webp"
-            "image/gif" -> "gif"
-            else -> throw IllegalArgumentException("Unsupported generated image MIME: $mimeType")
-        }
+        val extension = managedExtension(mimeType = mimeType, displayName = null, imageOnly = true)
         val directory = File(context.filesDir, folder).apply { mkdirs() }.canonicalFile
         val target = File(directory, "$canonicalAssetId.$extension").canonicalFile
         require(target.parentFile == directory) { "Generated media path escapes its managed folder" }
@@ -373,6 +376,33 @@ class FilesManager(
             }
         } else {
             writeManagedAtomically(target, bytes)
+        }
+        target
+    }
+
+    /** Streams an arbitrary local attachment into its stable library identity. */
+    suspend fun commitManagedFileWithIdentity(
+        folder: String,
+        source: File,
+        assetId: String,
+        displayName: String,
+        mimeType: String,
+    ): File = withContext(Dispatchers.IO) {
+        require(source.isFile) { "Attachment source does not exist: ${source.name}" }
+        val canonicalAssetId = runCatching { UUID.fromString(assetId).toString() }
+            .getOrElse { throw IllegalArgumentException("Media asset id must be a UUID", it) }
+        require(canonicalAssetId == assetId) { "Media asset id must use canonical UUID form" }
+        val extension = managedExtension(mimeType, displayName, imageOnly = false)
+        val directory = File(context.filesDir, folder).apply { mkdirs() }.canonicalFile
+        val target = File(directory, "$canonicalAssetId.$extension").canonicalFile
+        require(target.parentFile == directory) { "Attachment path escapes its managed folder" }
+
+        if (target.isFile) {
+            require(target.hasSameContent(source)) {
+                "Media asset $canonicalAssetId is already bound to different file content"
+            }
+        } else {
+            writeManagedAtomically(target, source)
         }
         target
     }
@@ -538,6 +568,9 @@ class FilesManager(
 
     suspend fun delete(id: Long, deleteFromDisk: Boolean = true): Boolean = withContext(Dispatchers.IO) {
         val entity = repository.getById(id) ?: return@withContext false
+        if (durableAssetOwnership.isOwned(entity.relativePath, entity.id)) {
+            return@withContext false
+        }
         deleteManagedFileWithIdentity(
             entity = entity,
             deleteFromDisk = deleteFromDisk,
@@ -556,22 +589,39 @@ class FilesManager(
 
         var allDeletedFromDisk = true
         entries.orEmpty().forEach { entry ->
-            if (!runCatching { entry.deleteRecursively() }.getOrDefault(false)) {
-                allDeletedFromDisk = false
-            }
-        }
-
-        if (allDeletedFromDisk) {
-            repository.deleteByFolder(folder)
-            return@withContext true
+            allDeletedFromDisk = deleteUnownedTree(entry, dir) && allDeletedFromDisk
         }
 
         repository.listByFolder(folder).first().forEach { entity ->
-            if (!getFile(entity).exists()) {
+            if (!getFile(entity).exists() && !durableAssetOwnership.isOwned(entity.relativePath, entity.id)) {
                 repository.deleteById(entity.id)
             }
         }
-        false
+        allDeletedFromDisk
+    }
+
+    private suspend fun deleteUnownedTree(entry: File, root: File): Boolean {
+        val canonicalRoot = runCatching { root.canonicalFile }.getOrNull() ?: return false
+        val canonicalEntry = runCatching { entry.canonicalFile }.getOrNull() ?: return false
+        if (canonicalEntry == canonicalRoot || canonicalEntry.parentFile == null) return false
+        if (!canonicalEntry.path.startsWith(canonicalRoot.path + File.separator)) return false
+
+        if (entry.isDirectory) {
+            val children = entry.listFiles() ?: return false
+            var allDeleted = true
+            children.forEach { child ->
+                allDeleted = deleteUnownedTree(child, canonicalRoot) && allDeleted
+            }
+            if (entry.listFiles()?.isNotEmpty() != false) return false
+            return runCatching { entry.delete() }.getOrDefault(false) && allDeleted
+        }
+
+        val relativePath = managedRelativePath(context.filesDir, entry) ?: return false
+        val managedFile = repository.getByPath(relativePath)
+        if (durableAssetOwnership.isOwned(relativePath, managedFile?.id)) return false
+        if (!runCatching { entry.delete() }.getOrDefault(false)) return false
+        if (managedFile != null) repository.deleteById(managedFile.id)
+        return true
     }
 
     private fun createTargetFile(folder: String, displayName: String, mimeType: String?): File {
@@ -665,6 +715,25 @@ private fun writeManagedAtomically(target: File, bytes: ByteArray) {
     }
 }
 
+private fun writeManagedAtomically(target: File, source: File) {
+    val temporary = File(target.parentFile, ".${target.name}.${System.nanoTime()}.tmp")
+    try {
+        source.inputStream().use { input ->
+            FileOutputStream(temporary).use { output ->
+                input.copyTo(output)
+                output.fd.sync()
+            }
+        }
+        try {
+            NioFiles.move(temporary.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+        } catch (_: AtomicMoveNotSupportedException) {
+            NioFiles.move(temporary.toPath(), target.toPath())
+        }
+    } finally {
+        temporary.delete()
+    }
+}
+
 private fun File.hasSameContent(bytes: ByteArray): Boolean {
     if (length() != bytes.size.toLong()) return false
     val fileDigest = MessageDigest.getInstance("SHA-256")
@@ -680,6 +749,50 @@ private fun File.hasSameContent(bytes: ByteArray): Boolean {
     return fileDigest.digest().contentEquals(bytesDigest)
 }
 
+private fun File.hasSameContent(other: File): Boolean {
+    if (length() != other.length()) return false
+    fun File.sha256(): ByteArray {
+        val digest = MessageDigest.getInstance("SHA-256")
+        inputStream().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        return digest.digest()
+    }
+    return sha256().contentEquals(other.sha256())
+}
+
+private fun managedExtension(mimeType: String, displayName: String?, imageOnly: Boolean): String {
+    val normalizedMime = mimeType.lowercase().substringBefore(';').trim()
+    val known = when (normalizedMime) {
+        "image/png" -> "png"
+        "image/jpeg", "image/jpg" -> "jpg"
+        "image/webp" -> "webp"
+        "image/gif" -> "gif"
+        "application/pdf" -> "pdf"
+        "text/plain" -> "txt"
+        "text/markdown" -> "md"
+        "application/json" -> "json"
+        "audio/mpeg" -> "mp3"
+        "audio/mp4" -> "m4a"
+        "audio/wav", "audio/x-wav" -> "wav"
+        "video/mp4" -> "mp4"
+        "video/webm" -> "webm"
+        else -> null
+    }
+    if (known != null) return known
+    if (imageOnly) throw IllegalArgumentException("Unsupported generated image MIME: $mimeType")
+    return displayName
+        ?.substringAfterLast('.', missingDelimiterValue = "")
+        ?.lowercase()
+        ?.takeIf { it.matches(Regex("[a-z0-9]{1,10}")) }
+        ?: "bin"
+}
+
 data class SyncResult(
     val inserted: Int,
     val removed: Int,
@@ -687,11 +800,25 @@ data class SyncResult(
 
 object FileFolders {
     const val UPLOAD = "upload"
+    const val LIBRARY_ATTACHMENTS = "library_attachments"
     const val CHAT_GENERATED_IMAGES = "chat_generated_images"
     const val LEGACY_GENERATED_IMAGES = "images"
     const val SKILLS = "skills"
     const val FONTS = "fonts"
     const val TOOL_OUTPUTS = "tool_outputs"
+}
+
+/**
+ * Fail-closed gate between temporary chat-file cleanup and the durable asset graph.
+ * A file remains protected even when a conversation reference disappears; lifecycle
+ * and retention are decided by MediaAsset, never by a UI message deletion.
+ */
+fun interface DurableAssetOwnership {
+    suspend fun isOwned(relativePath: String, managedFileId: Long?): Boolean
+
+    companion object {
+        val NONE = DurableAssetOwnership { _, _ -> false }
+    }
 }
 
 internal data class ChatFileDeletionCandidate(
@@ -751,7 +878,9 @@ internal fun deleteManagedChatFileIfAuthorized(
     filesDir: File,
     candidate: ChatFileDeletionCandidate,
     managedFile: ManagedFileEntity?,
+    durableAssetOwned: Boolean = false,
 ): Boolean {
+    if (durableAssetOwned) return false
     if (managedFile == null || managedFile.id <= 0L) return false
     if (managedFile.folder != candidate.folder || managedFile.relativePath != candidate.relativePath) return false
 

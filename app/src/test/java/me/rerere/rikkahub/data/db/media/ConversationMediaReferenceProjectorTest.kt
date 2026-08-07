@@ -96,4 +96,40 @@ class ConversationMediaReferenceProjectorTest {
             external.delete()
         }
     }
+
+    @Test
+    fun `typed projector includes stable image video audio and document assets`() {
+        val root = Files.createTempDirectory("conversation-all-assets").toFile()
+        try {
+            val message = UIMessage(
+                id = Uuid.parse("10000000-0000-0000-0000-000000000009"),
+                role = MessageRole.USER,
+                parts = listOf(
+                    UIMessagePart.Image("library_attachments/a.png", assetId = "asset-image"),
+                    UIMessagePart.Video("library_attachments/b.mp4", assetId = "asset-video"),
+                    UIMessagePart.Audio("library_attachments/c.mp3", assetId = "asset-audio"),
+                    UIMessagePart.Document(
+                        url = "library_attachments/d.pdf",
+                        fileName = "d.pdf",
+                        mime = "application/pdf",
+                        assetId = "asset-document",
+                    ),
+                ),
+            )
+            val projection = projectTypedConversation(
+                conversationId = "conversation-assets",
+                nodes = listOf(MessageNode(messages = listOf(message))),
+                json = JsonInstant,
+                pathResolver = FilesDirManagedMediaPathResolver(root),
+            )
+
+            assertEquals(4, projection.images.size)
+            assertEquals(
+                listOf("asset-image", "asset-video", "asset-audio", "asset-document"),
+                projection.images.map { it.assetId },
+            )
+        } finally {
+            root.deleteRecursively()
+        }
+    }
 }

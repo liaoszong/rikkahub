@@ -15,6 +15,7 @@ internal val BACKUP_APP_FILE_ROOTS = listOf(
     FileFolders.FONTS,
     FileFolders.LEGACY_GENERATED_IMAGES,
     FileFolders.CHAT_GENERATED_IMAGES,
+    FileFolders.LIBRARY_ATTACHMENTS,
 )
 
 /**
