@@ -783,6 +783,8 @@
   <string name="setting_mcp_page_header_name_placeholder">e.g.: Authorization</string>
   <string name="setting_mcp_page_header_value">Header Value</string>
   <string name="setting_mcp_page_header_value_placeholder">e.g.: Bearer token123</string>
+  <string name="setting_mcp_page_show_header_value">Show header value</string>
+  <string name="setting_mcp_page_hide_header_value">Hide header value</string>
   <string name="setting_mcp_page_import_confirm">Import</string>
   <string name="setting_mcp_page_import_desc">Paste MCP Server JSON config, supports standard mcpServers format</string>
   <string name="setting_mcp_page_import_no_valid_config">No valid MCP Server configuration found</string>
@@ -952,6 +954,8 @@
   <string name="setting_provider_page_add_provider">Add Provider</string>
   <string name="setting_provider_page_add_provider_override">Add Provider Override</string>
   <string name="setting_provider_page_advanced_settings">Advanced Settings</string>
+  <string name="setting_provider_page_context_window">Context window override</string>
+  <string name="setting_provider_page_context_window_desc">Effective window: %1$d tokens. Leave blank to follow verified model metadata; unknown models use the 128K fallback.</string>
   <string name="setting_provider_page_api_base_url">API Base Url</string>
   <string name="setting_provider_page_api_key">API Key</string>
   <string name="setting_provider_page_api_path">API Path</string>

@@ -1,8 +1,8 @@
 <div align="center">
   <img src="docs/icon.png" alt="App 圖標" width="100" />
-  <h1>RikkaHub</h1>
+  <h1>PaleInk</h1>
 
-一個原生Android LLM 聊天客戶端，支持切換不同的供應商進行聊天 🤖💬
+一款面向日常對話、多模態處理和圖片創作的 Android AI 客戶端。
 
 點擊加入我們的Discord伺服器 👉 [【RikkaHub】](https://discord.gg/9weBqxe5c4)
 
@@ -15,38 +15,33 @@
   <img src="docs/img/desktop.png" alt="Models Picker" width="450" />
 </div>
 
-## 關於這個 Fork
+## 關於 PaleInk
 
-本倉庫是 [RikkaHub](https://github.com/rikkahub/rikkahub) 的長期維護 Fork，在盡量跟進上游的同時，重點改善穩定性與完整的產品體驗。
+PaleInk 源自 [RikkaHub](https://github.com/rikkahub/rikkahub)，目前作為獨立 Android 版本維護，有自己的功能規劃和發佈節奏。合適的上游改動仍會繼續合併。
 
-目前維護的主要增強包括：
+PaleInk 的版本發佈和問題回報以本倉庫為準。RikkaHub 的版權聲明及 AGPL-3.0 授權條款繼續有效。
 
-- 在一般聊天中由推理模型呼叫已設定的圖像模型，無需離開對話即可生成圖片。
-- 支援把本輪上傳圖片或對話中的歷史生成圖作為參考圖繼續創作。
-- 漸進式多圖畫廊：主圖、可切換縮圖、生成中佔位、部分失敗保留、整組收合與全螢幕縮放。
-- 多張使用者附件使用緊湊畫廊展示，同時保持原有單圖訊息尺寸。
-- 生圖任務支援背景執行、跨頁面觀察、明確取消、狀態持久化與中斷復原，避免自動重試造成重複計費。
-- 內建 Palenik 供應商模型目錄，自動選擇可用的較新圖像模型，並為標題摘要選擇可靠的背景文字模型。
-- 更清晰且可收合的「創作工具／聊天」側邊欄，以及可恢復下載的應用程式內更新體驗。
-- 自動化建置、GitHub Release 與更新站發佈流程；Debug 建置不接入正式 Firebase，不污染正式統計。
+## 🧭 多平台方向
 
-上游版權聲明及 AGPL-3.0 授權條款繼續有效，本 Fork 的改動均記錄在 Git 歷史中。
+Android 仍是 PaleInk 的主平台。後續計劃透過 Kotlin Multiplatform 和 Compose Desktop 支援 Windows，iOS 暫列在更長期計劃中；Android 原生能力不會因此縮水。
 
-### PaleInk 最新版本：2.4.5-pale.3
+Windows 和 iOS 客戶端目前尚未發佈，具體路線見[多平台規劃](docs/architecture/ANDROID_FIRST_MULTIPLATFORM_ARCHITECTURE.md)。
 
-- 🖼️ 聊天內支援參考圖生成，並以緊湊、漸進式多圖畫廊展示結果。
-- 🧰 創作工具與聊天側邊欄更清晰，可收合並持續記住展開狀態。
-- ⬇️ 應用程式內更新支援斷點續傳、簽章與 APK 身分校驗，並改善首次安裝權限說明。
-- 🛡️ 強化備份復原、圖片持久化、Provider 就緒判斷、Web 存取、Debug 隱私及跨平台發佈門禁。
+### PaleInk 最新版本：2.4.5-pale.6
+
+- 🖼️ 聊天內生成或編輯 1–8 張圖片，支援漸進顯示和背景執行。
+- 🗃️ 在資產庫統一查看生成圖片和聊天附件。
+- 💬 長對話和背景請求支援中斷復原，搜尋結果可顯示來源。
+- 🛡️ 更新支援斷點續傳和簽章校驗，並相容 16 KB 頁面，隔離 Debug 資料。
 
 ## 🚀 下載
 
-🔗 [下載 PaleInk Fork](https://updates.paleink.cc/)（推薦）
+🔗 [下載 PaleInk](https://updates.paleink.cc/)（推薦）
 
-🔗 [前往上游 RikkaHub 官網](https://rikka-ai.com/download)
+🔗 [前往原版 RikkaHub 官網](https://rikka-ai.com/download)
 
 > [!WARNING]
-> RikkaHub 存在許多 fork 版本，fork 版本出現問題與 RikkaHub 無關，請謹慎使用 fork 版本，避免隱私洩露或者過度索要權限問題。
+> PaleInk 與 RikkaHub 使用不同的更新來源和簽章。請只從 PaleInk 官方下載頁安裝 PaleInk。
 
 ## 💖 贊助商
 
@@ -63,7 +58,12 @@
 - 🛠️ MCP 支持
 - 🔄 多種類型的供應商支持，自定義 API / URL / 模型（目前支持 OpenAI、Google、Anthropic）
 - 🖼️ 多模態輸入支持
-- 🎨 在一般聊天中直接生成、參考編輯並漸進展示多張圖片
+- 🎨 聊天內生成和參考編輯 1–8 張圖片
+- 🗃️ 資產庫統一管理生成圖片和聊天附件
+- 🔔 文字、工具和圖片任務支援背景執行、進度通知和取消
+- 🛡️ 中斷復原、憑據保護和更安全的備份復原
+- 🧭 根據供應商能力自動選擇模型
+- 🔗 搜尋結果顯示來源引用
 - 📝 Markdown 渲染（支持代碼高亮、數學公式、表格、Mermaid）
 - 🔍 搜尋功能（Exa、Tavily、Zhipu、LinkUp、Brave、Perplexity、..）
 - 🧩 Prompt 變量（模型名稱、時間等）
@@ -94,11 +94,8 @@
 > [!TIP]
 > Debug 建置無需 Firebase；Release 建置繼續使用 `app/google-services.json` 提供正式環境的 Analytics 與 Crashlytics。
 
-> [!IMPORTANT]  
-> 以下PR將被拒絕：
-> 1. 添加新語言，因為添加新語言會增加後續本地化的工作量
-> 2. 添加新功能，這個項目是有態度的
-> 3. AI生成的大規模重構和更改
+> [!IMPORTANT]
+> 大型功能或重構請先討論再提交 PR。翻譯改動請同步維護三份 README。
 
 ## 💰 捐贈
 

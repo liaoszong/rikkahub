@@ -718,6 +718,8 @@
   <string name="setting_mcp_page_header_name_placeholder">例：Authorization</string>
   <string name="setting_mcp_page_header_value">ヘッダー値</string>
   <string name="setting_mcp_page_header_value_placeholder">例：Bearer token123</string>
+  <string name="setting_mcp_page_show_header_value">ヘッダー値を表示</string>
+  <string name="setting_mcp_page_hide_header_value">ヘッダー値を非表示</string>
   <string name="setting_mcp_page_import_confirm">インポート</string>
   <string name="setting_mcp_page_import_desc">MCPサーバーJSON設定を貼り付けます。標準のmcpServers形式に対応</string>
   <string name="setting_mcp_page_import_no_valid_config">有効なMCPサーバー設定が見つかりません</string>

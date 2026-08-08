@@ -11,7 +11,9 @@ class ModelDefinition(
     private val matcher: TokenMatcher,
     val inputModalities: Set<Modality>,
     val outputModalities: Set<Modality>,
-    val abilities: Set<ModelAbility>
+    val abilities: Set<ModelAbility>,
+    val contextWindowTokens: Int?,
+    val maxOutputTokens: Int?,
 ) : ModelSelector {
     override fun match(modelId: String): Boolean {
         val tokens = tokenize(modelId)
@@ -46,6 +48,8 @@ class ModelDefinitionBuilder {
     private val inputModalities = mutableSetOf(Modality.TEXT)
     private val outputModalities = mutableSetOf(Modality.TEXT)
     private val abilities = mutableSetOf<ModelAbility>()
+    private var contextWindowTokens: Int? = null
+    private var maxOutputTokens: Int? = null
 
     fun tokens(vararg specs: String) {
         matchers += TokenSequenceMatcher(specs.map(::parseTokenSpec))
@@ -81,6 +85,17 @@ class ModelDefinitionBuilder {
         this.abilities.addAll(abilities)
     }
 
+    /** Declare verified token limits for this model family. */
+    fun tokenLimits(contextWindow: Int, maxOutput: Int? = null) {
+        require(contextWindow > 0) { "Context window must be positive" }
+        require(maxOutput == null || maxOutput > 0) { "Max output must be positive" }
+        require(maxOutput == null || maxOutput <= contextWindow) {
+            "Max output cannot exceed the context window"
+        }
+        contextWindowTokens = contextWindow
+        maxOutputTokens = maxOutput
+    }
+
     fun build(): ModelDefinition {
         val matcher = when {
             matchers.isEmpty() -> MatchNone
@@ -91,7 +106,9 @@ class ModelDefinitionBuilder {
             matcher = matcher,
             inputModalities = inputModalities.toSet(),
             outputModalities = outputModalities.toSet(),
-            abilities = abilities.toSet()
+            abilities = abilities.toSet(),
+            contextWindowTokens = contextWindowTokens,
+            maxOutputTokens = maxOutputTokens,
         )
     }
 }

@@ -21,10 +21,21 @@ data class CapabilitySnapshot(
     val outputMedia: Set<CapabilityMedia> = setOf(CapabilityMedia.TEXT),
     val features: Set<ModelFeature> = emptySet(),
     val apiSurfaces: Set<ApiSurface> = emptySet(),
+    /** Null means the registry/provider has not supplied a verified limit. */
+    val contextWindowTokens: Int? = null,
+    /** Null means the registry/provider has not supplied a verified output limit. */
+    val maxOutputTokens: Int? = null,
+    /** Stable tokenizer/counting adapter name when one is available. */
+    val tokenizerId: String? = null,
     val origin: CapabilityOrigin = CapabilityOrigin.INFERRED,
 ) {
     init {
         require(schemaVersion > 0) { "Capability snapshot schemaVersion must be positive" }
+        require(contextWindowTokens == null || contextWindowTokens > 0)
+        require(maxOutputTokens == null || maxOutputTokens > 0)
+        require(
+            contextWindowTokens == null || maxOutputTokens == null || maxOutputTokens <= contextWindowTokens
+        )
     }
 
     companion object {
@@ -104,13 +115,20 @@ data class CapabilityOverride(
     val outputMedia: CapabilitySetOverride<CapabilityMedia> = CapabilitySetOverride(),
     val features: CapabilitySetOverride<ModelFeature> = CapabilitySetOverride(),
     val apiSurfaces: CapabilitySetOverride<ApiSurface> = CapabilitySetOverride(),
+    /** Null inherits the declared limit; a positive value is an explicit user correction. */
+    val contextWindowTokens: Int? = null,
+    /** Null inherits the declared limit; a positive value is an explicit user correction. */
+    val maxOutputTokens: Int? = null,
 ) {
     init {
         require(schemaVersion > 0) { "Capability override schemaVersion must be positive" }
+        require(contextWindowTokens == null || contextWindowTokens > 0)
+        require(maxOutputTokens == null || maxOutputTokens > 0)
     }
 
     val isSpecified: Boolean
-        get() = inputMedia.isSpecified || outputMedia.isSpecified || features.isSpecified || apiSurfaces.isSpecified
+        get() = inputMedia.isSpecified || outputMedia.isSpecified || features.isSpecified || apiSurfaces.isSpecified ||
+            contextWindowTokens != null || maxOutputTokens != null
 }
 
 object CapabilitySnapshotResolver {
@@ -188,11 +206,19 @@ object CapabilitySnapshotResolver {
         if (override == null || !override.isSpecified) return base
         requireSupportedVersion(override.schemaVersion, "override")
 
+        val contextWindowTokens = override.contextWindowTokens ?: base.contextWindowTokens
+        val requestedMaxOutputTokens = override.maxOutputTokens ?: base.maxOutputTokens
         return CapabilitySnapshot(
             inputMedia = override.inputMedia.applyTo(base.inputMedia),
             outputMedia = override.outputMedia.applyTo(base.outputMedia),
             features = override.features.applyTo(base.features),
             apiSurfaces = override.apiSurfaces.applyTo(base.apiSurfaces),
+            contextWindowTokens = contextWindowTokens,
+            // A smaller user window implicitly caps output instead of producing an invalid model.
+            maxOutputTokens = requestedMaxOutputTokens?.let { maxOutput ->
+                contextWindowTokens?.let(maxOutput::coerceAtMost) ?: maxOutput
+            },
+            tokenizerId = base.tokenizerId,
             origin = CapabilityOrigin.MERGED,
         )
     }

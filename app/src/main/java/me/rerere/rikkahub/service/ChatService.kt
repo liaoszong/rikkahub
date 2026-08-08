@@ -34,6 +34,10 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
@@ -96,6 +100,7 @@ import me.rerere.rikkahub.data.repository.ConversationRepository
 import me.rerere.rikkahub.data.repository.FolderRepository
 import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
+import me.rerere.rikkahub.data.privacy.AgentNetworkPolicy
 import me.rerere.rikkahub.fork.pale.request.ChatGenerationLedgerContext
 import me.rerere.rikkahub.web.BadRequestException
 import me.rerere.rikkahub.web.NotFoundException
@@ -767,7 +772,9 @@ class ChatService(
                 conversationLorebookIds = conversation.lorebookIds,
                 workspaceCwd = conversation.workspaceCwd,
                 toolExecutionContextId = conversationId.toString(),
-                memories = if (assistant.useGlobalMemory) {
+                memories = if (!settings.agentPrivacyPolicy.memoryEnabled) {
+                    emptyList()
+                } else if (assistant.useGlobalMemory) {
                     memoryRepository.getGlobalMemories()
                 } else {
                     memoryRepository.getMemoriesOfAssistant(assistant.id.toString())
@@ -779,8 +786,10 @@ class ChatService(
                 },
                 outputTransformers = outputTransformers,
                 tools = buildList {
-                    if (assistant.enableWebSearch) {
-                        addAll(createSearchTools(settings))
+                    if (assistant.enableWebSearch && settings.agentPrivacyPolicy.networkEnabled &&
+                        !settings.agentPrivacyPolicy.localOnly
+                    ) {
+                        addAll(createSearchTools(settings, context, conversationId.toString()))
                     }
                     addAll(localTools.getTools(assistant.localTools))
                     if (assistant.enableRecentChatsReference) {
@@ -1122,6 +1131,7 @@ class ChatService(
                 fallbackId = settings.fastModelId,
             ) ?: return
             val provider = model.findProvider(settings.providers) ?: return
+            AgentNetworkPolicy.requireProviderAllowed(provider, settings.agentPrivacyPolicy)
 
             val providerHandler = providerManager.getProviderByType(provider)
             val result = providerHandler.generateText(
@@ -1174,6 +1184,7 @@ class ChatService(
                 fallbackId = settings.fastModelId,
             ) ?: return
             val provider = model.findProvider(settings.providers) ?: return
+            AgentNetworkPolicy.requireProviderAllowed(provider, settings.agentPrivacyPolicy)
 
             val accepted = patchConversationMetadataIf(
                 conversationId = conversationId,
@@ -1235,6 +1246,7 @@ class ChatService(
             ?: throw IllegalStateException("No model available for compression")
         val provider = model.findProvider(settings.providers)
             ?: throw IllegalStateException("Provider not found")
+        AgentNetworkPolicy.requireProviderAllowed(provider, settings.agentPrivacyPolicy)
 
         val providerHandler = providerManager.getProviderByType(provider)
 
@@ -1243,17 +1255,14 @@ class ChatService(
 
         // Split messages into those to compress and those to keep
         val messagesToCompress: List<UIMessage>
-        val messagesToKeep: List<UIMessage>
 
         if (keepRecentMessages > 0 && allMessages.size > keepRecentMessages) {
             messagesToCompress = allMessages.dropLast(keepRecentMessages)
-            messagesToKeep = allMessages.takeLast(keepRecentMessages)
         } else if (keepRecentMessages > 0) {
             // Not enough messages to compress while keeping recent ones
             throw IllegalStateException(context.getString(R.string.chat_page_compress_not_enough_messages))
         } else {
             messagesToCompress = allMessages
-            messagesToKeep = emptyList()
         }
 
         fun splitMessages(messages: List<UIMessage>): List<List<UIMessage>> {
@@ -1285,25 +1294,35 @@ class ChatService(
                 ?: throw IllegalStateException("Failed to generate compressed summary")
         }
 
+        val chunks = splitMessages(messagesToCompress)
         val compressedSummaries = coroutineScope {
-            splitMessages(messagesToCompress)
-                .map { chunk -> async { compressMessages(chunk) } }
+            chunks.map { chunk -> async { compressMessages(chunk) } }
                 .awaitAll()
         }
 
-        // Create new conversation with compressed history as multiple user messages + kept messages
-        val newMessageNodes = buildList {
-            compressedSummaries.forEach { summary ->
-                add(UIMessage.user(summary).toMessageNode())
-            }
-            addAll(messagesToKeep.map { it.toMessageNode() })
+        // Append rebuildable summary projections. Original nodes and branches remain authoritative.
+        val summaryNodes = compressedSummaries.zip(chunks).mapIndexed { index, (summary, sources) ->
+            UIMessage(
+                role = MessageRole.ASSISTANT,
+                parts = listOf(
+                    UIMessagePart.Text(
+                        text = summary,
+                        metadata = buildJsonObject {
+                            put("context_provenance", "structured_compaction")
+                            put("summary_revision", 1)
+                            put("summary_chunk", index)
+                            put("source_refs", JsonArray(sources.map { JsonPrimitive("message:${it.id}") }))
+                        },
+                    )
+                ),
+            ).toMessageNode()
         }
         mutateAndSaveConversation(conversationId) { current ->
             check(current.messageNodes == conversation.messageNodes) {
                 "Conversation changed while history compression was running"
             }
             current.copy(
-                messageNodes = newMessageNodes,
+                messageNodes = current.messageNodes + summaryNodes,
                 chatSuggestions = emptyList(),
             )
         }

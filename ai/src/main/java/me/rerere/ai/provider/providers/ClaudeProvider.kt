@@ -15,6 +15,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonArrayBuilder
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -38,11 +39,13 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
+import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.registry.ModelRegistry
 import me.rerere.ai.ui.ImageGenerationItem
 import me.rerere.ai.ui.MessageChunk
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessageChoice
+import me.rerere.ai.ui.UIMessageAnnotation
 import me.rerere.ai.ui.ClaudeReasoningMetadata
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.metadataAs
@@ -101,6 +104,24 @@ internal fun supportsClaudeXHigh(modelId: String): Boolean {
         "claude-opus-4-8",
         "claude-sonnet-5",
     ).any(id::contains)
+}
+
+internal fun claudeWebSearchToolType(modelId: String): String {
+    val id = modelId.lowercase()
+    return if (listOf(
+            "claude-fable-5",
+            "claude-mythos-5",
+            "claude-opus-4-6",
+            "claude-opus-4-7",
+            "claude-opus-4-8",
+            "claude-sonnet-4-6",
+            "claude-sonnet-5",
+        ).any(id::contains)
+    ) {
+        "web_search_20260209"
+    } else {
+        "web_search_20250305"
+    }
 }
 
 internal fun legacyThinkingBudget(reasoningLevel: ReasoningLevel, maxTokens: Int): Int? {
@@ -258,6 +279,8 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     }
                 })
                 val tokenUsage = parseTokenUsage(dataJson)
+                val stopReason = dataJson["delta"]?.jsonObject
+                    ?.get("stop_reason")?.jsonPrimitive?.contentOrNull
                 val messageChunk = MessageChunk(
                     id = id ?: "",
                     model = "",
@@ -266,7 +289,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                             index = 0,
                             delta = deltaMessage,
                             message = null,
-                            finishReason = null
+                            finishReason = stopReason
                         )
                     ),
                     usage = tokenUsage
@@ -421,9 +444,20 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                 }
             }
 
-            // 处理工具
-            if (capabilities.supports(ModelFeature.TOOL_CALLING) && params.tools.isNotEmpty()) {
+            // Provider-native search and client-side tools share one tools array. Search remains
+            // available even when the request has no client-side tools.
+            val nativeSearchEnabled = BuiltInTools.Search in params.model.tools &&
+                BuiltInTools.Search !in params.disabledBuiltInTools &&
+                capabilities.supports(ModelFeature.WEB_SEARCH)
+            val localToolsEnabled = capabilities.supports(ModelFeature.TOOL_CALLING) && params.tools.isNotEmpty()
+            if (nativeSearchEnabled || localToolsEnabled) {
                 putJsonArray("tools") {
+                    if (nativeSearchEnabled) {
+                        add(buildJsonObject {
+                            put("type", claudeWebSearchToolType(params.model.modelId))
+                            put("name", "web_search")
+                        })
+                    }
                     params.tools.forEachIndexed { index, tool ->
                         add(buildJsonObject {
                             put("name", tool.name)
@@ -593,11 +627,24 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
             }
         }
 
-        is UIMessagePart.Reasoning -> buildJsonObject {
-            put("type", "thinking")
-            put("thinking", reasoning)
-            metadataAs<ClaudeReasoningMetadata>()?.signature?.let { put("signature", it) }
+        is UIMessagePart.Reasoning -> metadataAs<ClaudeReasoningMetadata>().let { claude ->
+            if (claude?.blockType == "redacted_thinking" && claude.redactedData != null) {
+                buildJsonObject {
+                    put("type", "redacted_thinking")
+                    put("data", claude.redactedData)
+                }
+            } else {
+                buildJsonObject {
+                    put("type", "thinking")
+                    put("thinking", reasoning)
+                    claude?.signature?.let { put("signature", it) }
+                }
+            }
         }
+
+        is UIMessagePart.ProviderOpaque -> if (provider == "anthropic") {
+            runCatching { json.parseToJsonElement(payloadJson).jsonObject }.getOrNull()
+        } else null
 
         else -> null
     }
@@ -619,6 +666,7 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
 
     private fun parseMessage(content: JsonArray): UIMessage {
         val parts = mutableListOf<UIMessagePart>()
+        val annotations = mutableListOf<UIMessageAnnotation>()
 
         content.forEach { contentBlock ->
             val block = contentBlock.jsonObject
@@ -629,6 +677,9 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
                     val text = block["text"]?.jsonPrimitive?.contentOrNull ?: ""
                     if (text.isNotEmpty()) {
                         parts.add(UIMessagePart.Text(text))
+                    }
+                    block["citations"]?.jsonArray?.forEach { citationElement ->
+                        parseClaudeCitation(citationElement.jsonObject, text)?.let(annotations::add)
                     }
                 }
 
@@ -650,6 +701,61 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
 
                 "redacted_thinking" -> {
                     val data = block["data"]?.jsonPrimitiveOrNull?.contentOrNull
+                    if (data != null) {
+                        parts.add(
+                            UIMessagePart.Reasoning(
+                                reasoning = "",
+                                createdAt = Clock.System.now(),
+                                finishedAt = Clock.System.now(),
+                                metadata = ClaudeReasoningMetadata(
+                                    redactedData = data,
+                                    blockType = "redacted_thinking",
+                                ).toMetadata(),
+                            )
+                        )
+                    }
+                }
+
+                "server_tool_use" -> {
+                    val id = block["id"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    val name = block["name"]?.jsonPrimitive?.contentOrNull ?: "server_tool"
+                    parts.add(providerOpaque(block, type ?: "server_tool_use"))
+                    annotations.add(
+                        providerToolEvent(
+                            block = block,
+                            callId = id,
+                            toolType = name,
+                            status = "running",
+                        )
+                    )
+                }
+
+                "web_search_tool_result" -> {
+                    val callId = block["tool_use_id"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    val resultContent = block["content"]
+                    val failed = resultContent is JsonObject
+                    parts.add(providerOpaque(block, type))
+                    annotations.add(
+                        providerToolEvent(
+                            block = block,
+                            callId = callId,
+                            toolType = "web_search",
+                            status = if (failed) "failed" else "completed",
+                        )
+                    )
+                    if (resultContent is JsonArray) {
+                        resultContent.take(8).forEach { result ->
+                            val item = result.jsonObject
+                            val url = item["url"]?.jsonPrimitive?.contentOrNull ?: return@forEach
+                            annotations.add(
+                                UIMessageAnnotation.UrlCitation(
+                                    title = item["title"]?.jsonPrimitive?.contentOrNull ?: url,
+                                    url = url,
+                                    provenance = "provider",
+                                )
+                            )
+                        }
+                    }
                 }
 
                 "tool_use" -> {
@@ -682,8 +788,60 @@ class ClaudeProvider(private val client: OkHttpClient, context: Context? = null)
 
         return UIMessage(
             role = MessageRole.ASSISTANT,
-            parts = parts
+            parts = parts,
+            annotations = annotations,
         )
+    }
+
+    private fun providerOpaque(block: JsonObject, type: String) = UIMessagePart.ProviderOpaque(
+        provider = "anthropic",
+        blockType = type,
+        payloadJson = json.encodeToString(JsonObject.serializer(), block),
+    )
+
+    private fun providerToolEvent(
+        block: JsonObject,
+        callId: String,
+        toolType: String,
+        status: String,
+    ): UIMessageAnnotation.ProviderToolEvent {
+        val payload = json.encodeToString(JsonObject.serializer(), block)
+        return UIMessageAnnotation.ProviderToolEvent(
+            provider = "anthropic",
+            toolType = toolType,
+            callId = callId,
+            status = status,
+            payloadDigest = payload.sha256Hex(),
+            providerMetadata = buildJsonObject {
+                (block["content"] as? JsonObject)?.get("error_code")
+                    ?.jsonPrimitive?.contentOrNull?.let { put("error_code", it) }
+            }.takeIf { it.isNotEmpty() },
+        )
+    }
+
+    private fun parseClaudeCitation(citation: JsonObject, text: String): UIMessageAnnotation.UrlCitation? {
+        val url = citation["url"]?.jsonPrimitive?.contentOrNull ?: return null
+        val start = citation["start_index"]?.jsonPrimitive?.intOrNull
+        val end = citation["end_index"]?.jsonPrimitive?.intOrNull
+        return UIMessageAnnotation.UrlCitation(
+            title = citation["title"]?.jsonPrimitive?.contentOrNull ?: url,
+            url = url,
+            startIndex = start?.let { text.codePointIndexToUtf16(it) },
+            endIndex = end?.let { text.codePointIndexToUtf16(it) },
+            offsetUnit = "utf16_code_unit",
+            quote = citation["cited_text"]?.jsonPrimitive?.contentOrNull,
+            provenance = "provider",
+        )
+    }
+
+    private fun String.codePointIndexToUtf16(index: Int): Int {
+        val bounded = index.coerceIn(0, codePointCount(0, length))
+        return offsetByCodePoints(0, bounded)
+    }
+
+    private fun String.sha256Hex(): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(toByteArray())
+        return digest.joinToString("") { "%02x".format(it) }
     }
 
     private fun parseTokenUsage(bodyJson: JsonObject?): TokenUsage? {

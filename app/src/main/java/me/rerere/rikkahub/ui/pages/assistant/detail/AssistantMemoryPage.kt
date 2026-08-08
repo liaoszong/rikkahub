@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.ui.pages.assistant.detail
 
+import android.content.Intent
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.PencilEdit01
 import me.rerere.hugeicons.stroke.Add01
@@ -38,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastForEach
@@ -45,6 +47,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.AssistantMemory
+import me.rerere.pale.memory.MemoryRecord
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.components.ui.RikkaConfirmDialog
@@ -53,6 +56,8 @@ import me.rerere.rikkahub.ui.hooks.useEditState
 import me.rerere.rikkahub.ui.theme.CustomColors
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
+import me.rerere.rikkahub.utils.JsonInstantPretty
+import kotlinx.serialization.encodeToString
 
 @Composable
 fun AssistantMemoryPage(id: String) {
@@ -63,7 +68,9 @@ fun AssistantMemoryPage(id: String) {
     )
     val assistant by vm.assistant.collectAsStateWithLifecycle()
     val memories by vm.memories.collectAsStateWithLifecycle()
+    val memoryRecords by vm.memoryRecords.collectAsStateWithLifecycle()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val context = LocalContext.current
 
     Scaffold(
         topBar = {
@@ -85,10 +92,25 @@ fun AssistantMemoryPage(id: String) {
             innerPadding = innerPadding,
             assistant = assistant,
             memories = memories,
+            memoryRecords = memoryRecords,
             onUpdateAssistant = { vm.update(it) },
             onDeleteMemory = { vm.deleteMemory(it) },
             onAddMemory = { vm.addMemory(it) },
-            onUpdateMemory = { vm.updateMemory(it) }
+            onUpdateMemory = { vm.updateMemory(it) },
+            onSetMemoryEnabled = { memory, enabled -> vm.setMemoryEnabled(memory, enabled) },
+            onExport = {
+                val payload = JsonInstantPretty.encodeToString(memoryRecords)
+                context.startActivity(
+                    Intent.createChooser(
+                        Intent(Intent.ACTION_SEND).apply {
+                            type = "application/json"
+                            putExtra(Intent.EXTRA_SUBJECT, "RikkaHub Memory V2")
+                            putExtra(Intent.EXTRA_TEXT, payload)
+                        },
+                        "导出记忆",
+                    )
+                )
+            },
         )
     }
 }
@@ -98,10 +120,13 @@ private fun AssistantMemoryContent(
     innerPadding: PaddingValues,
     assistant: Assistant,
     memories: List<AssistantMemory>,
+    memoryRecords: List<MemoryRecord>,
     onUpdateAssistant: (Assistant) -> Unit,
     onAddMemory: (AssistantMemory) -> Unit,
     onUpdateMemory: (AssistantMemory) -> Unit,
     onDeleteMemory: (AssistantMemory) -> Unit,
+    onSetMemoryEnabled: (AssistantMemory, Boolean) -> Unit,
+    onExport: () -> Unit,
 ) {
     val memoryDialogState = useEditState<AssistantMemory> {
         if (it.id == 0) {
@@ -111,6 +136,7 @@ private fun AssistantMemoryContent(
         }
     }
     var pendingDeleteMemory by remember { mutableStateOf<AssistantMemory?>(null) }
+    var memoryQuery by remember { mutableStateOf("") }
 
     // 记忆对话框
     memoryDialogState.EditStateContent { memory, update ->
@@ -272,18 +298,41 @@ private fun AssistantMemoryContent(
                     contentDescription = null
                 )
             }
+            TextButton(
+                onClick = onExport,
+                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 48.dp),
+            ) { Text("导出") }
         }
 
-        memories.fastForEach { memory ->
+        TextField(
+            value = memoryQuery,
+            onValueChange = { memoryQuery = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("搜索记忆、来源或类别") },
+            singleLine = true,
+        )
+
+        memories.filter { memory ->
+            val record = memoryRecords.firstOrNull { it.memoryId == "legacy:${memory.id}" }
+            memoryQuery.isBlank() || sequenceOf(
+                memory.content,
+                record?.type?.name,
+                record?.scope?.kind?.name,
+                record?.sourceTrust?.name,
+                record?.sourceRefs?.joinToString(" "),
+            ).filterNotNull().any { it.contains(memoryQuery, ignoreCase = true) }
+        }.fastForEach { memory ->
             key(memory.id) {
                 MemoryItem(
                     memory = memory,
+                    record = memoryRecords.firstOrNull { it.memoryId == "legacy:${memory.id}" },
                     onEditMemory = {
                         memoryDialogState.open(it)
                     },
                     onDeleteMemory = {
                         pendingDeleteMemory = it
-                    }
+                    },
+                    onSetEnabled = { onSetMemoryEnabled(memory, it) },
                 )
             }
         }
@@ -312,8 +361,10 @@ private fun AssistantMemoryContent(
 @Composable
 private fun MemoryItem(
     memory: AssistantMemory,
+    record: MemoryRecord?,
     onEditMemory: (AssistantMemory) -> Unit,
-    onDeleteMemory: (AssistantMemory) -> Unit
+    onDeleteMemory: (AssistantMemory) -> Unit,
+    onSetEnabled: (Boolean) -> Unit,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -341,7 +392,19 @@ private fun MemoryItem(
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodySmall,
                 )
+                record?.let {
+                    Text(
+                        text = "${it.type.name.lowercase()} · ${it.scope.kind.name.lowercase()} · ${it.sourceTrust.name.lowercase()} · r${it.revision}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
+            Switch(
+                checked = record?.status?.name == "ACTIVE",
+                onCheckedChange = onSetEnabled,
+                enabled = record != null,
+            )
             IconButton(
                 onClick = { onEditMemory(memory) }
             ) {

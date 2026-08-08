@@ -18,6 +18,8 @@ import me.rerere.pale.request.ToolExecutionState
 import me.rerere.pale.request.ToolPermissionDecision
 import me.rerere.pale.request.ToolPermissionScope
 import me.rerere.pale.request.ToolSideEffectClass
+import me.rerere.pale.continuity.ProviderReplayBlock
+import me.rerere.pale.continuity.ProviderReplayEnvelope
 import me.rerere.rikkahub.data.db.AppDatabase
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -87,6 +89,38 @@ class RequestLedgerRepositoryTest {
         assertSuspendFails<RequestLedgerIdentityConflict> {
             repository.createRequest(spec.copy(credentialRefId = "different-credential"))
         }
+    }
+
+    @Test
+    fun providerReplayEnvelopePreservesOpaquePayloadAndIsIdempotent() = runTest {
+        runningAttempt("request-replay", "attempt-replay")
+        val envelope = ProviderReplayEnvelope(
+            provider = "anthropic",
+            apiSurface = "messages",
+            blocks = listOf(
+                ProviderReplayBlock(
+                    ordinal = 0,
+                    messageBoundary = 0,
+                    type = "server_tool_use",
+                    opaquePayloadJson = """{"type":"server_tool_use","encrypted":"opaque"}""",
+                    payloadDigest = "payload-digest",
+                )
+            ),
+            envelopeDigest = "envelope-digest",
+        )
+
+        repeat(2) {
+            repository.recordProviderReplayEnvelope(
+                requestId = RequestId("request-replay"),
+                attemptId = RequestAttemptId("attempt-replay"),
+                envelope = envelope,
+                actor = AuditActor.system("test"),
+            )
+        }
+
+        val restored = repository.getProviderReplayEnvelopes(RequestId("request-replay")).single()
+        assertEquals(envelope, restored)
+        assertTrue(restored.blocks.single().opaquePayloadJson.contains("opaque"))
     }
 
     @Test

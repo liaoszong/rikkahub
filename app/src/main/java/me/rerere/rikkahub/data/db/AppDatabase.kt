@@ -15,6 +15,7 @@ import me.rerere.rikkahub.data.db.dao.FolderDAO
 import me.rerere.rikkahub.data.db.dao.GenMediaDAO
 import me.rerere.rikkahub.data.db.dao.ManagedFileDAO
 import me.rerere.rikkahub.data.db.dao.MemoryDAO
+import me.rerere.rikkahub.data.db.dao.MemoryV2DAO
 import me.rerere.rikkahub.data.db.dao.MessageNodeDAO
 import me.rerere.rikkahub.data.db.dao.MessageFtsOutboxDAO
 import me.rerere.rikkahub.data.db.dao.SyncV2DAO
@@ -35,6 +36,9 @@ import me.rerere.rikkahub.data.db.entity.MediaMigrationJournalEntity
 import me.rerere.rikkahub.data.db.entity.MediaRelationEntity
 import me.rerere.rikkahub.data.db.entity.MediaReplicaEntity
 import me.rerere.rikkahub.data.db.entity.MemoryEntity
+import me.rerere.rikkahub.data.db.entity.MemoryRecordV2Entity
+import me.rerere.rikkahub.data.db.entity.MemoryAuditEventV2Entity
+import me.rerere.rikkahub.data.db.entity.MemoryRevisionV2Entity
 import me.rerere.rikkahub.data.db.entity.MessageMediaRefEntity
 import me.rerere.rikkahub.data.db.entity.MessageCitationEntity
 import me.rerere.rikkahub.data.db.entity.MessageBranchGroupEntity
@@ -73,6 +77,9 @@ import me.rerere.rikkahub.utils.JsonInstant
         MessageCitationEntity::class,
         CitationMigrationJournalEntity::class,
         MemoryEntity::class,
+        MemoryRecordV2Entity::class,
+        MemoryAuditEventV2Entity::class,
+        MemoryRevisionV2Entity::class,
         MediaAssetEntity::class,
         MessageNodeEntity::class,
         ManagedFileEntity::class,
@@ -98,7 +105,7 @@ import me.rerere.rikkahub.utils.JsonInstant
         SyncOutboxEntity::class,
         SyncConflictEntity::class,
     ],
-    version = 31,
+    version = 33,
     autoMigrations = [
         AutoMigration(from = 1, to = 2),
         AutoMigration(from = 2, to = 3),
@@ -133,6 +140,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun citationDao(): CitationDAO
 
     abstract fun memoryDao(): MemoryDAO
+
+    abstract fun memoryV2Dao(): MemoryV2DAO
 
     abstract fun genMediaDao(): GenMediaDAO
 

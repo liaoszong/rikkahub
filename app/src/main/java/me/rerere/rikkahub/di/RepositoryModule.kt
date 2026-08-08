@@ -13,6 +13,8 @@ import me.rerere.rikkahub.data.repository.MemoryRepository
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.rikkahub.data.db.media.ConversationMediaReferenceBackfillProcessor
 import me.rerere.rikkahub.fork.pale.request.RequestLedgerRepository
+import me.rerere.rikkahub.data.privacy.PrivacyCleanupCoordinator
+import me.rerere.rikkahub.data.quality.QualityMetricsRecorder
 import me.rerere.rikkahub.fork.pale.request.ChatProviderStepCoordinator
 import me.rerere.rikkahub.fork.pale.request.ChatRequestReconciler
 import me.rerere.rikkahub.fork.pale.request.ToolExecutionLedgerCoordinator
@@ -36,6 +38,7 @@ import java.io.File
 import kotlin.uuid.Uuid
 
 val repositoryModule = module {
+    single { QualityMetricsRecorder(get()) }
     single {
         ConversationRepository(get(), get(), get(), get(), get(), get(), get(), get())
     }
@@ -45,7 +48,11 @@ val repositoryModule = module {
     }
 
     single {
-        MemoryRepository(get())
+        MemoryRepository(get(), get(), get(), get())
+    }
+
+    single {
+        PrivacyCleanupCoordinator(get(), get())
     }
 
     single {
@@ -132,6 +139,8 @@ val repositoryModule = module {
         ChatRequestReconciler(
             requestRepository = get(),
             coordinator = get(),
+            qualityMetrics = get(),
+            settingsStore = get(),
             loadDurableMessage = { conversationId, messageId ->
                 runCatching {
                     conversationRepository.getConversationById(Uuid.parse(conversationId))

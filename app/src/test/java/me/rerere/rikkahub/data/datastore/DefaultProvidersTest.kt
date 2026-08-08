@@ -4,6 +4,7 @@ import me.rerere.ai.provider.CustomHeader
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.ai.registry.ModelRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -41,6 +42,34 @@ class DefaultProvidersTest {
         assertEquals(ModelType.IMAGE, provider.models.single { it.modelId == "gpt-image-2" }.type)
         assertEquals(ModelType.IMAGE, provider.models.single { it.modelId == "gpt-image-1" }.type)
         assertEquals(ModelType.CHAT, provider.models.single { it.modelId == "gpt-5.6" }.type)
+    }
+
+    @Test
+    fun `palenik chat models use codex and openai context metadata`() {
+        val provider = DEFAULT_PROVIDERS
+            .filterIsInstance<ProviderSetting.OpenAI>()
+            .single { it.id == PALENIK_PROVIDER_ID }
+        val expectedWindows = mapOf(
+            "codex-auto-review" to 400_000,
+            "gpt-5.4" to 1_050_000,
+            "gpt-5.4-2026-03-05" to 1_050_000,
+            "gpt-5.4-mini" to 400_000,
+            "gpt-5.5" to 1_050_000,
+            "gpt-5.6" to 1_050_000,
+            "gpt-5.6-luna" to 1_050_000,
+            "gpt-5.6-sol" to 1_050_000,
+            "gpt-5.6-terra" to 1_050_000,
+        )
+
+        val actualWindows = provider.models
+            .filter { it.type == ModelType.CHAT }
+            .associate { model ->
+                model.modelId to ModelRegistry.enrichCapabilities(model)
+                    .declaredCapabilities
+                    ?.contextWindowTokens
+            }
+
+        assertEquals(expectedWindows, actualWindows)
     }
 
     @Test

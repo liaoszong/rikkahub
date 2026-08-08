@@ -1,12 +1,11 @@
 <div align="center">
   <img src="docs/icon.png" alt="App Icon" width="100" />
-  <h1>RikkaHub</h1>
+  <h1>PaleInk</h1>
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/rikkahub/rikkahub)
 [![Ask DeepWiki](https://img.shields.io/badge/zread.ai-blue?style=flat&logo=readthedocs)](https://zread.ai/rikkahub/rikkahub)
 
-A native Android LLM chat client that supports switching between different providers for
-conversations 🤖💬
+An Android AI client built for everyday chat, multimodal work, and image creation.
 
 Click to join our Discord server 👉 [【RikkaHub】](https://discord.gg/9weBqxe5c4)
 
@@ -18,55 +17,39 @@ Click to join our Discord server 👉 [【RikkaHub】](https://discord.gg/9weBqx
   <img src="docs/img/desktop.png" alt="Models Picker" width="450" />
 </div>
 
-## About This Fork
+## About PaleInk
 
-This repository is a long-term maintained fork of
-[RikkaHub](https://github.com/rikkahub/rikkahub). It stays close to upstream while focusing on
-reliability improvements and carefully scoped product enhancements.
+PaleInk started from [RikkaHub](https://github.com/rikkahub/rikkahub) and is now maintained as an
+independent Android release. It has its own roadmap and release schedule, while useful upstream
+changes are merged when they fit.
 
-Changes currently maintained by this fork include:
+PaleInk releases and bug reports are handled in this repository. RikkaHub's copyright notices and
+the AGPL-3.0 license remain in effect.
 
-- Chat-native image generation: reasoning models can call the configured image model without
-  leaving the conversation.
-- Reference-image editing from chat attachments and earlier generated images.
-- Progressive multi-image galleries with a large preview, switchable thumbnails, pending slots,
-  partial-failure handling, grouped collapse, and full-screen zoom.
-- Compact galleries for multiple user attachments while preserving the existing single-image
-  message layout.
-- Lifecycle-safe image generation that continues when navigating to another screen.
-- Foreground-service notifications for long-running image requests, including explicit cancellation
-  and Android 13+ notification permission handling.
-- Persistent image-generation task state that can be observed again after recreating the page.
-- Interruption recovery without automatic request retries, preventing accidental duplicate billing.
-- Safer result persistence to local image storage and Room, with generated files retained when a
-  database write fails.
-- Clear generation phases and elapsed-time feedback instead of an indefinite loading indicator.
-- A built-in Palenik provider catalog, automatic image-model selection, and reliable background
-  title-model fallback for provider-only setups.
-- A clearer collapsible sidebar for creative tools and chats, plus resumable in-app updates and an
-  automated release workflow.
-- Isolated debug telemetry: debug APKs build without production Firebase and never pollute release
-  analytics or crash reports.
+## 🧭 Multiplatform Direction
 
-Upstream copyright notices and the AGPL-3.0 license remain in effect. Changes specific to this fork
-are tracked in its Git history.
+Android remains PaleInk's main platform. Windows is planned next through Kotlin Multiplatform and
+Compose Desktop; iOS may follow later. Native Android features will remain first-class.
 
-### Latest PaleInk release: 2.4.5-pale.3
+Windows and iOS clients are not available yet. See the
+[multiplatform plan](docs/architecture/ANDROID_FIRST_MULTIPLATFORM_ARCHITECTURE.md) for details.
 
-- 🖼️ Chat-native reference-image generation and compact progressive multi-image galleries.
-- 🧰 A clearer, persistent collapsible sidebar for creative tools and conversations.
-- ⬇️ Resumable, signed in-app updates with APK identity checks and a clearer first-install guide.
-- 🛡️ Stronger backup, media persistence, provider readiness, Web access, Debug privacy, and
-  cross-platform release gates.
+### Latest PaleInk release: 2.4.5-pale.6
+
+- 🖼️ Generate or edit 1–8 images in chat, with progressive results and background processing.
+- 🗃️ Browse generated images and chat attachments in the Asset Library.
+- 💬 Long chats and background requests can recover after interruption; search results show sources.
+- 🛡️ Updates support resume and signature checks, with 16 KB compatibility and separate Debug data.
 
 ## 🚀 Download
 
-🔗 [Download the PaleInk fork](https://updates.paleink.cc/) (Recommended)
+🔗 [Download PaleInk](https://updates.paleink.cc/) (Recommended)
 
-🔗 [Upstream RikkaHub website](https://rikka-ai.com/download)
+🔗 [Original RikkaHub website](https://rikka-ai.com/download)
 
 > [!WARNING]
-> There are many forked versions of RikkaHub. Issues with forks are unrelated to RikkaHub, so please use forks with caution to avoid privacy leaks or excessive permission requests.
+> PaleInk and RikkaHub use different update channels and signatures. Install PaleInk only from its
+> official download page.
 
 ## ✨ Features
 
@@ -74,7 +57,12 @@ are tracked in its Git history.
 - 📦 Workspace: a proot-based Linux agent environment
 - 🔄 Multiple AI Provider Support: custom API / URL / models (all OpenAI, Google, Anthropic compatible api)
 - 🖼️ Multimodal input support (Image, Text Documentation, PDF, Docx)
-- 🎨 Generate and edit images directly inside chats, including multi-image progressive galleries
+- 🎨 Generate and edit 1–8 images directly in chat
+- 🗃️ Asset Library for generated images and chat attachments
+- 🔔 Background generation with progress and cancellation
+- 🛡️ Interruption recovery, protected credentials, and safer backup/restore
+- 🧭 Automatic model selection based on provider capabilities
+- 🔗 Search results with source citations
 - 🖥️ Web access for multi-platform use
 - 🛠️ MCP support
 - 📝 Markdown Rendering (with code highlighting, Latex formulas, tables, Mermaid)
@@ -111,11 +99,9 @@ Technology stack documentation:
 > Debug builds work without Firebase. Release builds keep using `app/google-services.json` for
 > production Analytics and Crashlytics.
 
-> [!IMPORTANT]  
-> The following PRs will be rejected:
-> 1. Translation related changes, such as adding new languages or updating existing translations
-> 2. Adding new features, this project is opinionated and will not accept pull requests for new features
-> 3. Large-scale refactoring and changes generated by AI
+> [!IMPORTANT]
+> Please discuss large features or refactors before opening a PR. Translation changes should update
+> all three README languages.
 
 ## 💰 Donate
 

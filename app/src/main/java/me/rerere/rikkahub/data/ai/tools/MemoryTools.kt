@@ -31,7 +31,8 @@ fun buildMemoryTools(
             - No relevant record: `create` + `content`
             - Existing relevant record: `edit` + `id` + `content`
             - Outdated/irrelevant record: `delete` + `id`
-            Memories will automatically appear in the <memories> tag in later conversations.
+            Every mutation requires user approval. A confirmed active memory may appear in a bounded
+            memory selection in later conversations; candidate, disabled, expired, or conflicting records do not.
             Do not store sensitive information (e.g., ethnicity, religion, sexual orientation, political views, sex life, criminal records).
             You may store: preferred name, preferences, plans, work-related notes, chat style preferences, first chat time, etc.
             Do not show memory content directly in the conversation unless the user explicitly asks.
@@ -70,6 +71,8 @@ fun buildMemoryTools(
                 required = listOf("action")
             )
         },
+        needsApproval = { true },
+        ledgerSideEffectClass = "reversible_write",
         execute = {
             val params = it.jsonObject
             val action = params["action"]?.jsonPrimitive?.contentOrNull ?: error("action is required")

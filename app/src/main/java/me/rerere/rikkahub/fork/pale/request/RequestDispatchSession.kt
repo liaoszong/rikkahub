@@ -14,6 +14,7 @@ import me.rerere.pale.id.RequestAttemptId
 import me.rerere.pale.id.RequestId
 import me.rerere.pale.request.BillableBoundary
 import me.rerere.pale.request.RequestAttemptState
+import me.rerere.pale.continuity.CheckpointKind
 
 /**
  * One fenced provider dispatch owned by Room's RequestLedger.
@@ -89,6 +90,7 @@ class RequestDispatchSession private constructor(
                 actor = actor,
             ),
         )
+        recordCheckpoint(CheckpointKind.RESPONSE_STARTED)
     }
 
     suspend fun markResultReceived(checkpointDigest: String) = callbackMutex.withLock {
@@ -114,6 +116,11 @@ class RequestDispatchSession private constructor(
                 actor = actor,
             ),
         )
+        recordCheckpoint(
+            CheckpointKind.DURABLE_RESULT_COMMITTED,
+            committedOutputRefs = listOf(output.outputId),
+        )
+        recordCheckpoint(CheckpointKind.TERMINAL, committedOutputRefs = listOf(output.outputId))
         releaseLeaseLocked()
         output
     }
@@ -251,6 +258,7 @@ class RequestDispatchSession private constructor(
                     actor = actor,
                 ),
             )
+            recordCheckpoint(CheckpointKind.RESPONSE_STARTED)
             attempt = requireAttempt()
         }
         check(attempt.attemptState() == RequestAttemptState.RUNNING)
@@ -264,6 +272,7 @@ class RequestDispatchSession private constructor(
                 checkpointDigest = checkpointDigest,
             ),
         )
+        recordCheckpoint(CheckpointKind.RESULT_RECEIVED)
     }
 
     private suspend fun advanceIfBehind(
@@ -303,6 +312,7 @@ class RequestDispatchSession private constructor(
                 ),
             )
         }
+        recordCheckpoint(CheckpointKind.TERMINAL)
         releaseLeaseLocked()
     }
 
@@ -314,6 +324,17 @@ class RequestDispatchSession private constructor(
 
     private suspend fun requireAttempt(): RequestAttemptEntity =
         repository.getAttempt(attemptId) ?: throw RequestLedgerMissing(attemptId.value)
+
+    private suspend fun recordCheckpoint(
+        kind: CheckpointKind,
+        committedOutputRefs: List<String> = emptyList(),
+    ) = repository.recordContinuityCheckpoint(
+        requestId = lease.requestId,
+        attemptId = attemptId,
+        kind = kind,
+        actor = actor,
+        committedOutputRefs = committedOutputRefs,
+    )
 
     companion object {
         suspend fun open(
@@ -367,6 +388,12 @@ class RequestDispatchSession private constructor(
                         ),
                     )
                 }
+                repository.recordContinuityCheckpoint(
+                    requestId = RequestId(created.requestId),
+                    attemptId = RequestAttemptId(attempt.attemptId),
+                    kind = CheckpointKind.BEFORE_DISPATCH,
+                    actor = actor,
+                )
                 return RequestDispatchSession(
                     repository = repository,
                     initialLease = lease,

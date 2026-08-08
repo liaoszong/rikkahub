@@ -39,6 +39,23 @@ class GoogleCitationTest {
     }
 
     @Test
+    fun groundingUtf8OffsetsNormalizeToUtf16ForPersistedText() {
+        val metadata = Json.parseToJsonElement(
+            """{"groundingChunks":[{"web":{"uri":"https://example.com","title":"S"}}],"groundingSupports":[{"segment":{"partIndex":0,"startIndex":4,"endIndex":8,"text":"🙂"},"groundingChunkIndices":[0]}]}"""
+        ).jsonObject
+
+        val citation = parseGoogleSearchGroundingMetadata(
+            metadata,
+            textPartOrdinals = mapOf(0 to 0),
+            textByProviderPartIndex = mapOf(0 to "a猫🙂b"),
+        ).single() as UIMessageAnnotation.UrlCitation
+
+        assertEquals(2, citation.startIndex)
+        assertEquals(4, citation.endIndex)
+        assertEquals("utf16_code_unit", citation.offsetUnit)
+    }
+
+    @Test
     fun streamingGroundingIndicesResolveAcrossEventsForSameCandidate() {
         val accumulator = GoogleGroundingAccumulator()
         accumulator.accumulate(

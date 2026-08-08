@@ -13,6 +13,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -22,19 +23,30 @@ import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
 import me.rerere.ai.core.ToolExecutionContext
 import me.rerere.ai.core.merge
+import me.rerere.ai.context.ContextDigests
+import me.rerere.ai.context.ContextDisposition
+import me.rerere.ai.context.ContextManifestMode
+import me.rerere.ai.context.ConservativeContextTokenEstimator
+import me.rerere.ai.context.ShadowContextManifestCompiler
+import me.rerere.ai.context.ShadowContextManifestInput
+import me.rerere.ai.model.effectiveCapabilitySnapshot
 import me.rerere.ai.provider.CustomBody
+import me.rerere.ai.provider.BuiltInTools
 import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.Provider
 import me.rerere.ai.provider.ProviderManager
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.registry.ModelRegistry
+import me.rerere.ai.search.GenerationStepLimitExceeded
+import me.rerere.ai.search.SearchTerminalContractViolation
+import me.rerere.ai.search.SearchTurnContract
+import me.rerere.ai.search.SearchTurnState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.ToolExecutionState
 import me.rerere.ai.ui.handleMessageChunk
-import me.rerere.ai.ui.limitContext
 import me.rerere.common.android.Logging
 import me.rerere.rikkahub.data.ai.transformers.InputMessageTransformer
 import me.rerere.rikkahub.data.ai.transformers.MessageTransformer
@@ -62,6 +74,17 @@ import me.rerere.rikkahub.fork.pale.request.ToolExecutionLedgerSession
 import me.rerere.rikkahub.utils.applyPlaceholders
 import me.rerere.rikkahub.utils.logSafeError
 import me.rerere.rikkahub.utils.logSafeStarted
+import me.rerere.rikkahub.utils.logSafeSuccess
+import me.rerere.pale.context.ContextBudgetPlanner
+import me.rerere.pale.context.ContextBudgetPolicy
+import me.rerere.pale.context.ContextSource
+import me.rerere.pale.context.ContextSourceKind
+import me.rerere.rikkahub.data.privacy.AgentNetworkPolicy
+import me.rerere.pale.memory.MemorySourceTrust
+import me.rerere.pale.memory.MemoryRecord
+import me.rerere.pale.product.QualityEvent
+import me.rerere.pale.product.QualityMetric
+import me.rerere.rikkahub.data.quality.QualityMetricsRecorder
 import java.util.Locale
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
@@ -69,6 +92,18 @@ import kotlin.uuid.Uuid
 private const val TAG = "GenerationHandler"
 private const val MAX_TOOL_OUTPUT_CHARS = 32 * 1024
 private const val TOOL_OUTPUT_PREVIEW_CHARS = 4 * 1024
+private const val DEFAULT_CONTEXT_WINDOW_TOKENS = 128 * 1024
+private const val DEFAULT_RESERVED_OUTPUT_TOKENS = 4 * 1024
+private const val MIN_CONTEXT_SAFETY_MARGIN_TOKENS = 2 * 1024
+private const val SEARCH_REPAIR_RESERVE_TOKENS = 1 * 1024
+private const val MAX_PROVIDER_CONTINUATIONS = 5
+private const val SEARCH_REPAIR_SYSTEM_PROMPT = """
+The web search phase is complete and its committed evidence is already present in tool results.
+Produce the final user-facing answer now. Do not call any tool, search again, open URLs, or request new evidence.
+Use only the committed evidence and the conversation. Preserve existing citation ids exactly in
+`[citation,domain](id)` form. If the evidence is insufficient, say so explicitly instead of inventing facts.
+"""
+private val shadowContextManifestCompiler = ShadowContextManifestCompiler()
 
 @Serializable
 sealed interface GenerationChunk {
@@ -86,6 +121,8 @@ class GenerationHandler(
     private val toolExecutionLedgerCoordinator: ToolExecutionLedgerCoordinator,
     private val settingsStore: SettingsStore,
 ) {
+    private val qualityMetrics = QualityMetricsRecorder(context)
+
     fun generateText(
         settings: Settings,
         model: Model,
@@ -106,16 +143,24 @@ class GenerationHandler(
     ): Flow<GenerationChunk> = flow {
         settingsStore.awaitCredentialReady()
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
+        AgentNetworkPolicy.requireProviderAllowed(provider, settings.agentPrivacyPolicy)
         val providerImpl = providerManager.getProviderByType(provider)
 
+        val activeMemoryRecords = if (assistant.enableMemory && settings.agentPrivacyPolicy.memoryEnabled) {
+            val scopeId = if (assistant.useGlobalMemory) MemoryRepository.GLOBAL_MEMORY_ID else assistant.id.toString()
+            memoryRepo.getActiveMemoryV2(scopeId)
+        } else emptyList()
+
         var messages: List<UIMessage> = messages
+        var stoppedBeforeStepLimit = false
+        var providerContinuations = 0
 
         for (stepIndex in 0 until maxSteps) {
             logSafeStarted(TAG, "chat_generation", "provider_step")
 
             val toolsInternal = buildList {
                 Log.i(TAG, "generateInternal: build tools")
-                if (assistant.enableMemory) {
+                if (assistant.enableMemory && settings.agentPrivacyPolicy.memoryEnabled) {
                     val memoryAssistantId = if (assistant.useGlobalMemory) {
                         MemoryRepository.GLOBAL_MEMORY_ID
                     } else {
@@ -124,7 +169,13 @@ class GenerationHandler(
                     buildMemoryTools(
                         json = json,
                         onCreation = { content ->
-                            memoryRepo.addMemory(memoryAssistantId, content)
+                            memoryRepo.addMemory(
+                                assistantId = memoryAssistantId,
+                                content = content,
+                                // memory_tool always requires approval; execution is an explicit mutation.
+                                sourceTrust = MemorySourceTrust.EXPLICIT_USER,
+                                confidence = 1.0,
+                            )
                         },
                         onUpdate = { id, content ->
                             memoryRepo.updateContent(id, content)
@@ -176,6 +227,7 @@ class GenerationHandler(
                     provider = provider,
                     tools = toolsInternal,
                     memories = memories ?: emptyList(),
+                    memoryRecords = activeMemoryRecords,
                     stream = assistant.streamOutput,
                     processingStatus = processingStatus,
                     conversationSystemPrompt = conversationSystemPrompt,
@@ -199,8 +251,29 @@ class GenerationHandler(
                     assistant = assistant,
                     settings = settings
                 )
+                if (messages.lastOrNull()?.providerFinishReason == "pause_turn") {
+                    providerContinuations += 1
+                    if (providerContinuations > MAX_PROVIDER_CONTINUATIONS) {
+                        throw IllegalStateException(
+                            "Provider continuation limit exceeded ($MAX_PROVIDER_CONTINUATIONS)",
+                        )
+                    }
+                    // Persist the full assistant provider blocks before replaying them unchanged.
+                    withContext(NonCancellable) {
+                        ledgerContext?.persistMessages(messages)
+                        providerStep?.commitDurableOutput(messages.last())
+                    }
+                    emit(GenerationChunk.Messages(messages))
+                    continue
+                }
                 val tools = messages.last().getTools().filter { !it.isExecuted }
                 if (tools.isEmpty()) {
+                    val projection = SearchTurnContract.project(messages)
+                    when (projection.state) {
+                        SearchTurnState.ANSWER_READY -> recordQuality(settings, model, provider, QualityMetric.SEARCH_TERMINAL_SUCCESS)
+                        SearchTurnState.FAILED -> recordQuality(settings, model, provider, QualityMetric.SEARCH_TERMINAL_FAILURE)
+                        else -> Unit
+                    }
                     messages = messages.slice(0 until messages.lastIndex) + messages.last().copy(
                         finishedAt = Clock.System.now()
                             .toLocalDateTime(TimeZone.currentSystemDefault())
@@ -208,11 +281,17 @@ class GenerationHandler(
                     emit(GenerationChunk.Messages(messages))
                     providerStep?.commitDurableOutput(messages.last())
                     // no tool calls, break
+                    stoppedBeforeStepLimit = true
                     break
                 }
 
                 // Check for tools that need approval
                 var hasPendingApproval = false
+                val hasUntrustedWebEvidence = messages.takeLast(4)
+                    .flatMap(UIMessage::parts)
+                    .filterIsInstance<UIMessagePart.Tool>()
+                    .flatMap(UIMessagePart.Tool::output)
+                    .any { output -> output.metadata?.get("trust")?.toString()?.trim('"') == "untrusted_web" }
                 val updatedTools = tools.map { tool ->
                     val toolDef = toolsInternal.find { it.name == tool.toolName }
                     val stableToolRequestId = tool.requestId.ifBlank {
@@ -220,7 +299,8 @@ class GenerationHandler(
                     }
                     when {
                         // Tool needs approval and state is Auto -> set to Pending
-                        toolDef?.needsApproval(tool.inputAsJson()) == true &&
+                        (toolDef?.needsApproval(tool.inputAsJson()) == true ||
+                            hasUntrustedWebEvidence && toolDef?.ledgerSideEffectClass !in setOf("none", "read_only")) &&
                             tool.approvalState is ToolApprovalState.Auto -> {
                             hasPendingApproval = true
                             tool.copy(
@@ -276,6 +356,7 @@ class GenerationHandler(
                 // If there are pending approvals, break and wait for user
                 if (hasPendingApproval) {
                     Log.i(TAG, "generateText: waiting for tool approval")
+                    stoppedBeforeStepLimit = true
                     break
                 }
 
@@ -507,6 +588,7 @@ class GenerationHandler(
 
             if (executedTools.isEmpty()) {
                 // No results to add (all tools were pending)
+                stoppedBeforeStepLimit = true
                 break
             }
 
@@ -532,6 +614,89 @@ class GenerationHandler(
             ledgerContext?.persistCurrentConversation()
         }
 
+        if (!stoppedBeforeStepLimit) {
+            val searchProjection = SearchTurnContract.project(messages)
+            if (searchProjection.state == SearchTurnState.RESULTS_READY) {
+                logSafeStarted(TAG, "web_search", "repair_synthesis")
+                val repairStep = generateInternal(
+                    assistant = assistant,
+                    settings = settings,
+                    messages = messages,
+                    onUpdateMessages = { updated ->
+                        messages = updated.transforms(
+                            transformers = outputTransformers,
+                            context = context,
+                            model = model,
+                            assistant = assistant,
+                            settings = settings,
+                        )
+                        emit(
+                            GenerationChunk.Messages(
+                                messages.visualTransforms(
+                                    transformers = outputTransformers,
+                                    context = context,
+                                    model = model,
+                                    assistant = assistant,
+                                    settings = settings,
+                                ),
+                            ),
+                        )
+                    },
+                    transformers = inputTransformers,
+                    model = model,
+                    providerImpl = providerImpl,
+                    provider = provider,
+                    tools = emptyList(),
+                    memories = emptyList(),
+                    memoryRecords = emptyList(),
+                    stream = assistant.streamOutput,
+                    processingStatus = processingStatus,
+                    conversationSystemPrompt = conversationSystemPrompt,
+                    conversationModeInjectionIds = conversationModeInjectionIds,
+                    conversationLorebookIds = conversationLorebookIds,
+                    workspaceCwd = workspaceCwd,
+                    ledgerContext = ledgerContext,
+                    supplementalSystemPrompt = SEARCH_REPAIR_SYSTEM_PROMPT,
+                    disabledBuiltInTools = setOf(BuiltInTools.Search, BuiltInTools.UrlContext),
+                )
+                try {
+                    messages = messages.visualTransforms(
+                        transformers = outputTransformers,
+                        context = context,
+                        model = model,
+                        assistant = assistant,
+                        settings = settings,
+                    ).onGenerationFinish(
+                        transformers = outputTransformers,
+                        context = context,
+                        model = model,
+                        assistant = assistant,
+                        settings = settings,
+                    )
+                    val repairedProjection = SearchTurnContract.project(messages)
+                    if (repairedProjection.state != SearchTurnState.ANSWER_READY ||
+                        messages.lastOrNull()?.getTools()?.any { !it.isExecuted } == true
+                    ) {
+                        throw SearchTerminalContractViolation(
+                            projection = repairedProjection,
+                            message = "Search repair synthesis returned without a final visible answer",
+                        )
+                    }
+                    messages = messages.dropLast(1) + messages.last().copy(
+                        finishedAt = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault()),
+                    )
+                    emit(GenerationChunk.Messages(messages))
+                    repairStep?.commitDurableOutput(messages.last())
+                    logSafeSuccess(TAG, "web_search", "repair_synthesis")
+                    return@flow
+                } catch (failure: Throwable) {
+                    repairStep?.releaseForLocalRepair(failure)
+                    throw failure
+                }
+            }
+            throw GenerationStepLimitExceeded(maxSteps)
+        }
+
     }.flowOn(Dispatchers.IO)
 
     private suspend fun generateInternal(
@@ -545,6 +710,7 @@ class GenerationHandler(
         provider: ProviderSetting,
         tools: List<Tool>,
         memories: List<AssistantMemory>,
+        memoryRecords: List<MemoryRecord>,
         stream: Boolean,
         processingStatus: MutableStateFlow<String?> = MutableStateFlow(null),
         conversationSystemPrompt: String? = null,
@@ -552,6 +718,8 @@ class GenerationHandler(
         conversationLorebookIds: Set<Uuid> = emptySet(),
         workspaceCwd: String? = null,
         ledgerContext: ChatGenerationLedgerContext? = null,
+        supplementalSystemPrompt: String? = null,
+        disabledBuiltInTools: Set<BuiltInTools> = emptySet(),
     ): ChatProviderStepSession? {
         val providerMessages = if (
             messages.lastOrNull()?.role == MessageRole.ASSISTANT &&
@@ -561,8 +729,7 @@ class GenerationHandler(
         } else {
             messages
         }
-        val internalMessages = buildList {
-            val system = buildString {
+        val system = buildString {
                 val effectiveSystemPrompt =
                     if (assistant.allowConversationSystemPrompt && !conversationSystemPrompt.isNullOrBlank()) {
                         conversationSystemPrompt
@@ -574,19 +741,92 @@ class GenerationHandler(
                 }
 
                 // 记忆
-                if (assistant.enableMemory) {
+                if (assistant.enableMemory && settings.agentPrivacyPolicy.memoryEnabled) {
                     appendLine()
-                    append(buildMemoryPrompt(memories = memories))
+                    append(
+                        if (memoryRecords.isNotEmpty()) buildMemoryV2Prompt(memoryRecords)
+                        else buildMemoryPrompt(memories = memories)
+                    )
                 }
                 // 工具prompt
                 tools.forEach { tool ->
                     appendLine()
                     append(tool.systemPrompt(model, providerMessages))
                 }
-            }
-            if (system.isNotBlank()) add(UIMessage.system(prompt = system))
-            addAll(providerMessages.limitContext(assistant.contextMessageLimit))
-        }.transforms(
+                if (!supplementalSystemPrompt.isNullOrBlank()) {
+                    appendLine()
+                    append(supplementalSystemPrompt)
+                }
+        }
+        val systemMessage = system.takeIf(String::isNotBlank)?.let(UIMessage::system)
+        // Refresh built-in declarations at request time so models persisted before a registry
+        // metadata update immediately gain verified token limits. Explicit user overrides still
+        // apply last through effectiveCapabilitySnapshot(). Unknown/custom models are unchanged.
+        val capabilitySnapshot = ModelRegistry.enrichCapabilities(model)
+            .effectiveCapabilitySnapshot(provider)
+        val contextWindowTokens = capabilitySnapshot.contextWindowTokens ?: DEFAULT_CONTEXT_WINDOW_TOKENS
+        val reservedOutputTokens = assistant.maxTokens
+            ?: capabilitySnapshot.maxOutputTokens
+            ?: DEFAULT_RESERVED_OUTPUT_TOKENS
+        val safetyMarginTokens = maxOf(MIN_CONTEXT_SAFETY_MARGIN_TOKENS, contextWindowTokens / 20)
+        val plannerInputs = buildList {
+            systemMessage?.let { add(it) }
+            addAll(providerMessages)
+        }
+        val latestUserId = providerMessages.lastOrNull { it.role == MessageRole.USER }?.id
+        val recentDialogueIds = providerMessages.takeLast(24).mapTo(hashSetOf(), UIMessage::id)
+        val selection = try {
+            ContextBudgetPlanner.plan(
+            sources = plannerInputs.map { message ->
+                val isGeneratedSystem = message === systemMessage
+                val toolIds = message.getTools().map(UIMessagePart.Tool::toolCallId).sorted()
+                ContextSource(
+                    sourceRef = "message:${message.id}",
+                    sourceDigest = ContextDigests.sha256(json.encodeToString(message)),
+                    kind = when {
+                        isGeneratedSystem -> ContextSourceKind.SYSTEM
+                        message.id == latestUserId -> ContextSourceKind.CURRENT_USER
+                        message.parts.any { it is UIMessagePart.ProviderOpaque } -> ContextSourceKind.PROVIDER_REPLAY
+                        toolIds.isNotEmpty() -> ContextSourceKind.TOOL_PAIR
+                        message.parts.filterIsInstance<UIMessagePart.Text>().any {
+                            it.metadata?.get("context_provenance")?.toString()?.trim('"') in
+                                setOf("structured_compaction", "legacy_summary")
+                        } -> ContextSourceKind.EPISODIC_SUMMARY
+                        message.id in recentDialogueIds -> ContextSourceKind.RECENT_DIALOGUE
+                        else -> ContextSourceKind.OLDER_DIALOGUE
+                    },
+                    estimatedTokens = ConservativeContextTokenEstimator.estimate(message).coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                    semanticUnitId = toolIds.firstOrNull()?.let { "tool:$it" } ?: "message:${message.id}",
+                    priority = plannerInputs.indexOf(message),
+                    required = isGeneratedSystem || message.id == latestUserId ||
+                        message.parts.any { it is UIMessagePart.ProviderOpaque },
+                )
+            },
+            policy = ContextBudgetPolicy(
+                modelWindowTokens = contextWindowTokens,
+                reservedOutputTokens = reservedOutputTokens.coerceAtMost(contextWindowTokens / 2),
+                reservedRepairTokens = if (assistant.enableWebSearch) SEARCH_REPAIR_RESERVE_TOKENS else 0,
+                safetyMarginTokens = safetyMarginTokens,
+            ),
+            )
+        } catch (overflow: IllegalArgumentException) {
+            recordQuality(
+                settings = settings,
+                model = model,
+                provider = provider,
+                metric = QualityMetric.CONTEXT_OVERFLOW,
+                diagnosticCode = overflow::class.simpleName,
+            )
+            throw overflow
+        }
+        val selectedRefs = selection.included.mapTo(linkedSetOf(), me.rerere.pale.context.ContextSelectionEntry::sourceRef)
+        val selectedSourceMessages = plannerInputs.filter { "message:${it.id}" in selectedRefs }
+        val selectedProviderMessages = providerMessages.filter { "message:${it.id}" in selectedRefs }
+        val preTransformMessages = buildList {
+            systemMessage?.takeIf { "message:${it.id}" in selectedRefs }?.let(::add)
+            selectedProviderMessages.forEach(::add)
+        }
+        val internalMessages = preTransformMessages.transforms(
             transformers = transformers,
             context = context,
             model = model,
@@ -597,6 +837,53 @@ class GenerationHandler(
             processingStatus = processingStatus,
             workspaceCwd = workspaceCwd,
         )
+        val shadowContextManifest = runCatching {
+            val capabilitySnapshotId = ContextDigests.sha256(json.encodeToString(capabilitySnapshot))
+            shadowContextManifestCompiler.compile(
+                ShadowContextManifestInput(
+                    requestRef = ledgerContext?.let { context ->
+                        "conversation:${context.conversationId}:response:${context.responseMessageId}"
+                    } ?: "ephemeral:${providerMessages.lastOrNull()?.id ?: model.id}",
+                    capabilitySnapshotId = capabilitySnapshotId,
+                    selectorPolicy = "token-budget:${ContextBudgetPlanner.COMPILER_VERSION}",
+                    sourceMessages = plannerInputs,
+                    selectedMessages = selectedSourceMessages,
+                    compiledMessages = internalMessages,
+                    reservedOutputTokens = reservedOutputTokens,
+                    modelWindowTokens = contextWindowTokens,
+                    safetyMarginTokens = safetyMarginTokens,
+                    mode = ContextManifestMode.AUTHORITATIVE,
+                )
+            )
+        }.onSuccess { contextManifest ->
+            logSafeSuccess(
+                tag = TAG,
+                domain = "context",
+                operation = "shadow_manifest_compiled",
+                itemCount = contextManifest.entries.size,
+            )
+            val excludedEntries = contextManifest.entries.count {
+                it.disposition == ContextDisposition.EXCLUDED
+            }
+            if (excludedEntries > 0) {
+                logSafeSuccess(
+                    tag = TAG,
+                    domain = "context",
+                    operation = "shadow_manifest_excluded",
+                    itemCount = excludedEntries,
+                )
+            }
+        }.onFailure { error ->
+            // Shadow diagnostics must never block or mutate a real provider request.
+            logSafeError(
+                tag = TAG,
+                domain = "context",
+                operation = "shadow_manifest_compile",
+                error = error,
+                warning = true,
+                persist = false,
+            )
+        }.getOrNull()
 
         var messages: List<UIMessage> = messages
         val baseParams = TextGenerationParams(
@@ -613,7 +900,10 @@ class GenerationHandler(
             customBody = buildList {
                 addAll(assistant.customBodies)
                 addAll(model.customBodies)
-            }
+            },
+            disabledBuiltInTools = disabledBuiltInTools + if (
+                !settings.agentPrivacyPolicy.networkEnabled || settings.agentPrivacyPolicy.localOnly
+            ) setOf(BuiltInTools.Search, BuiltInTools.UrlContext) else emptySet(),
         )
         val openResult = ledgerContext?.let {
             chatProviderStepCoordinator.openTextStep(
@@ -626,6 +916,7 @@ class GenerationHandler(
                     provider = provider,
                     customHeaders = baseParams.customHeaders,
                 ),
+                contextManifest = shadowContextManifest,
             )
         }
         val providerStep = when (openResult) {
@@ -723,6 +1014,27 @@ class GenerationHandler(
         return providerStep
     }
 
+    private fun recordQuality(
+        settings: Settings,
+        model: Model,
+        provider: ProviderSetting,
+        metric: QualityMetric,
+        diagnosticCode: String? = null,
+    ) {
+        qualityMetrics.record(
+            event = QualityEvent(
+                metric = metric,
+                occurredAt = System.currentTimeMillis(),
+                providerKind = provider::class.simpleName?.lowercase(Locale.ROOT),
+                modelFamily = model.modelId.lowercase(Locale.ROOT)
+                    .replace(Regex("[^a-z0-9_-]"), "-")
+                    .take(64),
+                diagnosticCode = diagnosticCode,
+            ),
+            enabled = settings.agentPrivacyPolicy.anonymousMetricsEnabled,
+        )
+    }
+
     private fun maybeTruncateToolOutput(
         toolCallId: String,
         output: List<UIMessagePart>,
@@ -790,6 +1102,7 @@ class GenerationHandler(
             ?: error("Translation model not found")
         val provider = model.findProvider(settings.providers)
             ?: error("Translation provider not found")
+        AgentNetworkPolicy.requireProviderAllowed(provider, settings.agentPrivacyPolicy)
 
         val providerHandler = providerManager.getProviderByType(provider)
 
@@ -851,4 +1164,5 @@ class GenerationHandler(
             }
         }
     }.flowOn(Dispatchers.IO)
+
 }

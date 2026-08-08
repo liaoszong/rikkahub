@@ -35,7 +35,9 @@ data class UIMessage(
     val finishedAt: LocalDateTime? = null,
     val modelId: Uuid? = null,
     val usage: TokenUsage? = null,
-    val translation: String? = null
+    val translation: String? = null,
+    /** Provider stop reason needed for resumable server-side loops such as Claude pause_turn. */
+    val providerFinishReason: String? = null,
 ) {
     private fun appendChunk(chunk: MessageChunk): UIMessage {
         val choice = chunk.choices.getOrNull(0)
@@ -136,6 +138,8 @@ data class UIMessage(
                         }
                     }
 
+                    is UIMessagePart.ProviderOpaque -> acc + deltaPart
+
                     else -> {
                         Logging.logOperationToLogcat(
                             tag = "UIMessage",
@@ -169,6 +173,7 @@ data class UIMessage(
             copy(
                 parts = newParts,
                 annotations = newAnnotations,
+                providerFinishReason = choice?.finishReason ?: providerFinishReason,
             )
         } ?: this
     }
@@ -473,6 +478,21 @@ sealed class UIMessagePart {
         override var metadata: JsonObject? = null
     ) : UIMessagePart()
 
+    /**
+     * Lossless provider-owned content block used for protocol replay and recovery.
+     *
+     * It is intentionally not rendered as user-visible content. Providers other than [provider]
+     * must ignore it; the owning provider may round-trip [payloadJson] verbatim.
+     */
+    @Serializable
+    @SerialName("provider_opaque")
+    data class ProviderOpaque(
+        val provider: String,
+        val blockType: String,
+        val payloadJson: String,
+        override var metadata: JsonObject? = null,
+    ) : UIMessagePart()
+
     @Deprecated("Deprecated")
     @Serializable
     @SerialName("search")
@@ -590,6 +610,7 @@ fun List<UIMessagePart>.toSortedMessageParts(): List<UIMessagePart> {
             is UIMessagePart.Tool -> 0
             is UIMessagePart.ToolCall -> 0
             is UIMessagePart.ToolResult -> 0
+            is UIMessagePart.ProviderOpaque -> 0
             is UIMessagePart.Search -> 0
             is UIMessagePart.Image -> 1
             is UIMessagePart.Video -> 1
@@ -856,6 +877,19 @@ fun <T> List<T>.migrateToolNodes(
 
 @Serializable
 sealed class UIMessageAnnotation {
+    /** Provider-managed tool evidence retained for recovery/diagnostics, not rendered as citation text. */
+    @Serializable
+    @SerialName("provider_tool_event")
+    data class ProviderToolEvent(
+        val provider: String,
+        val toolType: String,
+        val callId: String,
+        val status: String,
+        val actionType: String? = null,
+        val payloadDigest: String,
+        val providerMetadata: JsonObject? = null,
+    ) : UIMessageAnnotation()
+
     @Serializable
     @SerialName("url_citation")
     data class UrlCitation(
@@ -916,6 +950,13 @@ private fun annotationsDescribeSameOccurrence(
     current: UIMessageAnnotation,
     incoming: UIMessageAnnotation,
 ): Boolean {
+    if (current is UIMessageAnnotation.ProviderToolEvent &&
+        incoming is UIMessageAnnotation.ProviderToolEvent
+    ) {
+        return current.provider == incoming.provider &&
+            current.toolType == incoming.toolType &&
+            current.callId == incoming.callId
+    }
     if (current !is UIMessageAnnotation.UrlCitation || incoming !is UIMessageAnnotation.UrlCitation) {
         return current == incoming
     }

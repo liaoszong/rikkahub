@@ -261,6 +261,12 @@ fun SettingPage(vm: SettingVM = koinViewModel()) {
                         headlineContent = { Text(stringResource(R.string.setting_page_data_backup)) },
                     )
                     item(
+                        onClick = { navController.navigate(Screen.AgentTaskCenter) },
+                        leadingContent = { Icon(HugeIcons.Book03, null) },
+                        supportingContent = { Text("查看搜索、长回答、恢复状态和重复计费风险") },
+                        headlineContent = { Text("任务中心") },
+                    )
+                    item(
                         onClick = { navController.navigate(Screen.SettingFiles) },
                         leadingContent = { Icon(HugeIcons.ImageUpload, null) },
                         supportingContent = {

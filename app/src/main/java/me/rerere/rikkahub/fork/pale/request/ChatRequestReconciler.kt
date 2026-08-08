@@ -9,6 +9,10 @@ import me.rerere.pale.request.BillableBoundary
 import me.rerere.pale.request.RequestAttemptState
 import me.rerere.pale.request.RequestKind
 import me.rerere.pale.request.RequestState
+import me.rerere.pale.product.QualityEvent
+import me.rerere.pale.product.QualityMetric
+import me.rerere.rikkahub.data.datastore.SettingsStore
+import me.rerere.rikkahub.data.quality.QualityMetricsRecorder
 
 data class ChatRequestReconcileReport(
     val inspected: Int,
@@ -28,6 +32,8 @@ class ChatRequestReconciler(
     private val requestRepository: RequestLedgerRepository,
     private val coordinator: ChatProviderStepCoordinator,
     private val loadDurableMessage: suspend (conversationId: String, messageId: String) -> UIMessage?,
+    private val qualityMetrics: QualityMetricsRecorder? = null,
+    private val settingsStore: SettingsStore? = null,
     private val nowMillis: () -> Long = System::currentTimeMillis,
     private val ownerId: String = UUID.randomUUID().toString().lowercase(Locale.ROOT),
 ) {
@@ -77,6 +83,7 @@ class ChatRequestReconciler(
                             boundary = BillableBoundary.UNKNOWN,
                         )
                         unknown++
+                        recordQuality(request, QualityMetric.DUPLICATE_CHARGE_BLOCKED, "sent_unknown")
                     }
 
                     BillableBoundary.RESPONSE_STARTED -> {
@@ -87,11 +94,13 @@ class ChatRequestReconciler(
                             boundary = BillableBoundary.RESPONSE_STARTED,
                         )
                         interrupted++
+                        recordQuality(request, QualityMetric.DUPLICATE_CHARGE_BLOCKED, "response_started")
                     }
 
                     BillableBoundary.RESULT_RECEIVED -> {
                         if (repairCommittedResult(request, attemptId, attempt.checkpointDigest)) {
                             committed++
+                            recordQuality(request, QualityMetric.RESUME_SUCCESS, "local_commit")
                         } else {
                             finishOrphan(
                                 requestId = RequestId(request.requestId),
@@ -108,6 +117,7 @@ class ChatRequestReconciler(
                         // through the same checkpoint path.
                         if (repairCommittedResult(request, attemptId, attempt.checkpointDigest)) {
                             committed++
+                            recordQuality(request, QualityMetric.RESUME_SUCCESS, "result_commit_finalize")
                         } else {
                             finishOrphan(
                                 requestId = RequestId(request.requestId),
@@ -226,6 +236,23 @@ class ChatRequestReconciler(
     }
 
     private fun owner(requestId: RequestId) = "chat-reconcile:$ownerId:${requestId.value}"
+
+    private fun recordQuality(
+        request: RequestLedgerEntity,
+        metric: QualityMetric,
+        diagnosticCode: String,
+    ) {
+        qualityMetrics?.record(
+            QualityEvent(
+                metric = metric,
+                occurredAt = nowMillis(),
+                providerKind = request.providerKind,
+                modelFamily = request.modelId?.take(64),
+                diagnosticCode = diagnosticCode,
+            ),
+            enabled = settingsStore?.settingsFlow?.value?.agentPrivacyPolicy?.anonymousMetricsEnabled == true,
+        )
+    }
 
     private fun RequestAttemptEntity.billableBoundary(): BillableBoundary =
         BillableBoundary.valueOf(billableBoundary.uppercase(Locale.ROOT))

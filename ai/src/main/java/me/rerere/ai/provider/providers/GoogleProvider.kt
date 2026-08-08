@@ -30,6 +30,7 @@ import kotlinx.serialization.json.putJsonArray
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.TokenUsage
+import me.rerere.ai.context.ContextDigests
 import me.rerere.ai.model.ApiSurface
 import me.rerere.ai.model.CapabilityMedia
 import me.rerere.ai.model.ModelFeature
@@ -80,6 +81,10 @@ import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
 private const val TAG = "GoogleProvider"
+private const val MAX_GOOGLE_SEARCH_SOURCES = 50
+private const val MAX_GOOGLE_SEARCH_URL_CHARS = 2_048
+private const val MAX_GOOGLE_SEARCH_TITLE_CHARS = 300
+private const val MAX_GOOGLE_SEARCH_SUGGESTION_CHARS = 64 * 1_024
 
 internal enum class GoogleMediaKind(
     val topLevelType: String,
@@ -587,6 +592,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
                 })
             }
             params.model.tools.forEach { builtInTool ->
+                if (builtInTool in params.disabledBuiltInTools) return@forEach
                 val supported = when (builtInTool) {
                     BuiltInTools.Search -> ModelFeature.WEB_SEARCH in effectiveCapabilities.features
                     BuiltInTools.UrlContext -> ModelFeature.URL_CONTEXT in effectiveCapabilities.features
@@ -682,6 +688,14 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
         val annotations = parseSearchGroundingMetadata(
             groundingMetadata,
             observedTextPartOrdinals ?: googleTextPartOrdinals(rawParts),
+            rawParts.mapIndexedNotNull { index, element ->
+                (element as? JsonObject)?.get("text")?.jsonPrimitiveOrNull?.contentOrNull
+                    ?.let { index to it }
+            }.toMap(),
+        ) + listOfNotNull(
+            groundingMetadata?.let { metadata ->
+                parseGoogleSearchEvent(metadata, streamPartIdPrefix)
+            },
         )
 
         return UIMessage(
@@ -694,7 +708,61 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
     private fun parseSearchGroundingMetadata(
         jsonObject: JsonObject?,
         textPartOrdinals: Map<Int, Int>,
-    ): List<UIMessageAnnotation> = parseGoogleSearchGroundingMetadata(jsonObject, textPartOrdinals)
+        textByProviderPartIndex: Map<Int, String>,
+    ): List<UIMessageAnnotation> = parseGoogleSearchGroundingMetadata(
+        jsonObject,
+        textPartOrdinals,
+        textByProviderPartIndex,
+    )
+
+    internal fun parseGoogleSearchEvent(
+        metadata: JsonObject,
+        streamPartIdPrefix: String?,
+    ): UIMessageAnnotation.ProviderToolEvent {
+        val chunks = (metadata["groundingChunks"] as? JsonArray).orEmpty()
+        val sources = chunks.take(MAX_GOOGLE_SEARCH_SOURCES).mapNotNull { element ->
+            val web = (element as? JsonObject)?.get("web") as? JsonObject ?: return@mapNotNull null
+            val url = web["uri"]?.jsonPrimitiveOrNull?.contentOrNull
+                ?.take(MAX_GOOGLE_SEARCH_URL_CHARS)
+                ?: return@mapNotNull null
+            buildJsonObject {
+                put("url", url)
+                web["title"]?.jsonPrimitiveOrNull?.contentOrNull
+                    ?.take(MAX_GOOGLE_SEARCH_TITLE_CHARS)
+                    ?.let { put("title", it) }
+            }
+        }
+        val queries = (metadata["webSearchQueries"] as? JsonArray).orEmpty()
+        val renderedSuggestion = ((metadata["searchEntryPoint"] as? JsonObject)
+            ?.get("renderedContent") as? JsonPrimitive)
+            ?.contentOrNull
+            ?.take(MAX_GOOGLE_SEARCH_SUGGESTION_CHARS)
+        val bounded = buildJsonObject {
+            put("source_count", chunks.size)
+            put("sources_truncated", chunks.size > sources.size)
+            put("sources", JsonArray(sources))
+            put("query_count", queries.size)
+            if (queries.isNotEmpty()) put("queries_digest", ContextDigests.sha256(queries.toString()))
+            renderedSuggestion?.let { put("search_suggestion_html", it) }
+            put(
+                "search_suggestion_truncated",
+                renderedSuggestion != null &&
+                    (((metadata["searchEntryPoint"] as? JsonObject)
+                        ?.get("renderedContent") as? JsonPrimitive)?.contentOrNull?.length ?: 0) >
+                    renderedSuggestion.length,
+            )
+        }
+        val digest = ContextDigests.sha256(bounded.toString())
+        return UIMessageAnnotation.ProviderToolEvent(
+            provider = "google",
+            toolType = "google_search",
+            callId = streamPartIdPrefix?.let { "google-search:$it" } ?: "google-search:${digest.take(16)}",
+            status = "completed",
+            actionType = "search",
+            payloadDigest = digest,
+            providerMetadata = bounded,
+        )
+    }
 
     private fun parseMessagePart(
         jsonObject: JsonObject,
@@ -996,6 +1064,7 @@ class GoogleProvider(private val client: OkHttpClient, context: Context? = null)
 internal fun parseGoogleSearchGroundingMetadata(
     jsonObject: JsonObject?,
     textPartOrdinals: Map<Int, Int> = emptyMap(),
+    textByProviderPartIndex: Map<Int, String> = emptyMap(),
 ): List<UIMessageAnnotation> {
     if (jsonObject == null) return emptyList()
     val groundingChunks = jsonObject["groundingChunks"] as? JsonArray ?: JsonArray(emptyList())
@@ -1018,20 +1087,38 @@ internal fun parseGoogleSearchGroundingMetadata(
         val support = supportElement as? JsonObject ?: return@flatMap emptyList()
         val segment = support["segment"] as? JsonObject
         val providerPartIndex = (segment?.get("partIndex") as? JsonPrimitive)?.intOrNull
+        val providerText = providerPartIndex?.let(textByProviderPartIndex::get)
+        val rawStart = (segment?.get("startIndex") as? JsonPrimitive)?.intOrNull
+        val rawEnd = (segment?.get("endIndex") as? JsonPrimitive)?.intOrNull
         val indices = support["groundingChunkIndices"] as? JsonArray ?: JsonArray(emptyList())
         indices.mapNotNull { indexElement ->
             val index = (indexElement as? JsonPrimitive)?.intOrNull ?: return@mapNotNull null
             chunks.getOrNull(index)?.copy(
-                startIndex = (segment?.get("startIndex") as? JsonPrimitive)?.intOrNull,
-                endIndex = (segment?.get("endIndex") as? JsonPrimitive)?.intOrNull,
+                startIndex = rawStart?.let { providerText?.utf8ByteOffsetToUtf16(it) ?: it },
+                endIndex = rawEnd?.let { providerText?.utf8ByteOffsetToUtf16(it) ?: it },
                 textPartOrdinal = providerPartIndex?.let(textPartOrdinals::get),
-                offsetUnit = "utf8_byte",
+                offsetUnit = if (providerText == null) "utf8_byte" else "utf16_code_unit",
                 quote = (segment?.get("text") as? JsonPrimitive)?.contentOrNull,
                 providerMetadata = support,
             )
         }
     }
     return supported.ifEmpty { chunks.filterNotNull() }
+}
+
+private fun String.utf8ByteOffsetToUtf16(offset: Int): Int {
+    val target = offset.coerceAtLeast(0)
+    var utf8Bytes = 0
+    var utf16Index = 0
+    while (utf16Index < length && utf8Bytes < target) {
+        val codePoint = codePointAt(utf16Index)
+        val charCount = Character.charCount(codePoint)
+        val byteCount = String(Character.toChars(codePoint)).toByteArray(Charsets.UTF_8).size
+        if (utf8Bytes + byteCount > target) break
+        utf8Bytes += byteCount
+        utf16Index += charCount
+    }
+    return utf16Index
 }
 
 /** Gemini streaming indexes grounding chunks across all events for one candidate. */

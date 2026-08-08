@@ -12,7 +12,10 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.encodeToStream
+import me.rerere.ai.context.ContextManifest
 import me.rerere.ai.core.InputSchema
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.Tool
@@ -30,6 +33,9 @@ import me.rerere.pale.id.RequestOutputId
 import me.rerere.pale.request.RequestKind
 import me.rerere.pale.request.BillableBoundary
 import me.rerere.pale.request.RequestState
+import me.rerere.pale.continuity.CheckpointKind
+import me.rerere.pale.continuity.ProviderReplayBlock
+import me.rerere.pale.continuity.ProviderReplayEnvelope
 
 private const val CHAT_OUTPUT_KIND = "chat_step"
 
@@ -51,14 +57,16 @@ data class ChatGenerationLedgerContext(
 )
 
 sealed interface ChatProviderStepOpenResult {
-    data class Dispatch(val step: ChatProviderStepSession) : ChatProviderStepOpenResult
+    val step: ChatProviderStepSession
+
+    data class Dispatch(override val step: ChatProviderStepSession) : ChatProviderStepOpenResult
     data class RepairCommit(
-        val step: ChatProviderStepSession,
+        override val step: ChatProviderStepSession,
         val durableMessage: UIMessage,
     ) : ChatProviderStepOpenResult
 
     data class AlreadySucceeded(
-        val step: ChatProviderStepSession,
+        override val step: ChatProviderStepSession,
         val durableMessage: UIMessage,
     ) : ChatProviderStepOpenResult
 }
@@ -83,6 +91,7 @@ class ChatProviderStepCoordinator(
         provider: ProviderSetting,
         tools: List<Tool>,
         credentialRefId: String? = null,
+        contextManifest: ContextManifest? = null,
     ): ChatProviderStepOpenResult {
         val apiSurface = params.model.resolveTextApiSurface(provider)
         val capabilitySnapshot = params.model.effectiveCapabilitySnapshot(provider)
@@ -108,7 +117,7 @@ class ChatProviderStepCoordinator(
                 throw RequestLedgerIdentityConflict("Provider input appears more than once in one chat request chain")
             }
         if (exact != null) {
-            return openExistingStep(
+            val result = openExistingStep(
                 context = context,
                 request = exact,
                 actor = actor,
@@ -116,6 +125,8 @@ class ChatProviderStepCoordinator(
                 toolCatalogDigest = toolCatalogDigest,
                 capabilitySnapshotJson = json.encodeToString(capabilitySnapshot),
             )
+            recordContextManifest(result, contextManifest, actor)
+            return result
         }
 
         val predecessor = chain.lastOrNull()
@@ -149,8 +160,31 @@ class ChatProviderStepCoordinator(
             credentialRefId = credentialRefId,
             actor = actor,
         )
-        return ChatProviderStepOpenResult.Dispatch(
+        val result = ChatProviderStepOpenResult.Dispatch(
             openDispatchSession(context, spec, actor, inputDigest),
+        )
+        recordContextManifest(result, contextManifest, actor)
+        return result
+    }
+
+    private suspend fun recordContextManifest(
+        result: ChatProviderStepOpenResult,
+        manifest: ContextManifest?,
+        actor: AuditActor,
+    ) {
+        if (manifest == null) return
+        repository.recordContextManifest(
+            requestId = result.step.requestId,
+            compilerVersion = manifest.compilerVersion,
+            payload = json.encodeToJsonElement(ContextManifest.serializer(), manifest).jsonObject,
+            actor = actor,
+        )
+        repository.recordContinuityCheckpoint(
+            requestId = result.step.requestId,
+            attemptId = result.step.attemptId,
+            kind = CheckpointKind.CONTEXT_RECOMPILED,
+            actor = actor,
+            contextManifestRef = manifest.manifestId,
         )
     }
 
@@ -345,6 +379,50 @@ class ChatProviderStepCoordinator(
 
     internal fun digestOutput(message: UIMessage): String = sha256Json(UIMessage.serializer(), message)
 
+    internal suspend fun recordProviderReplay(
+        requestId: RequestId,
+        attemptId: RequestAttemptId,
+        actor: AuditActor,
+        message: UIMessage,
+    ) {
+        val opaqueParts = message.parts.filterIsInstance<UIMessagePart.ProviderOpaque>()
+        if (opaqueParts.isEmpty()) return
+        val blocks = opaqueParts.mapIndexed { ordinal, part ->
+            ProviderReplayBlock(
+                ordinal = ordinal,
+                messageBoundary = 0,
+                type = part.blockType,
+                opaquePayloadJson = part.payloadJson,
+                payloadDigest = sha256String(part.payloadJson),
+            )
+        }
+        val envelopeDigest = sha256String(blocks.joinToString("\u0000") { it.payloadDigest })
+        val apiSurface = repository.getRequest(requestId)?.apiSurface
+            ?: throw RequestLedgerMissing(requestId.value)
+        repository.recordProviderReplayEnvelope(
+            requestId = requestId,
+            attemptId = attemptId,
+            envelope = ProviderReplayEnvelope(
+                provider = opaqueParts.first().provider,
+                apiSurface = apiSurface,
+                blocks = blocks,
+                envelopeDigest = envelopeDigest,
+            ),
+            actor = actor,
+        )
+        repository.recordContinuityCheckpoint(
+            requestId = requestId,
+            attemptId = attemptId,
+            kind = if (message.providerFinishReason == "pause_turn") {
+                CheckpointKind.PROVIDER_PAUSED
+            } else {
+                CheckpointKind.RESULT_RECEIVED
+            },
+            actor = actor,
+            replayEnvelopeRef = envelopeDigest,
+        )
+    }
+
     internal fun stableToolRequestId(
         requestId: RequestId,
         attemptId: RequestAttemptId,
@@ -379,6 +457,16 @@ class ChatProviderStepCoordinator(
                 )
             }.sortedWith(compareBy(HeaderDescriptor::name, HeaderDescriptor::valueDigest)),
             customBody = params.customBody.sortedBy { it.key },
+            enabledBuiltInTools = params.model.tools
+                .minus(params.disabledBuiltInTools)
+                .map { tool ->
+                    when (tool) {
+                        me.rerere.ai.provider.BuiltInTools.Search -> "search"
+                        me.rerere.ai.provider.BuiltInTools.UrlContext -> "url_context"
+                        me.rerere.ai.provider.BuiltInTools.ImageGeneration -> "image_generation"
+                    }
+                }
+                .sorted(),
             toolCatalogDigest = toolCatalogDigest,
             messagesDigest = sha256Json(
                 ListSerializer(ProviderMessageDescriptor.serializer()),
@@ -467,6 +555,11 @@ class ChatProviderStepCoordinator(
         is UIMessagePart.Audio -> ProviderPartDescriptor.Audio(url, metadata)
         is UIMessagePart.Document -> ProviderPartDescriptor.Document(url, fileName, mime, metadata)
         is UIMessagePart.Reasoning -> ProviderPartDescriptor.Reasoning(reasoning, metadata)
+        is UIMessagePart.ProviderOpaque -> ProviderPartDescriptor.ProviderOpaque(
+            provider = provider,
+            blockType = blockType,
+            payloadJson = payloadJson,
+        )
         is UIMessagePart.Search -> ProviderPartDescriptor.Search
         is UIMessagePart.ToolCall -> ProviderPartDescriptor.LegacyToolCall(
             toolCallId = toolCallId,
@@ -511,7 +604,7 @@ class ChatProviderStepSession internal constructor(
     private val context: ChatGenerationLedgerContext,
     val requestId: RequestId,
     private val dispatchSession: RequestDispatchSession?,
-    private val attemptId: RequestAttemptId,
+    internal val attemptId: RequestAttemptId,
     private val actor: AuditActor,
     private var committed: Boolean = false,
 ) {
@@ -536,6 +629,7 @@ class ChatProviderStepSession internal constructor(
         val dispatchSession = requireDispatchSession()
         try {
             context.persistCurrentConversation()
+            coordinator.recordProviderReplay(requestId, attemptId, actor, message)
             markResultReceived(message)
             dispatchSession.commitOutputAndSucceed(
                 CommitRequestOutputCommand(
@@ -616,6 +710,7 @@ private data class ProviderInputDescriptor(
     val reasoningLevel: String,
     val customHeaders: List<HeaderDescriptor>,
     val customBody: List<me.rerere.ai.provider.CustomBody>,
+    val enabledBuiltInTools: List<String>,
     val toolCatalogDigest: String,
     val messagesDigest: String,
 )
@@ -679,6 +774,13 @@ private sealed class ProviderPartDescriptor {
     data class Reasoning(
         val reasoning: String,
         val metadata: kotlinx.serialization.json.JsonObject?,
+    ) : ProviderPartDescriptor()
+
+    @Serializable
+    data class ProviderOpaque(
+        val provider: String,
+        val blockType: String,
+        val payloadJson: String,
     ) : ProviderPartDescriptor()
 
     @Serializable

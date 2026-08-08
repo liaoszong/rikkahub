@@ -68,6 +68,22 @@ class ResponseCitationTest {
     }
 
     @Test
+    fun `responses provider character offsets normalize to utf16`() {
+        val raw = buildJsonObject {
+            put("type", "url_citation")
+            put("title", "Source")
+            put("url", "https://example.com/source")
+            put("start_index", 2)
+            put("end_index", 3)
+        }
+        val citation = requireNotNull(parseResponseUrlCitationAnnotation(raw, text = "a猫🙂b"))
+
+        assertEquals(2, citation.startIndex)
+        assertEquals(4, citation.endIndex)
+        assertEquals("utf16_code_unit", citation.offsetUnit)
+    }
+
+    @Test
     fun `stream response tracker reuses ordinal for annotations on same text part`() {
         val tracker = ResponseTextPartOrdinalTracker()
 

@@ -94,6 +94,7 @@ import com.dokar.sonner.ToastType
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import me.rerere.ai.model.CapabilityMedia
+import me.rerere.ai.model.CapabilityOverride
 import me.rerere.ai.model.ModelFeature
 import me.rerere.ai.model.effectiveCapabilitySnapshot
 import me.rerere.ai.model.toLegacyModalities
@@ -535,7 +536,17 @@ private fun ModelSettingsForm(
 ) {
     val pagerState = rememberPagerState { 3 }
     val scope = rememberCoroutineScope()
-    val effectiveCapabilities = model.effectiveCapabilitySnapshot(parentProvider)
+    val effectiveCapabilities = ModelRegistry.enrichCapabilities(model)
+        .effectiveCapabilitySnapshot(parentProvider)
+
+    fun setContextWindowOverride(tokens: Int?) {
+        val updatedOverride = (model.capabilityOverride ?: CapabilityOverride()).copy(
+            contextWindowTokens = tokens,
+        )
+        onModelChange(
+            model.copy(capabilityOverride = updatedOverride.takeIf(CapabilityOverride::isSpecified))
+        )
+    }
 
     fun setModelId(id: String) {
         onModelChange(
@@ -675,6 +686,30 @@ private fun ModelSettingsForm(
                             .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
+                        OutlinedTextField(
+                            value = model.capabilityOverride?.contextWindowTokens?.toString().orEmpty(),
+                            onValueChange = { value ->
+                                when {
+                                    value.isBlank() -> setContextWindowOverride(null)
+                                    value.all(Char::isDigit) -> value.toIntOrNull()
+                                        ?.takeIf { it > 0 }
+                                        ?.let(::setContextWindowOverride)
+                                }
+                            },
+                            label = { Text(stringResource(R.string.setting_provider_page_context_window)) },
+                            supportingText = {
+                                Text(
+                                    stringResource(
+                                        R.string.setting_provider_page_context_window_desc,
+                                        effectiveCapabilities.contextWindowTokens ?: 128 * 1024,
+                                    )
+                                )
+                            },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+
                         ProviderOverrideSettings(
                             providerOverride = model.providerOverwrite,
                             onUpdateProviderOverride = { providerOverride ->

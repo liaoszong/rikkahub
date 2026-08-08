@@ -1,8 +1,8 @@
 <div align="center">
   <img src="docs/icon.png" alt="App 图标" width="100" />
-  <h1>RikkaHub</h1>
+  <h1>PaleInk</h1>
 
-一个原生Android LLM 聊天客户端，支持切换不同的供应商进行聊天 🤖💬
+一款面向日常对话、多模态处理和图片创作的 Android AI 客户端。
 
 [English](README.md) | [繁體中文](README_ZH_TW.md) | 简体中文
 
@@ -15,39 +15,33 @@
   <img src="docs/img/desktop.png" alt="Models Picker" width="450" />
 </div>
 
-## 关于这个 Fork
+## 关于 PaleInk
 
-本仓库是 [RikkaHub](https://github.com/rikkahub/rikkahub) 的长期维护 Fork，在尽量跟进上游的同时，重点改进稳定性与完整的产品体验。
+PaleInk 源自 [RikkaHub](https://github.com/rikkahub/rikkahub)，现在作为独立 Android 版本维护，有自己的功能规划和发布节奏。合适的上游改动仍会继续合并。
 
-当前维护的主要增强包括：
+PaleInk 的版本发布和问题反馈以本仓库为准。RikkaHub 的版权声明及 AGPL-3.0 许可证继续有效。
 
-- 在普通聊天中由推理模型调用已配置的图像模型，无需离开对话即可生成图片。
-- 支持把本轮上传图片或对话中的历史生成图作为参考图继续创作。
-- 渐进式多图画廊：主图、可切换缩略图、生成中占位、部分失败保留、整组收起与全屏缩放。
-- 多张用户附件使用紧凑画廊展示，同时保持原有单图消息尺寸。
-- 生图任务支持后台运行、跨页面观察、明确取消、状态持久化和中断恢复，避免自动重试造成重复计费。
-- 内置 Palenik 供应商模型目录，自动选择可用的较新图像模型，并为标题总结选择可靠的后台文本模型。
-- 更清晰且可折叠的“创作工具/聊天”侧边栏，以及可恢复下载的应用内更新体验。
-- 自动化构建、GitHub Release 与更新站发布流程；Debug 构建不接入生产 Firebase，不污染正式统计。
+## 🧭 多平台方向
 
-上游版权声明及 AGPL-3.0 许可证继续有效，本 Fork 的改动均记录在 Git 历史中。
+Android 仍是 PaleInk 的主平台。后续计划通过 Kotlin Multiplatform 和 Compose Desktop 支持 Windows，iOS 暂列在更长期计划中；Android 原生能力不会因此缩水。
 
-### PaleInk 最新版本：2.4.5-pale.3
+Windows 和 iOS 客户端目前尚未发布，具体路线见[多平台规划](docs/architecture/ANDROID_FIRST_MULTIPLATFORM_ARCHITECTURE.md)。
 
-- 🖼️ 聊天内支持参考图生成，并以紧凑、渐进式多图画廊展示结果。
-- 🧰 创作工具与聊天侧边栏更清晰，可折叠并持久记住展开状态。
-- ⬇️ 应用内更新支持断点恢复、签名与 APK 身份校验，并优化首次安装权限说明。
-- 🛡️ 加固备份恢复、图片持久化、Provider 就绪判断、Web 访问、Debug 隐私及跨平台发布门禁。
+### PaleInk 最新版本：2.4.5-pale.6
 
+- 🖼️ 聊天内生成或编辑 1–8 张图片，支持渐进显示和后台运行。
+- 🗃️ 在资产库统一查看生成图片和聊天附件。
+- 💬 长对话和后台请求支持中断恢复，搜索结果可显示来源。
+- 🛡️ 更新支持断点续传和签名校验，并兼容 16 KB 页面，隔离 Debug 数据。
 
 ## 🚀 下载
 
-🔗 [下载 PaleInk Fork](https://updates.paleink.cc/)（推荐）
+🔗 [下载 PaleInk](https://updates.paleink.cc/)（推荐）
 
-🔗 [前往上游 RikkaHub 官网](https://rikka-ai.com/download)
+🔗 [前往原版 RikkaHub 官网](https://rikka-ai.com/download)
 
 > [!WARNING]
-> RikkaHub 存在许多 fork 版本，fork 版本出现问题与 RikkaHub 无关，请谨慎使用 fork 版本，避免隐私泄露或者过度索要权限问题。
+> PaleInk 与 RikkaHub 使用不同的更新源和签名。请只从 PaleInk 官方下载页安装 PaleInk。
 
 ## 💖 赞助商
 
@@ -65,7 +59,12 @@
 - 🛠️ MCP 支持
 - 🔄 多种类型的供应商支持，自定义 API / URL / 模型（目前支持 OpenAI、Google、Anthropic）
 - 🖼️ 多模态输入支持
-- 🎨 在普通聊天中直接生成、参考编辑和渐进展示多张图片
+- 🎨 聊天内生成和参考编辑 1–8 张图片
+- 🗃️ 资产库统一管理生成图片和聊天附件
+- 🔔 文本、工具和图片任务支持后台运行、进度通知和取消
+- 🛡️ 中断恢复、凭据保护和更安全的备份恢复
+- 🧭 根据供应商能力自动选择模型
+- 🔗 搜索结果显示来源引用
 - 📝 Markdown 渲染（支持代码高亮、数学公式、表格、Mermaid）
 - 🔍 搜索功能（Exa、Tavily、Zhipu、LinkUp、Brave、Perplexity、..）
 - 🧩 Prompt 变量（模型名称、时间等）
@@ -96,11 +95,8 @@
 > [!TIP]
 > Debug 构建无需 Firebase；Release 构建继续使用 `app/google-services.json` 提供正式环境的 Analytics 与 Crashlytics。
 
-> [!IMPORTANT]  
-> 以下PR将被拒绝：
-> 1. 添加新语言，因为添加新语言会增加后续本地化的工作量
-> 2. 添加新功能，这个项目是有态度的
-> 3. AI生成的大规模重构和更改
+> [!IMPORTANT]
+> 大型功能或重构请先讨论再提交 PR。翻译改动请同步维护三份 README。
 
 ## 💰 捐赠
 

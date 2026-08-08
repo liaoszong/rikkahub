@@ -1,22 +1,33 @@
 package me.rerere.rikkahub.data.ai.tools
 
-import kotlinx.serialization.json.JsonArray
+import android.content.Context
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.encodeToJsonElement
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import me.rerere.ai.core.Tool
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.rikkahub.data.datastore.Settings
+import me.rerere.rikkahub.data.content.LocalContentBlobStore
 import me.rerere.rikkahub.utils.JsonInstantPretty
 import me.rerere.rikkahub.utils.toLocalString
 import me.rerere.search.SearchService
 import me.rerere.search.SearchServiceOptions
+import me.rerere.search.SearchEvidenceCompiler
+import me.rerere.search.ScrapeEvidenceCompiler
+import me.rerere.search.SearchUrlPolicy
+import me.rerere.pale.content.ContentOwnerKind
+import me.rerere.pale.content.ContentOwnerRef
+import me.rerere.pale.product.RawPayloadRetention
 import java.time.LocalDate
-import kotlin.uuid.Uuid
 
-fun createSearchTools(settings: Settings): Set<Tool> {
+fun createSearchTools(settings: Settings, context: Context, conversationId: String): Set<Tool> {
+    val blobStore = LocalContentBlobStore(context)
+    val owner = ContentOwnerRef(ContentOwnerKind.CONVERSATION, conversationId, "web_search_raw")
     return buildSet {
         add(
             Tool(
@@ -62,19 +73,20 @@ fun createSearchTools(settings: Settings): Set<Tool> {
                         commonOptions = settings.searchCommonOptions,
                         serviceOptions = options,
                     )
-                    val results =
-                        JsonInstantPretty.encodeToJsonElement(result.getOrThrow()).jsonObject.let { json ->
-                            val map = json.toMutableMap()
-                            map["items"] =
-                                JsonArray(map["items"]!!.jsonArray.mapIndexed { index, item ->
-                                    JsonObject(item.jsonObject.toMutableMap().apply {
-                                        put("id", JsonPrimitive(Uuid.random().toString().take(6)))
-                                        put("index", JsonPrimitive(index + 1))
-                                    })
-                                })
-                            JsonObject(map)
+                    val rawResult = result.getOrThrow()
+                    val rawJson = JsonInstantPretty.encodeToString(rawResult)
+                    val blobRef = if (settings.agentPrivacyPolicy.rawPayloadRetention == RawPayloadRetention.NONE) {
+                        null
+                    } else {
+                        if (settings.agentPrivacyPolicy.rawPayloadRetention == RawPayloadRetention.SHORT_LIVED_PLATFORM_MANAGED) {
+                            blobStore.pruneExpired()
                         }
-                    listOf(UIMessagePart.Text(results.toString()))
+                        blobStore.putJson(owner, rawJson.toByteArray()).blobId
+                    }
+                    val results = JsonInstantPretty.encodeToJsonElement(
+                        SearchEvidenceCompiler.compile(rawResult, rawContentBlobRef = blobRef)
+                    )
+                    listOf(UIMessagePart.Text(results.toString(), metadata = webEvidenceMetadata()))
                 }
             )
         )
@@ -99,20 +111,48 @@ fun createSearchTools(settings: Settings): Set<Tool> {
                         val service = SearchService.getService(options)
                         service.scrapingParameters(options)
                     },
-                    execute = {
+                    execute = { input ->
+                        validatePublicUrls(input.jsonObject)
                         val options = settings.searchServices.getOrElse(
                             index = settings.searchServiceSelected,
                             defaultValue = { SearchServiceOptions.DEFAULT })
                         val service = SearchService.getService(options)
                         val result = service.scrape(
-                            params = it.jsonObject,
+                            params = input.jsonObject,
                             commonOptions = settings.searchCommonOptions,
                             serviceOptions = options,
                         )
-                        val payload = JsonInstantPretty.encodeToJsonElement(result.getOrThrow()).jsonObject
-                        listOf(UIMessagePart.Text(payload.toString()))
+                        val rawResult = result.getOrThrow()
+                        val rawJson = JsonInstantPretty.encodeToString(rawResult)
+                        val blobRef = if (settings.agentPrivacyPolicy.rawPayloadRetention == RawPayloadRetention.NONE) {
+                            null
+                        } else {
+                            if (settings.agentPrivacyPolicy.rawPayloadRetention == RawPayloadRetention.SHORT_LIVED_PLATFORM_MANAGED) {
+                                blobStore.pruneExpired()
+                            }
+                            blobStore.putJson(owner, rawJson.toByteArray()).blobId
+                        }
+                        val payload = JsonInstantPretty.encodeToJsonElement(
+                            ScrapeEvidenceCompiler.compile(rawResult, rawContentBlobRef = blobRef)
+                        ).jsonObject
+                        listOf(UIMessagePart.Text(payload.toString(), metadata = webEvidenceMetadata()))
                     }
                 ))
+        }
+    }
+}
+
+private fun webEvidenceMetadata() = buildJsonObject {
+    put("trust", "untrusted_web")
+    put("may_authorize_tools", false)
+}
+
+private fun validatePublicUrls(value: JsonElement, key: String? = null) {
+    when (value) {
+        is JsonObject -> value.forEach { (childKey, child) -> validatePublicUrls(child, childKey) }
+        is kotlinx.serialization.json.JsonArray -> value.forEach { validatePublicUrls(it, key) }
+        is JsonPrimitive -> if (key?.contains("url", ignoreCase = true) == true && value.isString) {
+            SearchUrlPolicy.requirePublicUrl(value.content)
         }
     }
 }

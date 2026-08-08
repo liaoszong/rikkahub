@@ -24,9 +24,10 @@ import java.util.Locale
  */
 internal object CitationEgressSanitizer {
     fun sanitizeAnnotations(annotations: List<UIMessageAnnotation>): List<UIMessageAnnotation> =
-        annotations.map { annotation ->
+        annotations.mapNotNull { annotation ->
             when (annotation) {
                 is UIMessageAnnotation.UrlCitation -> sanitize(annotation)
+                is UIMessageAnnotation.ProviderToolEvent -> null
             }
         }
 
@@ -201,6 +202,7 @@ internal object CitationEgressSanitizer {
                 reasoning = if (toolPayload) sanitizeToolPayloadText(part.reasoning) else part.reasoning,
                 metadata = metadata,
             )
+            is UIMessagePart.ProviderOpaque -> null
             UIMessagePart.Search -> part.takeIf { part.metadata == null }
             is UIMessagePart.ToolCall -> part.copy(
                 arguments = sanitizeToolPayloadText(part.arguments),

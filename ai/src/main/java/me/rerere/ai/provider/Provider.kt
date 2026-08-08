@@ -78,6 +78,8 @@ data class TextGenerationParams(
     val reasoningLevel: ReasoningLevel = ReasoningLevel.OFF,
     val customHeaders: List<CustomHeader> = emptyList(),
     val customBody: List<CustomBody> = emptyList(),
+    /** Per-request deny-list used by bounded repair/recovery passes. */
+    val disabledBuiltInTools: Set<BuiltInTools> = emptySet(),
     @Transient
     val dispatchObserver: ProviderDispatchObserver = ProviderDispatchObserver.NONE,
 )

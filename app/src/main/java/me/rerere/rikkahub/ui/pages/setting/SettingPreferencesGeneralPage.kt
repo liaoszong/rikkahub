@@ -11,6 +11,8 @@ import androidx.compose.material3.LargeFlexibleTopAppBar
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -26,17 +28,40 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.data.datastore.DisplaySetting
+import me.rerere.rikkahub.data.privacy.PrivacyCleanupCoordinator
+import me.rerere.pale.product.RawPayloadRetention
 import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.hooks.rememberSharedPreferenceBoolean
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.rikkahub.utils.plus
 import org.koin.androidx.compose.koinViewModel
+import org.koin.compose.koinInject
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 
 @Composable
 fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
     val settings by vm.settings.collectAsStateWithLifecycle()
     var displaySetting by remember(settings) { mutableStateOf(settings.displaySetting) }
+    val privacyCleanup: PrivacyCleanupCoordinator = koinInject()
+    val scope = rememberCoroutineScope()
+    var confirmPrivacyClear by remember { mutableStateOf(false) }
+
+    if (confirmPrivacyClear) {
+        AlertDialog(
+            onDismissRequest = { confirmPrivacyClear = false },
+            title = { Text("清理 Agent 私密数据？") },
+            text = { Text("将删除全部记忆和已保留的原始搜索/抓取 payload。对话正文不会被删除。此操作不可撤销。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmPrivacyClear = false
+                    scope.launch { privacyCleanup.clearAgentData(settings) }
+                }) { Text("确认清理") }
+            },
+            dismissButton = { TextButton(onClick = { confirmPrivacyClear = false }) { Text("取消") } },
+        )
+    }
 
     fun updateDisplaySetting(setting: DisplaySetting) {
         displaySetting = setting
@@ -66,6 +91,117 @@ fun SettingPreferencesGeneralPage(vm: SettingVM = koinViewModel()) {
             contentPadding = contentPadding + PaddingValues(8.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            item {
+                CardGroup(
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                    title = { Text("Agent 隐私与联网") },
+                ) {
+                    item(
+                        headlineContent = { Text("允许外部联网") },
+                        supportingContent = { Text("控制模型 Provider、Web Search 和 URL Context 的外部网络访问") },
+                        trailingContent = {
+                            Switch(
+                                checked = settings.agentPrivacyPolicy.networkEnabled,
+                                onCheckedChange = { enabled ->
+                                    vm.updateSettings(settings.copy(
+                                        agentPrivacyPolicy = settings.agentPrivacyPolicy.copy(
+                                            networkEnabled = enabled,
+                                            localOnly = if (enabled) false else settings.agentPrivacyPolicy.localOnly,
+                                        )
+                                    ))
+                                },
+                            )
+                        },
+                    )
+                    item(
+                        headlineContent = { Text("仅本机 Provider") },
+                        supportingContent = { Text("只允许 localhost/loopback endpoint；同时关闭 Web Search") },
+                        trailingContent = {
+                            Switch(
+                                checked = settings.agentPrivacyPolicy.localOnly,
+                                onCheckedChange = { enabled ->
+                                    vm.updateSettings(settings.copy(
+                                        agentPrivacyPolicy = settings.agentPrivacyPolicy.copy(
+                                            localOnly = enabled,
+                                            networkEnabled = if (enabled) false else settings.agentPrivacyPolicy.networkEnabled,
+                                        )
+                                    ))
+                                },
+                            )
+                        },
+                    )
+                    item(
+                        headlineContent = { Text("启用记忆") },
+                        supportingContent = { Text("关闭后禁止读取和写入记忆，不只是隐藏界面") },
+                        trailingContent = {
+                            Switch(
+                                checked = settings.agentPrivacyPolicy.memoryEnabled,
+                                onCheckedChange = { enabled ->
+                                    vm.updateSettings(settings.copy(
+                                        agentPrivacyPolicy = settings.agentPrivacyPolicy.copy(memoryEnabled = enabled),
+                                    ))
+                                },
+                            )
+                        },
+                    )
+                    item(
+                        headlineContent = { Text("保留原始搜索 payload") },
+                        supportingContent = { Text("关闭后模型仍收到有界 Evidence，但不保存原始响应") },
+                        trailingContent = {
+                            Switch(
+                                checked = settings.agentPrivacyPolicy.rawPayloadRetention != RawPayloadRetention.NONE,
+                                onCheckedChange = { enabled ->
+                                    vm.updateSettings(settings.copy(
+                                        agentPrivacyPolicy = settings.agentPrivacyPolicy.copy(
+                                            rawPayloadRetention = if (enabled) {
+                                                RawPayloadRetention.SHORT_LIVED_PLATFORM_MANAGED
+                                            } else RawPayloadRetention.NONE,
+                                        ),
+                                    ))
+                                },
+                            )
+                        },
+                    )
+                    item(
+                        headlineContent = { Text("允许持久化敏感记忆") },
+                        supportingContent = { Text("默认关闭；敏感或低置信候选只保留待确认状态") },
+                        trailingContent = {
+                            Switch(
+                                checked = settings.agentPrivacyPolicy.persistSensitiveContent,
+                                onCheckedChange = { enabled ->
+                                    vm.updateSettings(settings.copy(
+                                        agentPrivacyPolicy = settings.agentPrivacyPolicy.copy(
+                                            persistSensitiveContent = enabled,
+                                        ),
+                                    ))
+                                },
+                            )
+                        },
+                    )
+                    item(
+                        headlineContent = { Text("匿名质量指标") },
+                        supportingContent = { Text("仅保存终态计数和诊断代码，不含对话、URL 或附件内容") },
+                        trailingContent = {
+                            Switch(
+                                checked = settings.agentPrivacyPolicy.anonymousMetricsEnabled,
+                                onCheckedChange = { enabled ->
+                                    vm.updateSettings(settings.copy(
+                                        agentPrivacyPolicy = settings.agentPrivacyPolicy.copy(
+                                            anonymousMetricsEnabled = enabled,
+                                        ),
+                                    ))
+                                },
+                            )
+                        },
+                    )
+                    item(
+                        onClick = { confirmPrivacyClear = true },
+                        headlineContent = { Text("一键清理 Agent 私密数据") },
+                        supportingContent = { Text("删除所有记忆和原始搜索 payload；保留对话") },
+                    )
+                }
+            }
+
             item {
                 var createNewConversationOnStart by rememberSharedPreferenceBoolean(
                     "create_new_conversation_on_start",

@@ -26,6 +26,7 @@ import kotlinx.serialization.json.putJsonArray
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.TokenUsage
+import me.rerere.ai.context.ContextDigests
 import me.rerere.ai.model.ModelFeature
 import me.rerere.ai.model.effectiveCapabilitySnapshot
 import me.rerere.ai.provider.BuiltInTools
@@ -67,6 +68,10 @@ import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
 import kotlin.time.Clock
+
+private const val MAX_PROVIDER_SEARCH_SOURCES = 50
+private const val MAX_PROVIDER_SEARCH_URL_CHARS = 2_048
+private const val MAX_PROVIDER_SEARCH_TITLE_CHARS = 300
 
 private const val TAG = "ResponseAPI"
 
@@ -210,6 +215,16 @@ class ResponseAPI(
         val host = providerSetting.baseUrl.toHttpUrl().host
         val capabilities = resolveResponseProviderCapabilities(host)
         val modelCapabilities = params.model.effectiveCapabilitySnapshot(providerSetting)
+        val useFunctionTools =
+            ModelFeature.TOOL_CALLING in modelCapabilities.features && params.tools.isNotEmpty()
+        val enabledBuiltInTools = params.model.tools.filter { tool ->
+            if (tool in params.disabledBuiltInTools) return@filter false
+            when (tool) {
+                BuiltInTools.Search -> ModelFeature.WEB_SEARCH in modelCapabilities.features
+                BuiltInTools.UrlContext -> ModelFeature.URL_CONTEXT in modelCapabilities.features
+                BuiltInTools.ImageGeneration -> ModelFeature.IMAGE_GENERATION in modelCapabilities.features
+            }
+        }
         return buildJsonObject {
             put("model", params.model.modelId)
             put("stream", stream)
@@ -243,26 +258,25 @@ class ResponseAPI(
                         put("effort", level.effort)
                     }
                 })
-                if (capabilities.supportEncryptedContent) {
-                    put("include", buildJsonArray {
-                        add("reasoning.encrypted_content")
-                    })
+            }
+
+            val includeItems = buildList {
+                if (ModelFeature.REASONING in modelCapabilities.features &&
+                    capabilities.supportEncryptedContent
+                ) {
+                    add("reasoning.encrypted_content")
                 }
+                if (BuiltInTools.Search in enabledBuiltInTools) {
+                    add("web_search_call.action.sources")
+                }
+            }
+            if (includeItems.isNotEmpty()) {
+                put("include", JsonArray(includeItems.map(::JsonPrimitive)))
             }
 
             // tools
             // Response API 的 tools 是扁平数组, 函数工具和内置工具可以共存, 必须写在同一个 key 下,
             // 否则后写入的会覆盖前者
-            val useFunctionTools =
-                ModelFeature.TOOL_CALLING in modelCapabilities.features && params.tools.isNotEmpty()
-            val enabledBuiltInTools = params.model.tools.filter { tool ->
-                when (tool) {
-                    BuiltInTools.Search -> ModelFeature.WEB_SEARCH in modelCapabilities.features
-                    BuiltInTools.UrlContext -> ModelFeature.URL_CONTEXT in modelCapabilities.features
-                    BuiltInTools.ImageGeneration ->
-                        ModelFeature.IMAGE_GENERATION in modelCapabilities.features
-                }
-            }
             if (useFunctionTools || enabledBuiltInTools.isNotEmpty()) {
                 putJsonArray("tools") {
                     if (useFunctionTools) {
@@ -368,6 +382,15 @@ class ResponseAPI(
 
                             is UIMessagePart.Text -> {
                                 contentBuffer.add(part)
+                            }
+
+                            is UIMessagePart.ProviderOpaque -> if (part.provider == "openai") {
+                                if (contentBuffer.isNotEmpty()) {
+                                    addContentItem(MessageRole.ASSISTANT, contentBuffer, attachmentBudget)
+                                    contentBuffer.clear()
+                                }
+                                runCatching { json.parseToJsonElement(part.payloadJson).jsonObject }
+                                    .getOrNull()?.let(::add)
                             }
 
                             else -> {}
@@ -513,6 +536,8 @@ class ResponseAPI(
                     contentIndex = contentIndex,
                     itemId = itemId,
                 )
+                val deltaText = jsonObject["delta"]?.jsonPrimitive?.contentOrNull ?: ""
+                citationPartTracker.appendText(outputIndex, contentIndex, itemId, deltaText)
                 return MessageChunk(
                     id = jsonObject["item_id"]?.jsonPrimitive?.contentOrNull ?: "",
                     model = "",
@@ -523,7 +548,7 @@ class ResponseAPI(
                                 role = MessageRole.ASSISTANT,
                                 parts = listOf(
                                     UIMessagePart.Text(
-                                        text = jsonObject["delta"]?.jsonPrimitive?.contentOrNull ?: "",
+                                        text = deltaText,
                                         metadata = citationPartTracker.partIdFor(
                                             outputIndex = outputIndex,
                                             contentIndex = contentIndex,
@@ -546,6 +571,7 @@ class ResponseAPI(
             "response.output_text.annotation.added" -> {
                 val outputIndex = jsonObject["output_index"]?.jsonPrimitive?.intOrNull
                 val contentIndex = jsonObject["content_index"]?.jsonPrimitive?.intOrNull
+                val itemId = jsonObject["item_id"]?.jsonPrimitive?.contentOrNull
                 val annotation = (jsonObject["annotation"] as? JsonObject)
                     ?.let {
                         parseResponseUrlCitationAnnotation(
@@ -557,6 +583,7 @@ class ResponseAPI(
                             ),
                             outputIndex = outputIndex,
                             contentIndex = contentIndex,
+                            text = citationPartTracker.textFor(outputIndex, contentIndex, itemId),
                         )
                     } ?: return null
                 return MessageChunk(
@@ -673,6 +700,40 @@ class ResponseAPI(
                                         )
                                     )
                                 ),
+                                finishReason = null,
+                            )
+                        )
+                    )
+                } else if (type == "web_search_call") {
+                    return MessageChunk(
+                        id = id,
+                        model = "",
+                        choices = listOf(
+                            UIMessageChoice(
+                                index = 0,
+                                delta = UIMessage(
+                                    role = MessageRole.ASSISTANT,
+                                    parts = emptyList(),
+                                    annotations = listOf(parseWebSearchEvent(item)),
+                                ),
+                                message = null,
+                                finishReason = null,
+                            ),
+                        ),
+                    )
+                } else if (type == "web_search_call") {
+                    return MessageChunk(
+                        id = id,
+                        model = "",
+                        choices = listOf(
+                            UIMessageChoice(
+                                index = 0,
+                                delta = UIMessage(
+                                    role = MessageRole.ASSISTANT,
+                                    parts = listOf(providerOpaqueOpenAi(item)),
+                                    annotations = listOf(parseWebSearchEvent(item)),
+                                ),
+                                message = null,
                                 finishReason = null,
                             )
                         )
@@ -820,6 +881,11 @@ class ResponseAPI(
                     )
                 }
 
+                "web_search_call" -> {
+                    annotations += parseWebSearchEvent(output)
+                    parts += providerOpaqueOpenAi(output)
+                }
+
                 "message" -> {
                     val content = output["content"]?.jsonArray ?: error("content not found")
                     content.map { it.jsonObject }.forEachIndexed { contentIndex, part ->
@@ -867,6 +933,50 @@ class ResponseAPI(
         )
     }
 
+    internal fun parseWebSearchEvent(item: JsonObject): UIMessageAnnotation.ProviderToolEvent {
+        val action = item["action"] as? JsonObject
+        val rawSources = action?.get("sources") as? JsonArray ?: JsonArray(emptyList())
+        val sources = rawSources.take(MAX_PROVIDER_SEARCH_SOURCES).mapNotNull { element ->
+            val source = element as? JsonObject ?: return@mapNotNull null
+            val url = source["url"]?.jsonPrimitiveOrNull?.contentOrNull
+                ?.take(MAX_PROVIDER_SEARCH_URL_CHARS)
+                ?: return@mapNotNull null
+            buildJsonObject {
+                put("url", url)
+                source["title"]?.jsonPrimitiveOrNull?.contentOrNull
+                    ?.take(MAX_PROVIDER_SEARCH_TITLE_CHARS)
+                    ?.let { put("title", it) }
+                source["type"]?.jsonPrimitiveOrNull?.contentOrNull
+                    ?.take(64)
+                    ?.let { put("type", it) }
+            }
+        }
+        val queryMaterial = sequenceOf(action?.get("query"), action?.get("queries"))
+            .filterNotNull()
+            .joinToString("\u0000")
+        val metadata = buildJsonObject {
+            put("source_count", rawSources.size)
+            put("sources_truncated", rawSources.size > sources.size)
+            put("sources", JsonArray(sources))
+            if (queryMaterial.isNotBlank()) put("query_digest", ContextDigests.sha256(queryMaterial))
+        }
+        return UIMessageAnnotation.ProviderToolEvent(
+            provider = "openai",
+            toolType = "web_search",
+            callId = item["id"]?.jsonPrimitiveOrNull?.contentOrNull ?: "web-search-unknown",
+            status = item["status"]?.jsonPrimitiveOrNull?.contentOrNull ?: "completed",
+            actionType = action?.get("type")?.jsonPrimitiveOrNull?.contentOrNull,
+            payloadDigest = ContextDigests.sha256(metadata.toString()),
+            providerMetadata = metadata,
+        )
+    }
+
+    private fun providerOpaqueOpenAi(item: JsonObject) = UIMessagePart.ProviderOpaque(
+        provider = "openai",
+        blockType = item["type"]?.jsonPrimitiveOrNull?.contentOrNull ?: "unknown",
+        payloadJson = json.encodeToString(JsonObject.serializer(), item),
+    )
+
     private fun parseTokenUsage(jsonObject: JsonObject?): TokenUsage? {
         if (jsonObject == null) return null
         return TokenUsage(
@@ -898,6 +1008,7 @@ internal fun parseResponseOutputTextWithCitations(
                 textPartOrdinal = textPartOrdinal,
                 outputIndex = outputIndex,
                 contentIndex = contentIndex,
+                text = text,
             )
         }
     }
@@ -909,6 +1020,7 @@ internal fun parseResponseUrlCitationAnnotation(
     textPartOrdinal: Int? = null,
     outputIndex: Int? = null,
     contentIndex: Int? = null,
+    text: String? = null,
 ): UIMessageAnnotation.UrlCitation? {
     if ((annotation["type"] as? JsonPrimitive)?.contentOrNull != "url_citation") return null
     val url = (annotation["url"] as? JsonPrimitive)?.contentOrNull
@@ -916,10 +1028,12 @@ internal fun parseResponseUrlCitationAnnotation(
     return UIMessageAnnotation.UrlCitation(
         title = (annotation["title"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
         url = url,
-        startIndex = (annotation["start_index"] as? JsonPrimitive)?.intOrNull,
-        endIndex = (annotation["end_index"] as? JsonPrimitive)?.intOrNull,
+        startIndex = (annotation["start_index"] as? JsonPrimitive)?.intOrNull
+            ?.let { index -> text?.codePointIndexToUtf16(index) ?: index },
+        endIndex = (annotation["end_index"] as? JsonPrimitive)?.intOrNull
+            ?.let { index -> text?.codePointIndexToUtf16(index) ?: index },
         textPartOrdinal = textPartOrdinal,
-        offsetUnit = "provider_character",
+        offsetUnit = if (text == null) "provider_character" else "utf16_code_unit",
         provenance = "provider",
         providerMetadata = if (outputIndex == null && contentIndex == null) {
             annotation
@@ -933,8 +1047,14 @@ internal fun parseResponseUrlCitationAnnotation(
     )
 }
 
+private fun String.codePointIndexToUtf16(index: Int): Int {
+    val bounded = index.coerceIn(0, codePointCount(0, length))
+    return offsetByCodePoints(0, bounded)
+}
+
 internal class ResponseTextPartOrdinalTracker {
     private val ordinals = linkedMapOf<ResponseTextPartKey, Int>()
+    private val text = linkedMapOf<ResponseTextPartKey, StringBuilder>()
 
     fun ordinalFor(outputIndex: Int?, contentIndex: Int?, itemId: String?): Int? {
         val resolvedContentIndex = contentIndex ?: return null
@@ -946,6 +1066,17 @@ internal class ResponseTextPartOrdinalTracker {
         val resolvedContentIndex = contentIndex ?: return null
         return listOf(outputIndex?.toString().orEmpty(), itemId.orEmpty(), resolvedContentIndex.toString())
             .joinToString(":")
+    }
+
+    fun appendText(outputIndex: Int?, contentIndex: Int?, itemId: String?, delta: String) {
+        val resolvedContentIndex = contentIndex ?: return
+        val key = ResponseTextPartKey(outputIndex, itemId.orEmpty(), resolvedContentIndex)
+        text.getOrPut(key, ::StringBuilder).append(delta)
+    }
+
+    fun textFor(outputIndex: Int?, contentIndex: Int?, itemId: String?): String? {
+        val resolvedContentIndex = contentIndex ?: return null
+        return text[ResponseTextPartKey(outputIndex, itemId.orEmpty(), resolvedContentIndex)]?.toString()
     }
 }
 

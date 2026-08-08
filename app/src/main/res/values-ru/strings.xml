@@ -718,6 +718,8 @@
   <string name="setting_mcp_page_header_name_placeholder">например: Авторизация</string>
   <string name="setting_mcp_page_header_value">Значение заголовка</string>
   <string name="setting_mcp_page_header_value_placeholder">например: Bearer token123</string>
+  <string name="setting_mcp_page_show_header_value">Показать значение заголовка</string>
+  <string name="setting_mcp_page_hide_header_value">Скрыть значение заголовка</string>
   <string name="setting_mcp_page_import_confirm">Импорт</string>
   <string name="setting_mcp_page_import_desc">Вставьте JSON-конфигурацию MCP-сервера, поддерживается стандартный формат mcpServers</string>
   <string name="setting_mcp_page_import_no_valid_config">Не найдена допустимая конфигурация сервера MCP</string>

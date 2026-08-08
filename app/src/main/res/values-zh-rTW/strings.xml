@@ -722,6 +722,8 @@
   <string name="setting_mcp_page_header_name_placeholder">例如：Authorization</string>
   <string name="setting_mcp_page_header_value">請求頭值</string>
   <string name="setting_mcp_page_header_value_placeholder">例如：Bearer token123</string>
+  <string name="setting_mcp_page_show_header_value">顯示請求頭值</string>
+  <string name="setting_mcp_page_hide_header_value">隱藏請求頭值</string>
   <string name="setting_mcp_page_import_confirm">匯入</string>
   <string name="setting_mcp_page_import_desc">貼上 MCP Server JSON 設定，支援標準 mcpServers 格式</string>
   <string name="setting_mcp_page_import_no_valid_config">未找到有效的 MCP Server 配置</string>

@@ -1,6 +1,7 @@
 package me.rerere.ai.provider.providers.openai
 
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -19,6 +20,7 @@ import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
+import me.rerere.ai.ui.UIMessageAnnotation
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -36,6 +38,34 @@ import org.junit.Test
  * - function_call_output items for tool results
  */
 class ResponseAPIMessageTest {
+
+    @Test
+    fun `web search request asks provider for complete source evidence`() {
+        val body = invokeBuildRequestBody(
+            ProviderSetting.OpenAI(),
+            TextGenerationParams(model = Model(modelId = "gpt-test", tools = setOf(BuiltInTools.Search))),
+        )
+
+        assertTrue(
+            body["include"]!!.jsonArray.any {
+                it.jsonPrimitive.content == "web_search_call.action.sources"
+            }
+        )
+    }
+
+    @Test
+    fun `web search event codec bounds sources and hashes query material`() {
+        val item = Json.parseToJsonElement(
+            """{"id":"ws_1","type":"web_search_call","status":"completed","action":{"type":"search","query":"private query","sources":[{"url":"https://example.com","title":"Example"}]}}"""
+        ).jsonObject
+
+        val event = api.parseWebSearchEvent(item)
+
+        assertEquals("web_search", event.toolType)
+        assertEquals("ws_1", event.callId)
+        assertTrue(event.providerMetadata?.containsKey("query_digest") == true)
+        assertFalse(event.providerMetadata.toString().contains("private query"))
+    }
 
     private lateinit var api: ResponseAPI
 
@@ -398,6 +428,18 @@ class ResponseAPIMessageTest {
         )
 
         assertFalse("tools key should not be written", requestBody.containsKey("tools"))
+    }
+
+    @Test
+    fun `request deny list removes web search for bounded repair`() {
+        val requestBody = invokeBuildRequestBody(
+            providerSetting = ProviderSetting.OpenAI(baseUrl = "https://api.openai.com/v1"),
+            params = createToolParams(builtInTools = setOf(BuiltInTools.Search)).copy(
+                disabledBuiltInTools = setOf(BuiltInTools.Search),
+            ),
+        )
+
+        assertFalse("tools key should be absent after web search is denied", requestBody.containsKey("tools"))
     }
 
     @Test

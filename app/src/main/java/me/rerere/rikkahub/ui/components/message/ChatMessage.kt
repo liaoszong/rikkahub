@@ -584,6 +584,7 @@ private fun MessagePartsBlock(
             when (annotation) {
                 is UIMessageAnnotation.UrlCitation ->
                     annotation.sourceId ?: annotation.url.ifBlank { annotation.citationId ?: annotation.title }
+                is UIMessageAnnotation.ProviderToolEvent -> annotation.callId
             }
         }
     }
@@ -638,6 +639,7 @@ private fun MessagePartsBlock(
                                         )
                                     }
                                 }
+                                is UIMessageAnnotation.ProviderToolEvent -> Unit
                             }
                         }
                     }

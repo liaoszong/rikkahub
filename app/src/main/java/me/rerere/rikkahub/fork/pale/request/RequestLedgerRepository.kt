@@ -28,9 +28,18 @@ import me.rerere.pale.request.ToolExecutionState
 import me.rerere.pale.request.ToolPermissionDecision
 import me.rerere.pale.request.ToolPermissionScope
 import me.rerere.pale.request.ToolSideEffectClass
+import me.rerere.pale.continuity.CheckpointKind
+import me.rerere.pale.continuity.ContinuityCheckpoint
+import me.rerere.pale.continuity.ProviderReplayEnvelope
+import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import me.rerere.rikkahub.data.db.AppDatabase
 
 private const val IMAGE_TASK_DESCRIPTOR_EVENT = "image_task_descriptor_v1"
+private const val CONTEXT_MANIFEST_EVENT_PREFIX = "context_manifest_shadow_v1:"
+private const val CONTINUITY_CHECKPOINT_EVENT = "continuity_checkpoint_v1"
+private const val PROVIDER_REPLAY_EVENT = "provider_replay_v1"
 
 /**
  * The only write authority for Room 29 request, attempt, output, permission, and tool evidence.
@@ -47,6 +56,100 @@ class RequestLedgerRepository(
     private val toolAuditId: () -> String = { ToolAuditEventId.random().value },
     private val faultInjector: RequestLedgerFaultInjector = RequestLedgerFaultInjector.NONE,
 ) {
+    fun observeRecentRequests(limit: Int = 100): Flow<List<RequestLedgerEntity>> {
+        require(limit in 1..500)
+        return dao.observeRecentRequests(limit)
+    }
+
+    fun observeProviderReplayRequestIds(): Flow<Set<String>> =
+        dao.observeProviderReplayRequestIds().map(List<String>::toSet)
+    suspend fun recordContinuityCheckpoint(
+        requestId: RequestId,
+        attemptId: RequestAttemptId?,
+        kind: CheckpointKind,
+        actor: AuditActor,
+        committedOutputRefs: List<String> = emptyList(),
+        contextManifestRef: String? = null,
+        replayEnvelopeRef: String? = null,
+        pendingApprovalRefs: List<String> = emptyList(),
+    ) = database.withTransaction {
+        val request = dao.getRequest(requestId.value) ?: throw RequestLedgerMissing(requestId.value)
+        val attempt = attemptId?.let { dao.getAttempt(it.value) }
+        if (attemptId != null && attempt == null) throw RequestLedgerMissing(attemptId.value)
+        val revision = attempt?.stateRevision ?: request.stateRevision
+        val checkpoint = ContinuityCheckpoint(
+            checkpointId = sha256("${requestId.value}|${attemptId?.value}|$kind|$revision").take(32),
+            requestId = requestId.value,
+            attemptId = attemptId?.value,
+            kind = kind,
+            requestState = RequestState.valueOf(request.requestState.uppercase(Locale.ROOT)),
+            billableBoundary = BillableBoundary.valueOf(request.billableBoundary.uppercase(Locale.ROOT)),
+            committedOutputRefs = committedOutputRefs,
+            contextManifestRef = contextManifestRef,
+            replayEnvelopeRef = replayEnvelopeRef,
+            pendingApprovalRefs = pendingApprovalRefs,
+            createdAt = nowMillis(),
+            stateRevision = revision,
+        )
+        val payload = Json.encodeToJsonElement(ContinuityCheckpoint.serializer(), checkpoint).jsonObject
+        val duplicate = dao.getRequestAudit(requestId.value).any {
+            it.eventKind == CONTINUITY_CHECKPOINT_EVENT && it.payloadDigest == sha256(payload.toString())
+        }
+        if (!duplicate) {
+            appendRequestAudit(
+                requestId = requestId.value,
+                eventKind = CONTINUITY_CHECKPOINT_EVENT,
+                actor = actor,
+                payload = payload,
+                now = checkpoint.createdAt,
+                attemptId = attemptId?.value,
+            )
+        }
+    }
+
+    suspend fun getContinuityCheckpoints(requestId: RequestId): List<ContinuityCheckpoint> =
+        dao.getRequestAudit(requestId.value)
+            .filter { it.eventKind == CONTINUITY_CHECKPOINT_EVENT }
+            .sortedBy { it.eventSeq }
+            .map { Json.decodeFromString(ContinuityCheckpoint.serializer(), it.payloadJson) }
+
+    suspend fun recordProviderReplayEnvelope(
+        requestId: RequestId,
+        attemptId: RequestAttemptId,
+        envelope: ProviderReplayEnvelope,
+        actor: AuditActor,
+    ) = database.withTransaction {
+        dao.getRequest(requestId.value) ?: throw RequestLedgerMissing(requestId.value)
+        dao.getAttempt(attemptId.value) ?: throw RequestLedgerMissing(attemptId.value)
+        val payload = Json.encodeToJsonElement(ProviderReplayEnvelope.serializer(), envelope).jsonObject
+        require(payload.toString().length <= 2 * 1024 * 1024) {
+            "Provider replay envelope exceeds the durable audit bound"
+        }
+        val existing = dao.getRequestAudit(requestId.value).singleOrNull {
+            it.eventKind == PROVIDER_REPLAY_EVENT && it.attemptId == attemptId.value
+        }
+        if (existing != null) {
+            require(existing.payloadDigest == sha256(payload.toString())) {
+                "Provider replay envelope changed for frozen attempt ${attemptId.value}"
+            }
+            return@withTransaction
+        }
+        appendRequestAudit(
+            requestId = requestId.value,
+            eventKind = PROVIDER_REPLAY_EVENT,
+            actor = actor,
+            payload = payload,
+            now = nowMillis(),
+            attemptId = attemptId.value,
+        )
+    }
+
+    suspend fun getProviderReplayEnvelopes(requestId: RequestId): List<ProviderReplayEnvelope> =
+        dao.getRequestAudit(requestId.value)
+            .filter { it.eventKind == PROVIDER_REPLAY_EVENT }
+            .sortedBy { it.eventSeq }
+            .map { Json.decodeFromString(ProviderReplayEnvelope.serializer(), it.payloadJson) }
+
     suspend fun getRequest(requestId: RequestId): RequestLedgerEntity? = dao.getRequest(requestId.value)
 
     suspend fun getAttempt(attemptId: RequestAttemptId): RequestAttemptEntity? = dao.getAttempt(attemptId.value)
@@ -105,6 +208,48 @@ class RequestLedgerRepository(
             .singleOrNull { it.eventKind == IMAGE_TASK_DESCRIPTOR_EVENT }
             ?.payloadJson
             ?.let { payload -> Json.parseToJsonElement(payload).jsonObject }
+
+    /**
+     * Persists a privacy-safe Context Manifest beside the request it describes.
+     * One compiler version may emit exactly one manifest for a frozen provider input.
+     */
+    suspend fun recordContextManifest(
+        requestId: RequestId,
+        compilerVersion: String,
+        payload: JsonObject,
+        actor: AuditActor,
+    ) = database.withTransaction {
+        require(compilerVersion.matches(Regex("[A-Za-z0-9._-]{1,64}"))) {
+            "Context compiler version is invalid"
+        }
+        require(payload.toString().length <= 256 * 1024) {
+            "Context manifest exceeds the durable audit bound"
+        }
+        dao.getRequest(requestId.value) ?: throw RequestLedgerMissing(requestId.value)
+        val eventKind = CONTEXT_MANIFEST_EVENT_PREFIX + compilerVersion
+        val payloadJson = payload.toString()
+        val existing = dao.getRequestAudit(requestId.value)
+            .singleOrNull { it.eventKind == eventKind }
+        if (existing != null) {
+            require(existing.payloadDigest == sha256(payloadJson)) {
+                "Context manifest changed for frozen request ${requestId.value}"
+            }
+            return@withTransaction
+        }
+        appendRequestAudit(
+            requestId = requestId.value,
+            eventKind = eventKind,
+            actor = actor,
+            payload = payload,
+            now = nowMillis(),
+        )
+    }
+
+    suspend fun getContextManifests(requestId: RequestId): List<JsonObject> =
+        dao.getRequestAudit(requestId.value)
+            .filter { it.eventKind.startsWith(CONTEXT_MANIFEST_EVENT_PREFIX) }
+            .sortedBy { it.eventSeq }
+            .map { Json.parseToJsonElement(it.payloadJson).jsonObject }
 
     /**
      * Converges a local aggregate whose Conversation/Tool target was deleted after every paid

@@ -1,8 +1,11 @@
 package me.rerere.ai
 
+import me.rerere.ai.model.CapabilitySnapshot
 import me.rerere.ai.model.CapabilityMedia
 import me.rerere.ai.model.ModelFeature
+import me.rerere.ai.model.effectiveCapabilitySnapshot
 import me.rerere.ai.provider.Modality
+import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.registry.ModelRegistry
 import org.junit.Assert.assertEquals
@@ -107,6 +110,22 @@ class ModelRegistryTest {
     }
 
     @Test
+    fun `new upstream model families retain fork capability semantics`() {
+        val qwen = ModelRegistry.capabilitiesFor("qwen-3.8-max")!!
+        val mimo = ModelRegistry.capabilitiesFor("mimo-v3")!!
+        val mimoPro = ModelRegistry.capabilitiesFor("mimo-v3-pro")!!
+
+        assertEquals(setOf(CapabilityMedia.TEXT), qwen.inputMedia)
+        assertTrue(ModelFeature.TOOL_CALLING in qwen.features)
+        assertTrue(ModelFeature.REASONING in qwen.features)
+
+        assertTrue(CapabilityMedia.IMAGE in mimo.inputMedia)
+        assertTrue(ModelFeature.TOOL_CALLING in mimo.features)
+        assertTrue(ModelFeature.REASONING in mimo.features)
+        assertTrue(CapabilityMedia.IMAGE in mimoPro.inputMedia)
+    }
+
+    @Test
     fun `registry exposes provider neutral capability snapshots`() {
         val gpt = ModelRegistry.capabilitiesFor("gpt-5.4")!!
         val geminiImage = ModelRegistry.capabilitiesFor("gemini-3.1-flash-image-preview")!!
@@ -123,5 +142,48 @@ class ModelRegistryTest {
         assertTrue(CapabilityMedia.IMAGE in claude.inputMedia)
         assertTrue(ModelFeature.TOOL_CALLING in claude.features)
         assertTrue(ModelFeature.REASONING in claude.features)
+    }
+
+    @Test
+    fun `gpt 5 5 exposes verified token limits without affecting unknown models`() {
+        val gpt55 = ModelRegistry.capabilitiesFor("gpt-5.5")!!
+
+        assertEquals(1_050_000, gpt55.contextWindowTokens)
+        assertEquals(128_000, gpt55.maxOutputTokens)
+        assertEquals(null, ModelRegistry.capabilitiesFor("custom-private-model"))
+    }
+
+    @Test
+    fun `openai and paleink codex families resolve their own verified windows`() {
+        val expectedWindows = mapOf(
+            "codex-auto-review" to 400_000,
+            "gpt-5.4" to 1_050_000,
+            "gpt-5.4-2026-03-05" to 1_050_000,
+            "gpt-5.4-mini" to 400_000,
+            "gpt-5.5" to 1_050_000,
+            "gpt-5.6" to 1_050_000,
+            "gpt-5.6-luna" to 1_050_000,
+            "gpt-5.6-sol" to 1_050_000,
+            "gpt-5.6-terra" to 1_050_000,
+        )
+
+        expectedWindows.forEach { (modelId, expectedWindow) ->
+            val capabilities = ModelRegistry.capabilitiesFor(modelId)!!
+            assertEquals("window for $modelId", expectedWindow, capabilities.contextWindowTokens)
+            assertEquals("output for $modelId", 128_000, capabilities.maxOutputTokens)
+        }
+    }
+
+    @Test
+    fun `registry refresh upgrades token limits persisted by an older app version`() {
+        val staleModel = Model(
+            modelId = "gpt-5.5",
+            declaredCapabilities = CapabilitySnapshot(),
+        )
+
+        val refreshed = ModelRegistry.enrichCapabilities(staleModel).effectiveCapabilitySnapshot()
+
+        assertEquals(1_050_000, refreshed.contextWindowTokens)
+        assertEquals(128_000, refreshed.maxOutputTokens)
     }
 }

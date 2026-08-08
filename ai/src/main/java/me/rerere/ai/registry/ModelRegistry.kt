@@ -67,30 +67,52 @@ object ModelRegistry {
         tokens("gpt", "5", "4")
         visionInput()
         toolReasoningAbility()
+        // https://developers.openai.com/api/docs/models/gpt-5.4
+        tokenLimits(contextWindow = 1_050_000, maxOutput = 128_000)
     }
 
     private val GPT_5_4_MINI = defineModel {
         tokens("gpt", "5", "4", "mini")
         visionInput()
         toolReasoningAbility()
+        // https://developers.openai.com/api/docs/models/gpt-5.4-mini
+        tokenLimits(contextWindow = 400_000, maxOutput = 128_000)
     }
 
     private val GPT_5_4_NANO = defineModel {
         tokens("gpt", "5", "4", "nano")
         visionInput()
         toolReasoningAbility()
+        // https://developers.openai.com/api/docs/models/gpt-5.4-nano
+        tokenLimits(contextWindow = 400_000, maxOutput = 128_000)
     }
 
     private val GPT_5_5 = defineModel {
         tokens("gpt", "5", "5")
+        notTokens("mini")
+        notTokens("nano")
         visionInput()
         toolReasoningAbility()
+        // https://developers.openai.com/api/docs/models/gpt-5.5
+        tokenLimits(contextWindow = 1_050_000, maxOutput = 128_000)
     }
 
     private val GPT_5_6 = defineModel {
         tokens("gpt", "5", "6")
         visionInput()
         toolReasoningAbility()
+        // gpt-5.6 aliases Sol; Sol, Terra, and Luna share these limits.
+        // https://developers.openai.com/api/docs/models/gpt-5.6-sol
+        tokenLimits(contextWindow = 1_050_000, maxOutput = 128_000)
+    }
+
+    /** PaleInk managed alias backed by Codex; use the conservative verified Codex floor. */
+    private val CODEX_AUTO_REVIEW = defineModel {
+        exact("codex-auto-review")
+        visionInput()
+        toolReasoningAbility()
+        // https://developers.openai.com/api/docs/models/gpt-5-codex
+        tokenLimits(contextWindow = 400_000, maxOutput = 128_000)
     }
 
     private val GEMINI_20_FLASH = defineModel {
@@ -338,6 +360,11 @@ object ModelRegistry {
         toolReasoningAbility()
     }
 
+    private val QWEN_3_8_MAX = defineModel {
+        tokens("qwen", "3", "8", "max")
+        toolReasoningAbility()
+    }
+
     private val DOUBAO_1_6 = defineModel {
         tokens("doubao", "1", "6")
         visionInput()
@@ -488,6 +515,18 @@ object ModelRegistry {
         toolReasoningAbility()
     }
 
+    private val XIAOMI_MIMO_V3 = defineModel {
+        tokens("mimo", "v", "3")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val XIAOMI_MIMO_V3_PRO = defineModel {
+        tokens("mimo", "v", "3", "pro")
+        visionInput()
+        toolReasoningAbility()
+    }
+
     private val HY3 = defineModel {
         tokens("hy", "3")
         toolReasoningAbility()
@@ -516,6 +555,7 @@ object ModelRegistry {
         GPT_5_4_NANO,
         GPT_5_5,
         GPT_5_6,
+        CODEX_AUTO_REVIEW,
         GEMINI_20_FLASH,
         GEMINI_2_5_FLASH,
         GEMINI_2_5_PRO,
@@ -553,6 +593,7 @@ object ModelRegistry {
         QWEN_3_5_MAX,
         QWEN_3_6_MAX,
         QWEN_3_7_MAX,
+        QWEN_3_8_MAX,
         DOUBAO_1_6,
         DOUBAO_1_8,
         DOUBAO_2_0,
@@ -580,6 +621,8 @@ object ModelRegistry {
         XIAOMI_MIMO_V2_PRO,
         XIAOMI_MIMO_V2_5,
         XIAOMI_MIMO_V2_5_PRO,
+        XIAOMI_MIMO_V3,
+        XIAOMI_MIMO_V3_PRO,
         HY3,
         LONGCAT_2,
         QWEN_MT
@@ -618,6 +661,8 @@ object ModelRegistry {
             .flatMap { definition -> definition.outputModalities }
             .mapTo(linkedSetOf()) { modality -> modality.toCapabilityMedia() }
         val abilities = definitions.flatMapTo(linkedSetOf()) { it.abilities }
+        val contextWindowTokens = definitions.mapNotNull { it.contextWindowTokens }.distinct().singleOrNull()
+        val maxOutputTokens = definitions.mapNotNull { it.maxOutputTokens }.distinct().singleOrNull()
         val features = buildSet {
             if (ModelAbility.TOOL in abilities) add(ModelFeature.TOOL_CALLING)
             if (ModelAbility.REASONING in abilities) add(ModelFeature.REASONING)
@@ -633,6 +678,8 @@ object ModelRegistry {
             inputMedia = inputMedia.ifEmpty { setOf(CapabilityMedia.TEXT) },
             outputMedia = outputMedia.ifEmpty { setOf(CapabilityMedia.TEXT) },
             features = features,
+            contextWindowTokens = contextWindowTokens,
+            maxOutputTokens = maxOutputTokens,
             origin = CapabilityOrigin.INFERRED,
         )
     }

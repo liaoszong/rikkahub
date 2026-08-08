@@ -41,6 +41,9 @@ interface RequestLedgerDAO {
     @Query("SELECT * FROM request_ledger WHERE request_id = :requestId")
     fun observeRequest(requestId: String): Flow<RequestLedgerEntity?>
 
+    @Query("SELECT * FROM request_ledger ORDER BY updated_at DESC, request_id DESC LIMIT :limit")
+    fun observeRecentRequests(limit: Int): Flow<List<RequestLedgerEntity>>
+
     @Query(
         "SELECT * FROM request_ledger WHERE conversation_id = :conversationId " +
             "ORDER BY created_at DESC, request_id DESC",
@@ -166,6 +169,9 @@ interface RequestLedgerDAO {
             "ORDER BY event_seq",
     )
     suspend fun getRequestAudit(requestId: String): List<RequestAuditEventEntity>
+
+    @Query("SELECT DISTINCT request_id FROM request_audit_event WHERE event_kind = 'provider_replay_v1'")
+    fun observeProviderReplayRequestIds(): Flow<List<String>>
 
     @Query("SELECT COALESCE(MAX(event_seq), 0) + 1 FROM request_audit_event WHERE request_id = :requestId")
     suspend fun nextRequestAuditSequence(requestId: String): Long

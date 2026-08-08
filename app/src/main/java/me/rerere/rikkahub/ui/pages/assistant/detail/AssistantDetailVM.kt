@@ -23,6 +23,10 @@ import me.rerere.rikkahub.data.model.AssistantMemory
 import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.data.model.Tag
 import me.rerere.rikkahub.data.repository.MemoryRepository
+import me.rerere.rikkahub.data.quality.QualityMetricsRecorder
+import me.rerere.pale.product.QualityEvent
+import me.rerere.pale.product.QualityMetric
+import me.rerere.pale.memory.MemoryRecord
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.rikkahub.utils.logSafeError
 import me.rerere.rikkahub.utils.logSafeSuccess
@@ -37,6 +41,7 @@ class AssistantDetailVM(
     private val filesManager: FilesManager,
     private val skillManager: SkillManager,
     private val workspaceRepository: WorkspaceRepository,
+    private val qualityMetrics: QualityMetricsRecorder,
 ) : ViewModel() {
     private val assistantId = Uuid.parse(id)
 
@@ -70,14 +75,22 @@ class AssistantDetailVM(
     val memories = assistant
         .flatMapLatest { currentAssistant ->
             if (currentAssistant.useGlobalMemory) {
-                memoryRepository.getGlobalMemoriesFlow()
+                memoryRepository.observeAllLegacyMemories(MemoryRepository.GLOBAL_MEMORY_ID)
             } else {
-                memoryRepository.getMemoriesOfAssistantFlow(assistantId.toString())
+                memoryRepository.observeAllLegacyMemories(assistantId.toString())
             }
         }
         .stateIn(
             scope = viewModelScope, started = SharingStarted.Eagerly, initialValue = emptyList()
         )
+
+    val memoryRecords: StateFlow<List<MemoryRecord>> = assistant
+        .flatMapLatest { currentAssistant ->
+            memoryRepository.observeMemoryV2(
+                if (currentAssistant.useGlobalMemory) MemoryRepository.GLOBAL_MEMORY_ID else assistantId.toString()
+            )
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val providers = settingsStore
         .settingsFlow
@@ -196,6 +209,10 @@ class AssistantDetailVM(
     fun updateMemory(memory: AssistantMemory) {
         viewModelScope.launch {
             memoryRepository.updateContent(id = memory.id, content = memory.content)
+            qualityMetrics.record(
+                QualityEvent(QualityMetric.MEMORY_CORRECTION, System.currentTimeMillis()),
+                enabled = settings.value.agentPrivacyPolicy.anonymousMetricsEnabled,
+            )
         }
     }
 
@@ -203,6 +220,10 @@ class AssistantDetailVM(
         viewModelScope.launch {
             memoryRepository.deleteMemory(id = memory.id)
         }
+    }
+
+    fun setMemoryEnabled(memory: AssistantMemory, enabled: Boolean) {
+        viewModelScope.launch { memoryRepository.setMemoryEnabled(memory.id, enabled) }
     }
 
     fun checkAvatarDelete(old: Assistant, new: Assistant) {

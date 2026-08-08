@@ -57,6 +57,8 @@ class CapabilitySnapshotTest {
             outputMedia = setOf(CapabilityMedia.TEXT),
             features = setOf(ModelFeature.TOOL_CALLING, ModelFeature.REASONING),
             apiSurfaces = setOf(ApiSurface.CHAT_COMPLETIONS),
+            contextWindowTokens = 128_000,
+            maxOutputTokens = 8_000,
             origin = CapabilityOrigin.PROVIDER_DECLARED,
         )
         val override = CapabilityOverride(
@@ -66,6 +68,8 @@ class CapabilitySnapshotTest {
                 remove = setOf(ModelFeature.REASONING, ModelFeature.IMAGE_GENERATION),
             ),
             apiSurfaces = CapabilitySetOverride(replace = setOf(ApiSurface.RESPONSES)),
+            contextWindowTokens = 1_000_000,
+            maxOutputTokens = 64_000,
         )
 
         val merged = CapabilitySnapshotResolver.merge(base, override)
@@ -74,6 +78,8 @@ class CapabilitySnapshotTest {
         assertTrue(merged.outputMedia.isEmpty())
         assertEquals(setOf(ModelFeature.TOOL_CALLING), merged.features)
         assertEquals(setOf(ApiSurface.RESPONSES), merged.apiSurfaces)
+        assertEquals(1_000_000, merged.contextWindowTokens)
+        assertEquals(64_000, merged.maxOutputTokens)
         assertEquals(CapabilityOrigin.MERGED, merged.origin)
     }
 
@@ -84,13 +90,31 @@ class CapabilitySnapshotTest {
             outputMedia = setOf(CapabilityMedia.TEXT, CapabilityMedia.IMAGE),
             features = setOf(ModelFeature.IMAGE_GENERATION),
             apiSurfaces = setOf(ApiSurface.RESPONSES),
+            contextWindowTokens = 1_050_000,
+            maxOutputTokens = 128_000,
         )
         val override = CapabilityOverride(
-            apiSurfaces = CapabilitySetOverride(add = setOf(ApiSurface.IMAGE_GENERATIONS))
+            apiSurfaces = CapabilitySetOverride(add = setOf(ApiSurface.IMAGE_GENERATIONS)),
+            contextWindowTokens = 900_000,
+            maxOutputTokens = 96_000,
         )
 
         assertEquals(snapshot, json.decodeFromString<CapabilitySnapshot>(json.encodeToString(snapshot)))
         assertEquals(override, json.decodeFromString<CapabilityOverride>(json.encodeToString(override)))
+    }
+
+    @Test
+    fun `smaller context override safely caps inherited output limit`() {
+        val merged = CapabilitySnapshotResolver.merge(
+            CapabilitySnapshot(
+                contextWindowTokens = 1_050_000,
+                maxOutputTokens = 128_000,
+            ),
+            CapabilityOverride(contextWindowTokens = 64_000),
+        )
+
+        assertEquals(64_000, merged.contextWindowTokens)
+        assertEquals(64_000, merged.maxOutputTokens)
     }
 
     @Test

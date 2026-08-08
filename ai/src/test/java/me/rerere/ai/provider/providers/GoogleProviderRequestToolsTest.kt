@@ -1,6 +1,7 @@
 package me.rerere.ai.provider.providers
 
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import me.rerere.ai.core.InputSchema
@@ -14,6 +15,7 @@ import me.rerere.ai.provider.ModelAbility
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.provider.TextGenerationParams
 import me.rerere.ai.ui.UIMessage
+import me.rerere.ai.ui.UIMessageAnnotation
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
@@ -23,6 +25,21 @@ import org.junit.Test
 import java.lang.reflect.InvocationTargetException
 
 class GoogleProviderRequestToolsTest {
+
+    @Test
+    fun `google search event codec retains bounded grounding and suggestion`() {
+        val metadata = Json.parseToJsonElement(
+            """{"webSearchQueries":["private query"],"groundingChunks":[{"web":{"uri":"https://example.com","title":"Example"}}],"searchEntryPoint":{"renderedContent":"<div>suggestion</div>"}}"""
+        ).jsonObject
+
+        val event = provider.parseGoogleSearchEvent(metadata, "candidate-0")
+
+        assertEquals("google_search", event.toolType)
+        assertEquals("google-search:candidate-0", event.callId)
+        assertTrue(event.providerMetadata?.containsKey("queries_digest") == true)
+        assertTrue(event.providerMetadata?.containsKey("search_suggestion_html") == true)
+        assertTrue(!event.providerMetadata.toString().contains("private query"))
+    }
     private lateinit var provider: GoogleProvider
 
     @Before
@@ -91,6 +108,22 @@ class GoogleProviderRequestToolsTest {
         val tools = body["tools"]!!.jsonArray
         assertEquals(1, tools.size)
         assertTrue("urlContext" in tools.single().jsonObject)
+    }
+
+    @Test
+    fun `request deny list removes search built ins without changing model config`() {
+        val body = invokeBuildCompletionRequestBody(
+            TextGenerationParams(
+                model = Model(
+                    modelId = "gemini-test",
+                    abilities = listOf(ModelAbility.TOOL),
+                    tools = setOf(BuiltInTools.Search, BuiltInTools.UrlContext),
+                ),
+                disabledBuiltInTools = setOf(BuiltInTools.Search, BuiltInTools.UrlContext),
+            ),
+        )
+
+        assertTrue("tools" !in body)
     }
 
     private fun invokeBuildCompletionRequestBody(params: TextGenerationParams) =
