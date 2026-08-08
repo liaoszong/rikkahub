@@ -875,6 +875,8 @@
   <string name="setting_provider_page_add_provider">添加提供商</string>
   <string name="setting_provider_page_add_provider_override">新增提供商覆寫</string>
   <string name="setting_provider_page_advanced_settings">進階設定</string>
+  <string name="setting_provider_page_context_window">上下文視窗覆寫</string>
+  <string name="setting_provider_page_context_window_desc">目前採用 %1$d token。留空時會使用已驗證的模型資料；未知模型使用 128K 預設值。</string>
   <string name="setting_provider_page_api_base_url">API Base Url</string>
   <string name="setting_provider_page_api_key">API Key</string>
   <string name="setting_provider_page_api_path">API 路徑</string>

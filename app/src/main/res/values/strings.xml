@@ -954,8 +954,6 @@
   <string name="setting_provider_page_add_provider">Add Provider</string>
   <string name="setting_provider_page_add_provider_override">Add Provider Override</string>
   <string name="setting_provider_page_advanced_settings">Advanced Settings</string>
-  <string name="setting_provider_page_context_window">Context window override</string>
-  <string name="setting_provider_page_context_window_desc">Effective window: %1$d tokens. Leave blank to follow verified model metadata; unknown models use the 128K fallback.</string>
   <string name="setting_provider_page_api_base_url">API Base Url</string>
   <string name="setting_provider_page_api_key">API Key</string>
   <string name="setting_provider_page_api_path">API Path</string>
@@ -1357,4 +1355,6 @@
   <string name="update_dialog_install_permission_body">Android requires this one-time permission because RikkaHub updates outside an app store. The downloaded update has passed an integrity check; after allowing it once, future updates normally install without this warning.</string>
   <string name="update_dialog_install_permission_continue">Continue to system settings</string>
   <string name="update_dialog_install_permission_cancel">Not now</string>
+  <string name="setting_provider_page_context_window">Context window override</string>
+  <string name="setting_provider_page_context_window_desc">Effective window: %1$d tokens. Leave blank to follow verified model metadata; unknown models use the 128K fallback.</string>
 </resources>

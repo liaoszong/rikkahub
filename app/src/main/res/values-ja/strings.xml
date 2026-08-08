@@ -873,6 +873,8 @@ mDNSアドレス: .localホスト名を使用し、IPを知らなくても同じ
   <string name="setting_provider_page_add_provider">プロバイダーを追加</string>
   <string name="setting_provider_page_add_provider_override">プロバイダーオーバーライドを追加</string>
   <string name="setting_provider_page_advanced_settings">詳細設定</string>
+  <string name="setting_provider_page_context_window">コンテキストウィンドウの上書き</string>
+  <string name="setting_provider_page_context_window_desc">現在の有効値は %1$d トークンです。空欄にすると検証済みのモデル情報を使用し、不明なモデルには 128K の既定値を使用します。</string>
   <string name="setting_provider_page_api_base_url">API Base Url</string>
   <string name="setting_provider_page_api_key">API Key</string>
   <string name="setting_provider_page_api_path">APIパス</string>

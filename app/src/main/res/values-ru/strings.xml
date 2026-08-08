@@ -873,6 +873,8 @@
   <string name="setting_provider_page_add_provider">Добавить поставщика</string>
   <string name="setting_provider_page_add_provider_override">Добавить переопределение поставщика</string>
   <string name="setting_provider_page_advanced_settings">Расширенные настройки</string>
+  <string name="setting_provider_page_context_window">Переопределение окна контекста</string>
+  <string name="setting_provider_page_context_window_desc">Текущее значение: %1$d токенов. Оставьте поле пустым, чтобы использовать проверенные данные модели; для неизвестных моделей применяется значение 128K.</string>
   <string name="setting_provider_page_api_base_url">Базовый URL API</string>
   <string name="setting_provider_page_api_key">Ключ API</string>
   <string name="setting_provider_page_api_path">Путь API</string>

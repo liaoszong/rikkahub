@@ -873,6 +873,8 @@ mDNS 주소: .local 호스트네임을 사용하며, IP를 몰라도 같은 네�
   <string name="setting_provider_page_add_provider">제공업체 추가</string>
   <string name="setting_provider_page_add_provider_override">제공업체 재정의 추가</string>
   <string name="setting_provider_page_advanced_settings">고급 설정</string>
+  <string name="setting_provider_page_context_window">컨텍스트 창 재정의</string>
+  <string name="setting_provider_page_context_window_desc">현재 적용 값은 %1$d 토큰입니다. 비워 두면 검증된 모델 정보를 따르며, 알 수 없는 모델은 128K 기본값을 사용합니다.</string>
   <string name="setting_provider_page_api_base_url">API 기본 URL</string>
   <string name="setting_provider_page_api_key">API 키</string>
   <string name="setting_provider_page_api_path">API 경로</string>
