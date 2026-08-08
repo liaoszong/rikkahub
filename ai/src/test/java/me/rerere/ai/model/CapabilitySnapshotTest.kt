@@ -141,6 +141,27 @@ class CapabilitySnapshotTest {
     }
 
     @Test
+    fun `provider transport cap is applied without changing the public api model window`() {
+        val model = Model(
+            modelId = "gpt-5.6-sol",
+            declaredCapabilities = CapabilitySnapshot(
+                contextWindowTokens = 1_050_000,
+                maxOutputTokens = 128_000,
+            ),
+            capabilityOverride = CapabilityOverride(contextWindowTokens = 900_000),
+        )
+
+        val publicApi = model.effectiveCapabilitySnapshot(ProviderSetting.OpenAI())
+        val codexBacked = model.effectiveCapabilitySnapshot(
+            ProviderSetting.OpenAI(contextWindowTokensCap = 272_000)
+        )
+
+        assertEquals(900_000, publicApi.contextWindowTokens)
+        assertEquals(272_000, codexBacked.contextWindowTokens)
+        assertEquals(128_000, codexBacked.maxOutputTokens)
+    }
+
+    @Test
     fun `provider declarations expose concrete api surfaces and adapter media`() {
         val imageModel = Model(
             modelId = "image-test",

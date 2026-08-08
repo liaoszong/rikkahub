@@ -67,6 +67,13 @@ sealed class ProviderSetting {
         var includeHistoryReasoning: Boolean = true,
         /** Stable owner marker for app-managed OpenAI-compatible providers. */
         var managedBy: String? = null,
+        /**
+         * Hard context ceiling imposed by an OpenAI-compatible transport or managed gateway.
+         *
+         * This is intentionally provider-scoped: the same model id can expose a different
+         * window through the public OpenAI API and through a product-backed compatibility API.
+         */
+        var contextWindowTokensCap: Int? = null,
     ) : ProviderSetting() {
         override fun addModel(model: Model): ProviderSetting {
             return copy(models = models + model)
@@ -262,5 +269,12 @@ fun ProviderSetting.asUserOwnedCopy(
         description = {},
         shortDescription = {},
     )
-    return if (userCopy is ProviderSetting.OpenAI) userCopy.copy(managedBy = null) else userCopy
+    return if (userCopy is ProviderSetting.OpenAI) {
+        userCopy.copy(
+            managedBy = null,
+            contextWindowTokensCap = null,
+        )
+    } else {
+        userCopy
+    }
 }

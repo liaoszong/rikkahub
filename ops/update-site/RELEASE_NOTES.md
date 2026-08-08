@@ -12,9 +12,9 @@ PaleInk RikkaHub 2.4.5-pale.7 重点升级了长对话、联网搜索、长期�
 
 ### 📐 不同模型使用真实上下文窗口
 
-- GPT-5.4、GPT-5.5、GPT-5.6 Sol/Terra/Luna 使用对应的 1.05M 上下文窗口和 128K 最大输出预留。
-- GPT-5.4 mini 与 PaleInk `codex-auto-review` 使用 400K 安全窗口。
-- PaleInk 内置模型即使来自旧版本配置，也会在请求前刷新当前模型能力，不再统一退回 128K。
+- 直接连接 ChatGPT/OpenAI API 时，GPT-5.4、GPT-5.5、GPT-5.6 Sol/Terra/Luna 使用对应的 1.05M API 上下文窗口。
+- PaleInk 供应商通过 Codex 引出的兼容 API 提供模型，因此独立采用 Codex 的 272K 通道窗口，并在 5% 安全空间后按约 258.4K 有效边界规划。
+- PaleInk 内置模型即使来自旧版本配置，也会在启动时补齐 Codex 通道上限；相同模型 ID 不会再把 OpenAI API 与 PaleInk 的窗口混为一谈。
 - 自定义 Provider 可在模型高级设置中覆盖上下文窗口；未知模型才使用 128K 安全兜底。
 - 仍会预留 5% 安全空间、模型最大输出以及搜索修复空间，降低长请求在 Provider 端溢出的概率。
 

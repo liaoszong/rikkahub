@@ -153,7 +153,11 @@ object CapabilitySnapshotResolver {
             model = model,
             providerSetting = model.providerOverwrite ?: providerSetting,
         )
-        return merge(providerDeclared, model.capabilityOverride)
+        val overridden = merge(providerDeclared, model.capabilityOverride)
+        return enforceProviderLimits(
+            base = overridden,
+            providerSetting = model.providerOverwrite ?: providerSetting,
+        )
     }
 
     /**
@@ -287,6 +291,27 @@ object CapabilitySnapshotResolver {
             features = providerFeatures,
             apiSurfaces = apiSurfaces,
             origin = CapabilityOrigin.PROVIDER_DECLARED,
+        )
+    }
+
+    /**
+     * Applies transport ceilings after user/model overrides so a managed gateway can never be
+     * planned beyond the context window it actually exposes.
+     */
+    private fun enforceProviderLimits(
+        base: CapabilitySnapshot,
+        providerSetting: ProviderSetting?,
+    ): CapabilitySnapshot {
+        val contextWindowCap = (providerSetting as? ProviderSetting.OpenAI)
+            ?.contextWindowTokensCap
+            ?.takeIf { it > 0 }
+            ?: return base
+        val contextWindowTokens = base.contextWindowTokens
+            ?.coerceAtMost(contextWindowCap)
+            ?: contextWindowCap
+        return base.copy(
+            contextWindowTokens = contextWindowTokens,
+            maxOutputTokens = base.maxOutputTokens?.coerceAtMost(contextWindowTokens),
         )
     }
 

@@ -5,6 +5,7 @@ import me.rerere.ai.provider.Model
 import me.rerere.ai.provider.ModelType
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.ai.registry.ModelRegistry
+import me.rerere.ai.model.effectiveCapabilitySnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -45,28 +46,20 @@ class DefaultProvidersTest {
     }
 
     @Test
-    fun `palenik chat models use codex and openai context metadata`() {
+    fun `palenik chat models are capped by the codex transport window`() {
         val provider = DEFAULT_PROVIDERS
             .filterIsInstance<ProviderSetting.OpenAI>()
             .single { it.id == PALENIK_PROVIDER_ID }
-        val expectedWindows = mapOf(
-            "codex-auto-review" to 400_000,
-            "gpt-5.4" to 1_050_000,
-            "gpt-5.4-2026-03-05" to 1_050_000,
-            "gpt-5.4-mini" to 400_000,
-            "gpt-5.5" to 1_050_000,
-            "gpt-5.6" to 1_050_000,
-            "gpt-5.6-luna" to 1_050_000,
-            "gpt-5.6-sol" to 1_050_000,
-            "gpt-5.6-terra" to 1_050_000,
-        )
+        val expectedWindows = provider.models
+            .filter { it.type == ModelType.CHAT }
+            .associate { it.modelId to PALENIK_CODEX_CONTEXT_WINDOW_TOKENS }
 
         val actualWindows = provider.models
             .filter { it.type == ModelType.CHAT }
             .associate { model ->
                 model.modelId to ModelRegistry.enrichCapabilities(model)
-                    .declaredCapabilities
-                    ?.contextWindowTokens
+                    .effectiveCapabilitySnapshot(provider)
+                    .contextWindowTokens
             }
 
         assertEquals(expectedWindows, actualWindows)
@@ -88,6 +81,7 @@ class DefaultProvidersTest {
             .single { it.id == PALENIK_PROVIDER_ID }
 
         assertEquals(PALENIK_MANAGED_BY, merged.managedBy)
+        assertEquals(PALENIK_CODEX_CONTEXT_WINDOW_TOKENS, merged.contextWindowTokensCap)
         assertEquals("kept-secret", merged.apiKey)
         assertTrue(merged.models.any { it.modelId == "user-model" })
         assertTrue(merged.models.any { it.modelId == "gpt-image-2" })

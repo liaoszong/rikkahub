@@ -1248,6 +1248,7 @@ private fun mergePalenikProvider(
         name = defaults.name,
         models = mergedModels,
         managedBy = PALENIK_MANAGED_BY,
+        contextWindowTokensCap = defaults.contextWindowTokensCap,
         builtIn = true,
         description = defaults.description,
         shortDescription = defaults.shortDescription,
